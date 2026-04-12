@@ -1303,14 +1303,15 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::OpenAbout => {
                 let about = adw::AboutDialog::builder()
-                    .application_name("Minecraft Manager")
-                    .version("0.1.0")
+                    .application_name("Obelisk Launcher")
+                    .version("50-rc1")
                     .developer_name("Magnotec")
                     .license_type(gtk::License::Gpl30)
                     .website("https://github.com/magnotec/minecraft-manager")
                     .issue_url("https://github.com/magnotec/minecraft-manager/issues")
                     .comments(
-                        "A modern Minecraft instance manager built with Rust and GTK4/Libadwaita.",
+                        "A modern Minecraft instance manager built with Rust and GTK4/Libadwaita. 
+                        Designed around the same format as MultiMC/PolyMC/Prism Launcher, for compatibility.",
                     )
                     .build();
                 about.present(Some(&self.window));
