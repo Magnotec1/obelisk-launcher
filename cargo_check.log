@@ -1,0 +1,73 @@
+    Checking minecraft v0.1.0 (/home/magnotec/projects/desktop/rust/minecraft)
+error[E0308]: mismatched types
+   --> src/frontend/views/instance/overview.rs:517:17
+    |
+516 |             let loader_class = match l {
+    |                                      - this expression has type `&std::string::String`
+517 |                 ModLoader::Fabric => "overview-loader-fabric",
+    |                 ^^^^^^^^^^^^^^^^^ expected `String`, found `ModLoader`
+    |
+   ::: src/backend/instance/manager.rs:8:5
+    |
+  8 |     Fabric,
+    |     ------ unit variant defined here
+
+error[E0308]: mismatched types
+   --> src/frontend/views/instance/overview.rs:518:17
+    |
+516 |             let loader_class = match l {
+    |                                      - this expression has type `&std::string::String`
+517 |                 ModLoader::Fabric => "overview-loader-fabric",
+518 |                 ModLoader::Forge => "overview-loader-forge",
+    |                 ^^^^^^^^^^^^^^^^ expected `String`, found `ModLoader`
+    |
+   ::: src/backend/instance/manager.rs:9:5
+    |
+  9 |     Forge,
+    |     ----- unit variant defined here
+
+error[E0308]: mismatched types
+   --> src/frontend/views/instance/overview.rs:519:17
+    |
+516 |             let loader_class = match l {
+    |                                      - this expression has type `&std::string::String`
+...
+519 |                 ModLoader::Quilt => "overview-loader-quilt",
+    |                 ^^^^^^^^^^^^^^^^ expected `String`, found `ModLoader`
+    |
+   ::: src/backend/instance/manager.rs:10:5
+    |
+ 10 |     Quilt,
+    |     ----- unit variant defined here
+
+error[E0308]: mismatched types
+   --> src/frontend/views/instance/overview.rs:520:17
+    |
+516 |             let loader_class = match l {
+    |                                      - this expression has type `&std::string::String`
+...
+520 |                 ModLoader::NeoForge => "overview-loader-neoforge",
+    |                 ^^^^^^^^^^^^^^^^^^^ expected `String`, found `ModLoader`
+    |
+   ::: src/backend/instance/manager.rs:11:5
+    |
+ 11 |     NeoForge,
+    |     -------- unit variant defined here
+
+warning: unused variable: `sender`
+  --> src/frontend/views/account/mod.rs:74:49
+   |
+74 | ...                   connect_clicked[sender, username = self.account.username.clone(), row_popover] => move |btn| {
+   |                                       ^^^^^^ help: if this is intentional, prefix it with an underscore: `_sender`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `sender`
+  --> src/frontend/views/account/mod.rs:88:49
+   |
+88 | ...                   connect_clicked[sender, uuid = self.account.uuid.clone(), row_popover] => move |btn| {
+   |                                       ^^^^^^ help: if this is intentional, prefix it with an underscore: `_sender`
+
+For more information about this error, try `rustc --explain E0308`.
+warning: `minecraft` (bin "minecraft") generated 2 warnings
+error: could not compile `minecraft` (bin "minecraft") due to 4 previous errors; 2 warnings emitted
