@@ -1307,8 +1307,8 @@ impl SimpleComponent for AppModel {
                     .version("50-rc1")
                     .developer_name("Magnotec")
                     .license_type(gtk::License::Gpl30)
-                    .website("https://github.com/magnotec/minecraft-manager")
-                    .issue_url("https://github.com/magnotec/minecraft-manager/issues")
+                    .website("https://github.com/magnotec/obelisk-launcher")
+                    .issue_url("https://github.com/magnotec/obelisk-launcher/issues")
                     .comments(
                         "A modern Minecraft instance manager built with Rust and GTK4/Libadwaita. 
                         Designed around the same format as MultiMC/PolyMC/Prism Launcher, for compatibility.",
