@@ -24,6 +24,7 @@ pub struct EditorItem {
     pub size: Option<String>,
     pub seed: Option<String>,
     pub last_played: Option<String>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +46,7 @@ pub enum EditorInput {
     Close,
 
     // Selection
-    FocusItem(usize),
+    FocusVisibleItem(usize, bool, bool, bool), // index, is_shift, is_ctrl, is_click
     ToggleCheck(usize),
     SetChecked(usize, bool),
     SelectAll,
@@ -56,7 +57,7 @@ pub enum EditorInput {
 
     // Actions
     RemoveSelected,
-    RemoveFocused,
+    RemoveRequest(Option<usize>),
     OpenFolder,
     BrowseModrinth,
     AddItemsRequest,
@@ -76,6 +77,15 @@ pub enum EditorInput {
     UpdateItems(Vec<EditorItem>),
     DownloadProgress(String, f32, bool),
     ShowToast(String),
+    ToggleFocusedModEnabled,
+    SetSelectedModsEnabled(bool),
+    RenameWorldRequest(usize),
+    RenameWorld(usize, String),
+    MoveItemRequest(usize),
+    CopyItemRequest(usize),
+    MoveSelectedRequest,
+    CopySelectedRequest,
+    ShowContextMenu(usize, f64, f64),
 }
 
 #[derive(Debug)]
@@ -88,6 +98,10 @@ pub enum EditorOutput {
     AddItems(EditorType, Vec<PathBuf>),
     OpenFolder(EditorType),
     BrowseModrinth(EditorType),
+    SetModsEnabled(Vec<String>, bool),
+    RenameWorld(String, String), // folder, new_name
+    MoveItems(EditorType, Vec<String>), 
+    CopyItems(EditorType, Vec<String>),
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +116,9 @@ pub struct InstanceEditorDialog {
     focused_index: Option<usize>,
     multi_select: bool,
     search_query: String,
+    selection_anchor: Option<usize>,
+    selection_initial_state: Option<std::collections::HashSet<String>>, // IDs of checked items before range
+    selection_range_mode: bool, // true = checking, false = unchecking
 
     // Maps list-box visible row index → items Vec index
     visible_indices: Vec<usize>,
@@ -124,9 +141,11 @@ pub struct InstanceEditorDialog {
     detail_last_played_row: adw::ActionRow,
     detail_description: gtk::Label,
     detail_remove_btn: gtk::Button,
+    detail_toggle_enabled_btn: gtk::Button,
     detail_box: gtk::Box,
     detail_placeholder: adw::StatusPage,
 
+    context_menu: gtk::Popover,
     download_status_bar: Controller<DownloadStatusBar>,
     toast_overlay: adw::ToastOverlay,
 }
@@ -183,7 +202,13 @@ impl InstanceEditorDialog {
 
             self.detail_name.set_label(&item.name);
 
-            // Version row
+            // Version row (titled "Format" for RPs)
+            if matches!(self.editor_type, EditorType::ResourcePacks) {
+                self.detail_version_row.set_title("Format");
+            } else {
+                self.detail_version_row.set_title("Version");
+            }
+
             if !item.version.is_empty() {
                 self.detail_version_row.set_subtitle(&item.version);
                 self.detail_version_row.set_visible(true);
@@ -239,12 +264,69 @@ impl InstanceEditorDialog {
                 self.detail_description.set_visible(false);
             }
 
-            // Remove button
-            self.detail_remove_btn.set_visible(!self.multi_select);
+            // Buttons visibility
+            let is_world = matches!(self.editor_type, EditorType::Worlds);
+            let is_pack = matches!(self.editor_type, EditorType::ResourcePacks | EditorType::ShaderPacks);
+            self.detail_remove_btn.set_visible(!self.multi_select && !is_world && !is_pack);
+
+            if matches!(self.editor_type, EditorType::Mods) {
+                self.detail_toggle_enabled_btn.set_visible(!self.multi_select);
+                if item.enabled {
+                    self.detail_toggle_enabled_btn.set_label("Disable");
+                    self.detail_toggle_enabled_btn.set_icon_name("list-remove-symbolic");
+                } else {
+                    self.detail_toggle_enabled_btn.set_label("Enable");
+                    self.detail_toggle_enabled_btn.set_icon_name("list-add-symbolic");
+                }
+            } else {
+                self.detail_toggle_enabled_btn.set_visible(false);
+            }
         } else {
             self.detail_placeholder.set_visible(true);
             self.detail_box.set_visible(false);
         }
+    }
+
+    fn create_context_menu_box(&self, index: usize, sender_clone: relm4::Sender<EditorInput>) -> gtk::Box {
+        let box_ = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        box_.add_css_class("menu-box");
+        box_.set_width_request(160);
+
+        let is_world = matches!(self.editor_type, EditorType::Worlds);
+
+        if is_world {
+            let btn_rename = build_menu_item("Rename...", false);
+            let s_clone = sender_clone.clone();
+            btn_rename.connect_clicked(move |_| {
+                s_clone.send(EditorInput::RenameWorldRequest(index)).ok();
+            });
+            box_.append(&btn_rename);
+        }
+
+        let btn_move = build_menu_item("Move to...", false);
+        let s_clone = sender_clone.clone();
+        btn_move.connect_clicked(move |_| {
+            s_clone.send(EditorInput::MoveItemRequest(index)).ok();
+        });
+
+        let btn_copy = build_menu_item("Copy to...", false);
+        let s_clone = sender_clone.clone();
+        btn_copy.connect_clicked(move |_| {
+            s_clone.send(EditorInput::CopyItemRequest(index)).ok();
+        });
+
+        let btn_remove = build_menu_item("Remove", true);
+        let s_clone = sender_clone.clone();
+        btn_remove.connect_clicked(move |_| {
+            s_clone.send(EditorInput::RemoveRequest(Some(index))).ok();
+        });
+
+        box_.append(&btn_move);
+        box_.append(&btn_copy);
+        box_.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        box_.append(&btn_remove);
+
+        box_
     }
 
     // -------------------------------------------------------------------
@@ -270,6 +352,12 @@ impl InstanceEditorDialog {
         let vadj = self.sidebar_scroll.vadjustment();
         let scroll_pos = vadj.value();
 
+        // Unparent persistent context menu to avoid warnings/crashes during destruction
+        if self.context_menu.parent().is_some() {
+            self.context_menu.popdown();
+            self.context_menu.unparent();
+        }
+
         // Remove all children
         while let Some(child) = list_box.first_child() {
             list_box.remove(&child);
@@ -288,10 +376,10 @@ impl InstanceEditorDialog {
                 .focusable(false)
                 .build();
 
-            // Subtitle
+            // Subtitle - only show if it's different from the title or provides new info
             if !item.version.is_empty() {
                 row.set_subtitle(&item.version);
-            } else if !item.filename.is_empty() {
+            } else if !item.filename.is_empty() && item.filename != item.name {
                 row.set_subtitle(&item.filename);
             }
 
@@ -313,6 +401,32 @@ impl InstanceEditorDialog {
             };
             row.add_prefix(&icon_widget);
 
+            if !item.enabled {
+                row.add_css_class("dim-label");
+            }
+
+            if self.multi_select && self.focused_index == Some(idx) {
+                row.add_css_class("selected");
+            }
+
+            let actual_idx = idx;
+            let s_clone = sender.input_sender().clone();
+            
+            // Immediate selection gesture for mouse clicks
+            let select_gesture = gtk::GestureClick::builder()
+                .button(1) // Left click only
+                .build();
+            select_gesture.connect_pressed(move |gesture, _, _, _| {
+                let (shift, ctrl) = gesture.current_event()
+                    .map(|e| {
+                        let mods = e.modifier_state();
+                        (mods.contains(gdk::ModifierType::SHIFT_MASK), mods.contains(gdk::ModifierType::CONTROL_MASK))
+                    })
+                    .unwrap_or((false, false));
+                s_clone.send(EditorInput::FocusVisibleItem(actual_idx, shift, ctrl, true)).ok();
+            });
+            row.add_controller(select_gesture);
+
             // Suffix
             if self.multi_select {
                 let check = gtk::CheckButton::builder()
@@ -324,7 +438,6 @@ impl InstanceEditorDialog {
                 row.set_activatable_widget(Some(&check));
 
                 let sender_clone = sender.input_sender().clone();
-                let actual_idx = idx;
                 check.connect_toggled(move |btn| {
                     if sender_clone
                         .send(EditorInput::SetChecked(actual_idx, btn.is_active()))
@@ -333,6 +446,41 @@ impl InstanceEditorDialog {
                         // ignore error
                     }
                 });
+            }
+
+
+
+            // Context menus and action buttons for worlds and packs
+            let has_menu = matches!(self.editor_type, EditorType::Worlds | EditorType::ResourcePacks | EditorType::ShaderPacks);
+            
+            if has_menu && !self.multi_select {
+                // Action button suffix
+                let menu_button = gtk::MenuButton::builder()
+                    .icon_name("view-more-symbolic")
+                    .valign(gtk::Align::Center)
+                    .css_classes(vec!["flat", "circular"])
+                    .tooltip_text("More Actions")
+                    .build();
+                
+                let s_clone = sender.input_sender().clone();
+                
+                // Build the menu (reused for button popover)
+                let menu_box = self.create_context_menu_box(actual_idx, s_clone);
+                
+                let popover = gtk::Popover::new();
+                popover.set_child(Some(&menu_box));
+                menu_button.set_popover(Some(&popover));
+                row.add_suffix(&menu_button);
+
+                // Right-click support
+                let gesture = gtk::GestureClick::builder()
+                    .button(3) // Right click
+                    .build();
+                let sender_clone = sender.input_sender().clone();
+                gesture.connect_pressed(move |_, _, x, y| {
+                    sender_clone.send(EditorInput::ShowContextMenu(actual_idx, x, y)).ok();
+                });
+                row.add_controller(gesture);
             }
 
             // We use row_selected on the ListBox instead for single selection
@@ -494,7 +642,7 @@ impl SimpleComponent for InstanceEditorDialog {
                                     #[local_ref]
                                     list_box_ref -> gtk::ListBox {
                                         #[watch]
-                                        set_selection_mode: if model.multi_select { gtk::SelectionMode::None } else { gtk::SelectionMode::Single },
+                                        set_selection_mode: gtk::SelectionMode::Single,
                                         set_css_classes: &["navigation-sidebar"],
                                         set_margin_start: 6,
                                         set_margin_end: 6,
@@ -614,18 +762,30 @@ impl SimpleComponent for InstanceEditorDialog {
                                             set_margin_top: 4,
                                         },
 
-                                        // Spacer
                                         gtk::Box { set_vexpand: true },
 
-                                        // Remove focused item button
-                                        #[local_ref]
-                                        detail_remove_btn_ref -> gtk::Button {
-                                            set_label: "Remove",
-                                            set_css_classes: &["destructive-action", "pill"],
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 8,
                                             set_halign: gtk::Align::Center,
-                                            set_margin_bottom: 8,
-                                            set_visible: false,
-                                            connect_clicked => EditorInput::RemoveFocused,
+                                            set_margin_bottom: 12,
+
+                                            #[local_ref]
+                                            detail_toggle_enabled_btn_ref -> gtk::Button {
+                                                set_label: "Disable",
+                                                set_icon_name: "list-remove-symbolic",
+                                                set_css_classes: &["pill"],
+                                                set_visible: false,
+                                                connect_clicked => EditorInput::ToggleFocusedModEnabled,
+                                            },
+
+                                            #[local_ref]
+                                            detail_remove_btn_ref -> gtk::Button {
+                                                set_label: "Remove",
+                                                set_css_classes: &["destructive-action", "pill"],
+                                                set_visible: false,
+                                                connect_clicked => EditorInput::RemoveRequest(None),
+                                            },
                                         },
                                     },
                                 },
@@ -669,6 +829,58 @@ impl SimpleComponent for InstanceEditorDialog {
                             set_sensitive: model.items.iter().any(|i| i.is_checked),
                             connect_clicked => EditorInput::RemoveSelected,
                         },
+
+                        pack_end = &gtk::MenuButton {
+                            set_icon_name: "document-send-symbolic",
+                            set_tooltip_text: Some("Move/Copy Selected"),
+                            set_direction: gtk::ArrowType::Up,
+                            #[watch]
+                            set_visible: !matches!(model.editor_type, EditorType::Components),
+                            #[watch]
+                            set_sensitive: model.items.iter().any(|i| i.is_checked),
+                            #[wrap(Some)]
+                            set_popover = &gtk::Popover {
+                                set_position: gtk::PositionType::Top,
+                                set_autohide: true,
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_margin_all: 0,
+                                    set_spacing: 4,
+
+                                    gtk::Button {
+                                        set_label: "Move Selected to...",
+                                        set_css_classes: &["flat", "menu-btn"],
+                                        connect_clicked[sender] => move |btn| {
+                                            btn.parent().and_then(|p| p.parent()).and_then(|p| p.downcast::<gtk::Popover>().ok()).map(|p| p.popdown());
+                                            sender.input(EditorInput::MoveSelectedRequest);
+                                        }
+                                    },
+                                    gtk::Button {
+                                        set_label: "Copy Selected to...",
+                                        set_css_classes: &["flat", "menu-btn"],
+                                        connect_clicked[sender] => move |btn| {
+                                            btn.parent().and_then(|p| p.parent()).and_then(|p| p.downcast::<gtk::Popover>().ok()).map(|p| p.popdown());
+                                            sender.input(EditorInput::CopySelectedRequest);
+                                        }
+                                    },
+                                }
+                            }
+                        },
+
+                        pack_end = &gtk::Button {
+                            set_label: "Enable",
+                            set_css_classes: &["suggested-action"],
+                            #[watch]
+                            set_visible: matches!(model.editor_type, EditorType::Mods) && model.items.iter().any(|i| i.is_checked && !i.enabled),
+                            connect_clicked => EditorInput::SetSelectedModsEnabled(true),
+                        },
+
+                        pack_end = &gtk::Button {
+                            set_label: "Disable",
+                            #[watch]
+                            set_visible: matches!(model.editor_type, EditorType::Mods) && model.items.iter().any(|i| i.is_checked && i.enabled),
+                            connect_clicked => EditorInput::SetSelectedModsEnabled(false),
+                        },
                     },
                 },
             }
@@ -695,8 +907,10 @@ impl SimpleComponent for InstanceEditorDialog {
         let detail_last_played_row = adw::ActionRow::new();
         let detail_description = gtk::Label::new(None);
         let detail_remove_btn = gtk::Button::new();
+        let detail_toggle_enabled_btn = gtk::Button::new();
         let detail_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
         let detail_placeholder = adw::StatusPage::new();
+        let context_menu = gtk::Popover::new();
 
         let download_status_bar = DownloadStatusBar::builder().launch(()).detach();
 
@@ -708,6 +922,9 @@ impl SimpleComponent for InstanceEditorDialog {
             focused_index: None,
             multi_select: false,
             search_query: String::new(),
+            selection_anchor: None,
+            selection_initial_state: None,
+            selection_range_mode: true,
             visible_indices: Vec::new(),
             is_rebuilding: false,
             icon_cache: HashMap::new(),
@@ -723,8 +940,10 @@ impl SimpleComponent for InstanceEditorDialog {
             detail_last_played_row: detail_last_played_row.clone(),
             detail_description: detail_description.clone(),
             detail_remove_btn: detail_remove_btn.clone(),
+            detail_toggle_enabled_btn: detail_toggle_enabled_btn.clone(),
             detail_box: detail_box.clone(),
             detail_placeholder: detail_placeholder.clone(),
+            context_menu: context_menu.clone(),
             download_status_bar,
             toast_overlay: adw::ToastOverlay::new(),
         };
@@ -741,6 +960,7 @@ impl SimpleComponent for InstanceEditorDialog {
         let detail_last_played_row_ref = &model.detail_last_played_row;
         let detail_description_ref = &model.detail_description;
         let detail_remove_btn_ref = &model.detail_remove_btn;
+        let detail_toggle_enabled_btn_ref = &model.detail_toggle_enabled_btn;
         let detail_box_ref = &model.detail_box;
         let detail_placeholder_ref = &model.detail_placeholder;
         let widgets = view_output!();
@@ -775,13 +995,24 @@ impl SimpleComponent for InstanceEditorDialog {
                 false
             });
         }
-        // --- Selection change ---
+        // --- Selection change (Keyboard only) ---
         {
-            let sender_clone = sender.clone();
+            let sender_clone = sender.input_sender().clone();
+            
             list_box.connect_row_selected(move |_lb, row| {
                 if let Some(row) = row {
                     let idx = row.index();
-                    sender_clone.input(EditorInput::FocusItem(idx as usize));
+                    
+                    // Only handle if NOT a mouse event (clicks handled by per-row gestures)
+                    let display = gdk::Display::default().unwrap();
+                    let is_mouse = display.default_seat()
+                        .and_then(|s| s.pointer())
+                        .map(|d| d.modifier_state().intersects(gdk::ModifierType::BUTTON1_MASK | gdk::ModifierType::BUTTON2_MASK | gdk::ModifierType::BUTTON3_MASK))
+                        .unwrap_or(false);
+                    
+                    if !is_mouse {
+                        sender_clone.send(EditorInput::FocusVisibleItem(idx as usize, false, false, false)).ok();
+                    }
                 }
             });
         }
@@ -796,7 +1027,6 @@ impl SimpleComponent for InstanceEditorDialog {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             EditorInput::Open(editor_type, title, items) => {
-                println!("EditorInput::Open: starting...");
                 self.visible = true;
                 self.editor_type = editor_type;
                 self.title = title;
@@ -805,9 +1035,28 @@ impl SimpleComponent for InstanceEditorDialog {
                 self.multi_select = false;
                 self.search_query = String::new();
                 self.icon_cache.clear(); // New item set → fresh cache
-                println!("EditorInput::Open: calling rebuild_list");
                 self.rebuild_list(&sender);
-                println!("EditorInput::Open: done");
+            }
+            EditorInput::ToggleFocusedModEnabled => {
+                if let Some(focused) = self.focused_index {
+                    if let Some(item) = self.items.get_mut(focused) {
+                        item.enabled = !item.enabled;
+                        sender
+                            .output_sender()
+                            .send(EditorOutput::SetModsEnabled(vec![item.filename.clone()], item.enabled))
+                            .ok();
+                    }
+                }
+            }
+            EditorInput::SetSelectedModsEnabled(enable) => {
+                let filenames: Vec<String> = self.items.iter()
+                    .filter(|i| i.is_checked)
+                    .map(|i| i.filename.clone())
+                    .collect();
+                
+                if !filenames.is_empty() {
+                    sender.output_sender().send(EditorOutput::SetModsEnabled(filenames, enable)).ok();
+                }
             }
             EditorInput::Close => {
                 self.visible = false;
@@ -831,20 +1080,131 @@ impl SimpleComponent for InstanceEditorDialog {
             // ---------------------------------------------------------------
             // Focus / check: rebuild list (fast thanks to icon cache)
             // ---------------------------------------------------------------
-            EditorInput::FocusItem(index) => {
-                if self.is_rebuilding {
-                    return;
-                }
-                if index < self.visible_indices.len() {
-                    let actual_idx = self.visible_indices[index];
-                    if self.multi_select {
-                        if let Some(item) = self.items.get_mut(actual_idx) {
-                            item.is_checked = !item.is_checked;
+            EditorInput::FocusVisibleItem(index, is_shift, is_ctrl, is_click) => {
+                if let Some(&actual_idx) = self.visible_indices.get(index) {
+                    // Update focus if changed
+                    let focus_changed = self.focused_index != Some(actual_idx);
+                    
+                    if is_shift {
+                        // Range selection
+                        let entering_multiselect = !self.multi_select;
+                        if entering_multiselect {
+                            self.multi_select = true;
                         }
-                        self.rebuild_list(&sender);
+                        
+                        // Determine anchor: either explicit anchor or the currently focused visible index
+                        let anchor_opt = self.selection_anchor.or_else(|| {
+                            self.focused_index.and_then(|fi| {
+                                self.visible_indices.iter().position(|&idx| idx == fi)
+                            })
+                        });
+
+                        if let Some(anchor_idx) = anchor_opt {
+                            // If this is the FIRST shift click of a "session", capture the current state
+                            if self.selection_initial_state.is_none() {
+                                let mut initial_state = std::collections::HashSet::new();
+                                for item in &self.items {
+                                    if item.is_checked {
+                                        initial_state.insert(item.id.clone());
+                                    }
+                                }
+                                self.selection_initial_state = Some(initial_state);
+                                
+                                // Also ensure the anchor itself is recorded as the starting point if not already
+                                self.selection_anchor = Some(anchor_idx);
+                                
+                                // Determine mode based on anchor, but force 'check' if we just entered multiselect
+                                if entering_multiselect {
+                                    self.selection_range_mode = true;
+                                } else if let Some(&raw_idx) = self.visible_indices.get(anchor_idx) {
+                                    if let Some(item) = self.items.get(raw_idx) {
+                                        self.selection_range_mode = item.is_checked;
+                                    }
+                                }
+                            }
+                            
+                            // Restore initial state before applying the current range
+                            if let Some(initial_state) = &self.selection_initial_state {
+                                for item in &mut self.items {
+                                    item.is_checked = initial_state.contains(&item.id);
+                                }
+                            }
+                            
+                            // Apply the new range using the determined mode
+                            let start = anchor_idx.min(index);
+                            let end = anchor_idx.max(index);
+                            let mode = self.selection_range_mode;
+                            
+                            for i in start..=end {
+                                if let Some(&raw_idx) = self.visible_indices.get(i) {
+                                    if let Some(item) = self.items.get_mut(raw_idx) {
+                                        item.is_checked = mode;
+                                    }
+                                }
+                            }
+                            
+                            // Focus usually moves to the clicked item in range select too
+                            if focus_changed {
+                                self.focused_index = Some(actual_idx);
+                                self.update_detail_panel();
+                            }
+                            
+                            self.rebuild_list(&sender);
+                        } else {
+                            // No anchor or focus yet, just toggle current and set as anchor
+                            if let Some(item) = self.items.get_mut(actual_idx) {
+                                item.is_checked = !item.is_checked;
+                            }
+                            self.selection_anchor = Some(index);
+                            
+                            if focus_changed {
+                                self.focused_index = Some(actual_idx);
+                                self.update_detail_panel();
+                            }
+                            
+                            self.rebuild_list(&sender);
+                        }
                     } else {
-                        self.focused_index = Some(actual_idx);
-                        self.update_detail_panel();
+                        // Normal selection (moves anchor and clears initial state tracking)
+                        self.selection_anchor = Some(index);
+                        self.selection_initial_state = None;
+                        
+                        if self.multi_select {
+                            let mut changed = false;
+                            
+                            // Toggle checkbox ONLY on actual clicks
+                            if is_click {
+                                if let Some(item) = self.items.get_mut(actual_idx) {
+                                    item.is_checked = !item.is_checked;
+                                    changed = true;
+                                }
+                            }
+                            
+                            // User wants normal click in multiselect to ALSO open details panel
+                            // CTRL override avoids this.
+                            if !is_ctrl && focus_changed {
+                                self.focused_index = Some(actual_idx);
+                                self.update_detail_panel();
+                                changed = true;
+                            }
+                            
+                            if changed {
+                                self.rebuild_list(&sender);
+                            }
+                        } else {
+                            if focus_changed {
+                                self.focused_index = Some(actual_idx);
+                                self.update_detail_panel();
+                                self.rebuild_list(&sender); 
+                                
+                                // Sync ListBox selection
+                                if let Some(row) = self.list_box.row_at_index(index as i32) {
+                                    if self.list_box.selected_row().as_ref() != Some(&row) {
+                                        self.list_box.select_row(Some(&row));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -886,8 +1246,9 @@ impl SimpleComponent for InstanceEditorDialog {
                     self.rebuild_list(&sender);
                 }
             }
-            EditorInput::RemoveFocused => {
-                if let Some(idx) = self.focused_index {
+            EditorInput::RemoveRequest(index_opt) => {
+                let target_idx = index_opt.or(self.focused_index);
+                if let Some(idx) = target_idx {
                     if let Some(item) = self.items.get(idx) {
                         let id = item.id.clone();
                         let name = item.name.clone();
@@ -1101,7 +1462,7 @@ impl SimpleComponent for InstanceEditorDialog {
                         if self.multi_select && self.checked_count() > 0 {
                             sender.input(EditorInput::RemoveSelected);
                         } else if self.focused_index.is_some() {
-                            sender.input(EditorInput::RemoveFocused);
+                            sender.input(EditorInput::RemoveRequest(None));
                         }
                     }
                     gdk::Key::Escape => {
@@ -1126,6 +1487,106 @@ impl SimpleComponent for InstanceEditorDialog {
                     self.visible = false;
                 }
             }
+            EditorInput::RenameWorldRequest(index) => {
+                if let Some(item) = self.items.get(index) {
+                    let current_name = item.name.clone();
+                    let window = self.list_box.root().and_downcast::<gtk::Window>();
+                    let dialog = adw::AlertDialog::builder()
+                        .heading("Rename World")
+                        .body("Enter a new display name for the world:")
+                        .build();
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("rename", "Rename");
+                    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+                    
+                    let entry = gtk::Entry::builder()
+                        .text(&current_name)
+                        .activates_default(true)
+                        .build();
+                    dialog.set_extra_child(Some(&entry));
+                    
+                    let sender_clone = sender.input_sender().clone();
+                    dialog.connect_response(None, move |_, response| {
+                        if response == "rename" {
+                            let new_name = entry.text().to_string();
+                            sender_clone.send(EditorInput::RenameWorld(index, new_name)).ok();
+                        }
+                    });
+                    dialog.present(window.as_ref());
+                }
+            }
+            EditorInput::RenameWorld(index, new_name) => {
+                if let Some(item) = self.items.get_mut(index) {
+                    let folder = item.id.clone();
+                    item.name = new_name.clone();
+                    sender.output_sender().send(EditorOutput::RenameWorld(folder, new_name)).ok();
+                    self.rebuild_list(&sender);
+                }
+            }
+            EditorInput::MoveItemRequest(index) => {
+                 if let Some(item) = self.items.get(index) {
+                    sender.output(EditorOutput::MoveItems(self.editor_type.clone(), vec![item.id.clone()])).ok();
+                    self.visible = false;
+                }
+            }
+            EditorInput::CopyItemRequest(index) => {
+                if let Some(item) = self.items.get(index) {
+                    sender.output(EditorOutput::CopyItems(self.editor_type.clone(), vec![item.id.clone()])).ok();
+                    self.visible = false;
+                }
+            }
+            EditorInput::MoveSelectedRequest => {
+                let ids: Vec<String> = self.items.iter()
+                    .filter(|i| i.is_checked)
+                    .map(|i| i.id.clone())
+                    .collect();
+                if !ids.is_empty() {
+                    sender.output(EditorOutput::MoveItems(self.editor_type.clone(), ids)).ok();
+                    self.visible = false;
+                }
+            }
+            EditorInput::CopySelectedRequest => {
+                let ids: Vec<String> = self.items.iter()
+                    .filter(|i| i.is_checked)
+                    .map(|i| i.id.clone())
+                    .collect();
+                if !ids.is_empty() {
+                    sender.output(EditorOutput::CopyItems(self.editor_type.clone(), ids)).ok();
+                    self.visible = false;
+                }
+            }
+            EditorInput::ShowContextMenu(index, x, y) => {
+                let popover = &self.context_menu;
+                let s_clone = sender.input_sender().clone();
+                let box_ = self.create_context_menu_box(index, s_clone);
+                
+                popover.set_child(Some(&box_));
+                
+                if let Some(pos) = self.visible_indices.iter().position(|&idx| idx == index) {
+                    if let Some(row) = self.list_box.row_at_index(pos as i32) {
+                        if popover.parent().is_some() {
+                            popover.unparent();
+                        }
+                        popover.set_parent(&row);
+                        popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                        popover.popup();
+                    }
+                }
+            }
         }
     }
+}
+
+fn build_menu_item(label: &str, destructive: bool) -> gtk::Button {
+    let btn = gtk::Button::builder()
+        .has_frame(false)
+        .css_classes(vec!["flat", "menu-btn", if destructive { "destructive-action" } else { "" }])
+        .build();
+    let lbl = gtk::Label::builder()
+        .label(label)
+        .hexpand(true)
+        .halign(gtk::Align::Start)
+        .build();
+    btn.set_child(Some(&lbl));
+    btn
 }

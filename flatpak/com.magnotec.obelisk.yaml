@@ -1,0 +1,37 @@
+app-id: com.magnotec.obelisk
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: obelisk
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+  - --socket=pulseaudio
+  - --filesystem=host
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.secrets
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  build-args:
+    - --share=network
+  env:
+    CARGO_HOME: /run/build/obelisk/.cargo
+
+modules:
+  - name: obelisk
+    buildsystem: simple
+    build-commands:
+      - cargo build --release
+      - install -Dm755 target/release/obelisk -t /app/bin/
+      - install -Dm644 flatpak/com.magnotec.obelisk.desktop -t /app/share/applications/
+      - install -Dm644 flatpak/com.magnotec.obelisk.metainfo.xml -t /app/share/metainfo/
+      - install -Dm644 data/com.magnotec.obelisk.png -t /app/share/icons/hicolor/512x512/apps/
+    sources:
+      - type: dir
+        path: ..

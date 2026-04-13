@@ -85,18 +85,26 @@ pub struct ModInfo {
     pub description: Option<String>,
     pub homepage: Option<String>,
     pub icon_path: Option<String>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResourcePackInfo {
     pub name: String,
     pub filename: String,
+    pub description: Option<String>,
+    pub size: u64,
+    pub icon_path: Option<String>,
+    pub format: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ShaderPackInfo {
     pub name: String,
     pub filename: String,
+    pub description: Option<String>,
+    pub size: u64,
+    pub icon_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -233,7 +241,32 @@ struct ForgeMod {
     #[serde(rename = "displayURL")]
     display_url: Option<String>,
     #[serde(rename = "logoFile")]
-    logo_file: Option<String>,
+    pub logo_file: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PackMcMeta {
+    pack: PackMetaContent,
+}
+
+#[derive(Deserialize)]
+struct PackMetaContent {
+    pub pack_format: i32,
+    pub description: serde_json::Value,
+}
+
+fn parse_description(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(text)) = map.get("text") {
+                text.clone()
+            } else {
+                val.to_string()
+            }
+        }
+        _ => val.to_string(),
+    }
 }
 
 fn get_mod_info(path: &Path) -> ModInfo {
@@ -246,10 +279,11 @@ fn get_mod_info(path: &Path) -> ModInfo {
         id: filename.clone(),
         name: filename.clone(),
         version: "Unknown".to_string(),
-        filename,
+        filename: filename.clone(),
         description: None,
         homepage: None,
         icon_path: None,
+        enabled: !filename.ends_with(".disabled"),
     };
 
     if let Ok(file) = fs::File::open(path) {
@@ -383,6 +417,147 @@ fn get_mod_info(path: &Path) -> ModInfo {
                     }
                 }
             }
+        }
+    }
+
+    info
+}
+
+fn get_resource_pack_info(path: &Path) -> ResourcePackInfo {
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    let mut info = ResourcePackInfo {
+        name: filename.clone(),
+        filename: filename.clone(),
+        description: None,
+        size: 0,
+        icon_path: None,
+        format: None,
+    };
+
+    // Size calculation
+    if path.is_file() {
+        info.size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    } else if path.is_dir() {
+        info.size = walkdir::WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.metadata().ok())
+            .filter(|m| m.is_file())
+            .map(|m| m.len())
+            .sum();
+    }
+
+    if path.is_file() {
+        if let Ok(file) = fs::File::open(path) {
+            if let Ok(mut archive) = zip::ZipArchive::new(file) {
+                // Read pack.mcmeta
+                if let Ok(mut meta_file) = archive.by_name("pack.mcmeta") {
+                    if let Ok(meta) = serde_json::from_reader::<_, PackMcMeta>(&mut meta_file) {
+                        info.format = Some(meta.pack.pack_format);
+                        info.description = Some(parse_description(&meta.pack.description));
+                    }
+                }
+
+                // Extract pack.png icon
+                if let Ok(mut icon_file) = archive.by_name("pack.png") {
+                    if let Some(cache_dir) = directories::ProjectDirs::from(
+                        "com",
+                        "magnotec",
+                        "minecraft-manager",
+                    )
+                    .map(|d| d.cache_dir().to_path_buf())
+                    {
+                        let icons_dir = cache_dir.join("icons");
+                        let _ = fs::create_dir_all(&icons_dir);
+                        let out_path = icons_dir.join(format!("rp-{}.png", info.filename));
+                        if let Ok(mut out_file) = fs::File::create(&out_path) {
+                            let _ = std::io::copy(&mut icon_file, &mut out_file);
+                            info.icon_path = Some(out_path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    } else if path.is_dir() {
+        // Read pack.mcmeta
+        let meta_path = path.join("pack.mcmeta");
+        if let Ok(content) = fs::read_to_string(meta_path) {
+            if let Ok(meta) = serde_json::from_str::<PackMcMeta>(&content) {
+                info.format = Some(meta.pack.pack_format);
+                info.description = Some(parse_description(&meta.pack.description));
+            }
+        }
+
+        // Use pack.png if it exists
+        let icon_path = path.join("pack.png");
+        if icon_path.exists() {
+            info.icon_path = Some(icon_path.to_string_lossy().to_string());
+        }
+    }
+
+    info
+}
+
+fn get_shader_pack_info(path: &Path) -> ShaderPackInfo {
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    let mut info = ShaderPackInfo {
+        name: filename.clone(),
+        filename: filename.clone(),
+        description: None,
+        size: 0,
+        icon_path: None,
+    };
+
+    // Size calculation
+    if path.is_file() {
+        info.size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    } else if path.is_dir() {
+        info.size = walkdir::WalkDir::new(path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.metadata().ok())
+            .filter(|m| m.is_file())
+            .map(|m| m.len())
+            .sum();
+    }
+
+    if path.is_file() {
+        if let Ok(file) = fs::File::open(path) {
+            if let Ok(mut archive) = zip::ZipArchive::new(file) {
+                // Some shaderpacks have a pack.png too
+                if let Ok(mut icon_file) = archive.by_name("pack.png") {
+                    if let Some(cache_dir) = directories::ProjectDirs::from(
+                        "com",
+                        "magnotec",
+                        "minecraft-manager",
+                    )
+                    .map(|d| d.cache_dir().to_path_buf())
+                    {
+                        let icons_dir = cache_dir.join("icons");
+                        let _ = fs::create_dir_all(&icons_dir);
+                        let out_path = icons_dir.join(format!("sp-{}.png", info.filename));
+                        if let Ok(mut out_file) = fs::File::create(&out_path) {
+                            let _ = std::io::copy(&mut icon_file, &mut out_file);
+                            info.icon_path = Some(out_path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    } else if path.is_dir() {
+        let icon_path = path.join("pack.png");
+        if icon_path.exists() {
+            info.icon_path = Some(icon_path.to_string_lossy().to_string());
         }
     }
 
@@ -532,10 +707,11 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
         if let Ok(mod_entries) = fs::read_dir(mods_dir) {
             for mod_entry in mod_entries.flatten() {
                 let m_path = mod_entry.path();
-                if m_path.is_file()
-                    && m_path.extension().map(|e| e == "jar").unwrap_or(false)
-                {
-                    mods.push(get_mod_info(&m_path));
+                if m_path.is_file() {
+                    let fname = m_path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                    if fname.ends_with(".jar") || fname.ends_with(".jar.disabled") {
+                         mods.push(get_mod_info(&m_path));
+                    }
                 }
             }
         }
@@ -544,11 +720,7 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
         let rp_dir = m_dir.join("resourcepacks");
         if let Ok(rp_entries) = fs::read_dir(rp_dir) {
             for rp_entry in rp_entries.flatten() {
-                let rp_path = rp_entry.path();
-                resource_packs.push(ResourcePackInfo {
-                    name: rp_path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string(),
-                    filename: rp_path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string(),
-                });
+                resource_packs.push(get_resource_pack_info(&rp_entry.path()));
             }
         }
         resource_packs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -556,11 +728,7 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
         let sp_dir = m_dir.join("shaderpacks");
         if let Ok(sp_entries) = fs::read_dir(sp_dir) {
             for sp_entry in sp_entries.flatten() {
-                let sp_path = sp_entry.path();
-                shader_packs.push(ShaderPackInfo {
-                    name: sp_path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string(),
-                    filename: sp_path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string(),
-                });
+                shader_packs.push(get_shader_pack_info(&sp_entry.path()));
             }
         }
         shader_packs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -598,11 +766,18 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
                                 name: Option<String>,
                             }
                             #[derive(serde::Deserialize, Debug)]
+                            struct FastNbtWorldGenSettings {
+                                #[serde(rename = "seed")]
+                                seed: Option<i64>,
+                            }
+                            #[derive(serde::Deserialize, Debug)]
                             struct FastNbtData {
                                 #[serde(rename = "LevelName")]
                                 level_name: Option<String>,
                                 #[serde(rename = "RandomSeed")]
                                 random_seed: Option<i64>,
+                                #[serde(rename = "WorldGenSettings")]
+                                world_gen_settings: Option<FastNbtWorldGenSettings>,
                                 #[serde(rename = "LastPlayed")]
                                 last_played: Option<i64>,
                                 #[serde(rename = "Version")]
@@ -619,7 +794,7 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
                                     if let Some(level_name) = data.level_name {
                                         name = level_name;
                                     }
-                                    seed = data.random_seed;
+                                    seed = data.random_seed.or_else(|| data.world_gen_settings.and_then(|s| s.seed));
                                     last_played = data.last_played;
                                     if let Some(ver) = data.version {
                                         mc_version = ver.name;
@@ -1424,4 +1599,122 @@ pub fn update_instance_playtime(instance_path: &Path, additional_seconds: u64) -
     let new_playtime = current_playtime + additional_seconds;
     update_cfg_key(instance_path, "totalTimePlayed", &new_playtime.to_string())?;
     Ok(new_playtime)
+}
+
+pub fn toggle_mod_enabled(
+    instance_path: &Path,
+    mod_filename: &str,
+    enable: bool,
+) -> Result<String, String> {
+    let minecraft_dir = if instance_path.join(".minecraft").is_dir() {
+        instance_path.join(".minecraft")
+    } else if instance_path.join("minecraft").is_dir() {
+        instance_path.join("minecraft")
+    } else {
+        return Err("Could not find minecraft directory".to_string());
+    };
+    let mods_dir = minecraft_dir.join("mods");
+
+    let current_path = mods_dir.join(mod_filename);
+    if !current_path.exists() {
+        return Err(format!("Mod file {} not found", mod_filename));
+    }
+
+    let new_filename = if enable {
+        if mod_filename.ends_with(".disabled") {
+            mod_filename.trim_end_matches(".disabled").to_string()
+        } else {
+            return Ok(mod_filename.to_string());
+        }
+    } else {
+        if !mod_filename.ends_with(".disabled") {
+            format!("{}.disabled", mod_filename)
+        } else {
+            return Ok(mod_filename.to_string());
+        }
+    };
+
+    let new_path = mods_dir.join(&new_filename);
+    fs::rename(current_path, new_path).map_err(|e| format!("Failed to rename mod file: {}", e))?;
+
+
+    Ok(new_filename)
+}
+
+pub fn rename_world(instance_path: &Path, folder_name: &str, new_name: &str) -> Result<(), String> {
+    let minecraft_dir = if instance_path.join(".minecraft").is_dir() {
+        instance_path.join(".minecraft")
+    } else if instance_path.join("minecraft").is_dir() {
+        instance_path.join("minecraft")
+    } else {
+        instance_path.to_path_buf()
+    };
+    
+    let worlds_dir = minecraft_dir.join("saves");
+    let world_path = worlds_dir.join(folder_name);
+    let level_dat_path = world_path.join("level.dat");
+    
+    if !level_dat_path.exists() {
+        return Err("World level.dat not found".to_string());
+    }
+
+    // Load, modify, and save level.dat
+    let file = fs::File::open(&level_dat_path).map_err(|e| e.to_string())?;
+    let mut decoder = flate2::read::GzDecoder::new(file);
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    decoder.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+
+    let mut value: fastnbt::Value = fastnbt::from_bytes(&bytes).map_err(|e| e.to_string())?;
+    
+    // NBT path: Data -> LevelName
+    if let fastnbt::Value::Compound(root) = &mut value {
+        if let Some(fastnbt::Value::Compound(data)) = root.get_mut("Data") {
+            data.insert("LevelName".to_string(), fastnbt::Value::String(new_name.to_string()));
+        }
+    }
+
+    let new_bytes = fastnbt::to_bytes(&value).map_err(|e| e.to_string())?;
+    let out_file = fs::File::create(&level_dat_path).map_err(|e| e.to_string())?;
+    let mut encoder = flate2::write::GzEncoder::new(out_file, flate2::Compression::default());
+    use std::io::Write;
+    encoder.write_all(&new_bytes).map_err(|e| e.to_string())?;
+    encoder.finish().map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+pub fn move_world(source_instance_path: &Path, target_instance_path: &Path, folder_name: &str) -> Result<(), String> {
+    let source_minecraft_dir = if source_instance_path.join(".minecraft").is_dir() {
+        source_instance_path.join(".minecraft")
+    } else if source_instance_path.join("minecraft").is_dir() {
+        source_instance_path.join("minecraft")
+    } else {
+        source_instance_path.to_path_buf()
+    };
+
+    let target_minecraft_dir = if target_instance_path.join(".minecraft").is_dir() {
+        target_instance_path.join(".minecraft")
+    } else if target_instance_path.join("minecraft").is_dir() {
+        target_instance_path.join("minecraft")
+    } else {
+        target_instance_path.to_path_buf()
+    };
+
+    let source_path = source_minecraft_dir.join("saves").join(folder_name);
+    let target_saves_dir = target_minecraft_dir.join("saves");
+    let target_path = target_saves_dir.join(folder_name);
+
+    if !source_path.exists() {
+        return Err("Source world folder not found".to_string());
+    }
+    if target_path.exists() {
+        return Err("Target instance already has a world with this folder name".to_string());
+    }
+
+    if !target_saves_dir.exists() {
+        fs::create_dir_all(&target_saves_dir).map_err(|e| e.to_string())?;
+    }
+
+    fs::rename(source_path, target_path).map_err(|e| format!("Failed to move world directory: {}", e))
 }

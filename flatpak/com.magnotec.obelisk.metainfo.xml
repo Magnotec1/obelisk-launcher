@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.magnotec.obelisk</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Obelisk Launcher</name>
+  <summary>A modern Minecraft instance manager</summary>
+  <description>
+    <p>
+      Obelisk Launcher is a fast, modern, and easy-to-use launcher for Minecraft.
+      It allows you to manage multiple instances, install mod loaders, and track your playtime.
+      Compatible with PolyMC, Prism Launcher, and MultiMC formats.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.magnotec.obelisk.desktop</launchable>
+  <url type="homepage">https://github.com/magnotec/minecraft</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The main overview</caption>
+      <image>https://raw.githubusercontent.com/magnotec/minecraft/main/screenshots/overview.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-04-12" />
+  </releases>
+</component>

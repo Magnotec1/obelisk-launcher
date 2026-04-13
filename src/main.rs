@@ -8,7 +8,7 @@ use relm4::prelude::*;
 
 fn main() {
     let config = Config::load();
-    let app = RelmApp::new("com.magnotec.minecraft_manager");
+    let app = RelmApp::new("com.magnotec.obelisk");
 
     relm4::set_global_css(
         "

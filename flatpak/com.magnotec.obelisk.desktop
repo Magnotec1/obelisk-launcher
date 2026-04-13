@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Obelisk Launcher
+Comment=Manage and launch Minecraft instances
+Exec=obelisk
+Icon=com.magnotec.obelisk
+Terminal=false
+Type=Application
+Categories=Game;
+StartupNotify=true
+DBusActivatable=false
+X-GNOME-UsesNotifications=true

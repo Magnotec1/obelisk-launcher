@@ -254,6 +254,8 @@ pub enum AppMsg {
     SetImportLoading(bool),
     SetVerifyingLoading(bool),
     UpdateImportStatus(String),
+    ConfirmMoveItems(EditorType, Vec<String>, usize), // type, IDs, target_instance_index
+    ConfirmCopyItems(EditorType, Vec<String>, usize), // type, IDs, target_instance_index
 }
 
 impl AppModel {
@@ -417,7 +419,7 @@ impl SimpleComponent for AppModel {
 
     view! {
             adw::Window {
-                set_title: Some("Minecraft Manager"),
+                set_title: Some("Obelisk Launcher"),
                 set_default_width: 900,
                 set_default_height: 600,
 
@@ -1208,7 +1210,7 @@ impl SimpleComponent for AppModel {
                     move |response| {
                         if response == "rename" {
                             let new_name = entry.text().to_string();
-                            sender_clone.send(AppMsg::ConfirmRenameGroup(old.clone(), new_name)).unwrap();
+                            sender_clone.send(AppMsg::ConfirmRenameGroup(old.clone(), new_name)).ok();
                         }
                     },
                 );
@@ -1310,8 +1312,7 @@ impl SimpleComponent for AppModel {
                     .website("https://github.com/magnotec/obelisk-launcher")
                     .issue_url("https://github.com/magnotec/obelisk-launcher/issues")
                     .comments(
-                        "A modern Minecraft instance manager built with Rust and GTK4/Libadwaita. 
-                        Designed around the same format as MultiMC/PolyMC/Prism Launcher, for compatibility.",
+                        "A modern Minecraft instance manager built with Rust and GTK4/Libadwaita. Designed around the same format as MultiMC/PolyMC/Prism Launcher, for compatibility.",
                     )
                     .build();
                 about.present(Some(&self.window));
@@ -1453,10 +1454,38 @@ impl SimpleComponent for AppModel {
 
                             if let Some(active_type) = &self.active_editor_type {
                                 let items = match active_type {
-                                    EditorType::Mods => updated_inst.mods.iter().map(|m| EditorItem { id: m.filename.clone(), name: m.name.clone(), version: m.version.clone(), filename: m.filename.clone(), description: m.description.clone(), homepage: m.homepage.clone(), sources: None, icon_path: m.icon_path.clone(), is_checked: false, size: None, seed: None, last_played: None }).collect(),
-                                    EditorType::Components => updated_inst.components.iter().map(|c| EditorItem { id: c.uid.clone(), name: c.name.clone(), version: c.version.clone(), filename: c.uid.clone(), description: None, homepage: None, sources: None, icon_path: None, is_checked: false, size: None, seed: None, last_played: None }).collect(),
-                                    EditorType::ResourcePacks => updated_inst.resource_packs.iter().map(|rp| EditorItem { id: rp.filename.clone(), name: rp.name.clone(), version: String::new(), filename: rp.filename.clone(), description: None, homepage: None, sources: None, icon_path: None, is_checked: false, size: None, seed: None, last_played: None }).collect(),
-                                    EditorType::ShaderPacks => updated_inst.shader_packs.iter().map(|sp| EditorItem { id: sp.filename.clone(), name: sp.name.clone(), version: String::new(), filename: sp.filename.clone(), description: None, homepage: None, sources: None, icon_path: None, is_checked: false, size: None, seed: None, last_played: None }).collect(),
+                                    EditorType::Mods => updated_inst.mods.iter().map(|m| EditorItem { id: m.filename.clone(), name: m.name.clone(), version: m.version.clone(), filename: m.filename.clone(), description: m.description.clone(), homepage: m.homepage.clone(), sources: None, icon_path: m.icon_path.clone(), is_checked: false, size: None, seed: None, last_played: None, enabled: m.enabled }).collect(),
+                                    EditorType::Components => updated_inst.components.iter().map(|c| EditorItem { id: c.uid.clone(), name: c.name.clone(), version: c.version.clone(), filename: c.uid.clone(), description: None, homepage: None, sources: None, icon_path: None, is_checked: false, size: None, seed: None, last_played: None, enabled: true }).collect(),
+                                    EditorType::ResourcePacks => updated_inst.resource_packs.iter().map(|rp| EditorItem {
+                                        id: rp.filename.clone(),
+                                        name: rp.name.clone(),
+                                        version: rp.format.map(|f| format!("Format {}", f)).unwrap_or_default(),
+                                        filename: rp.filename.clone(),
+                                        description: rp.description.clone(),
+                                        homepage: None,
+                                        sources: None,
+                                        icon_path: rp.icon_path.clone(),
+                                        is_checked: false,
+                                        size: Some(crate::frontend::utils::format_size(rp.size)),
+                                        seed: None,
+                                        last_played: None,
+                                        enabled: true
+                                    }).collect(),
+                                    EditorType::ShaderPacks => updated_inst.shader_packs.iter().map(|sp| EditorItem {
+                                        id: sp.filename.clone(),
+                                        name: sp.name.clone(),
+                                        version: String::new(),
+                                        filename: sp.filename.clone(),
+                                        description: sp.description.clone(),
+                                        homepage: None,
+                                        sources: None,
+                                        icon_path: sp.icon_path.clone(),
+                                        is_checked: false,
+                                        size: Some(crate::frontend::utils::format_size(sp.size)),
+                                        seed: None,
+                                        last_played: None,
+                                        enabled: true
+                                    }).collect(),
                                     EditorType::Worlds => updated_inst.worlds.iter().map(|w| {
                                         let size_str = crate::frontend::utils::format_size(w.file_size);
                                         EditorItem {
@@ -1472,6 +1501,7 @@ impl SimpleComponent for AppModel {
                                             size: Some(size_str),
                                             seed: w.seed.map(|s| s.to_string()),
                                             last_played: w.last_played.map(crate::frontend::utils::format_timestamp),
+                                            enabled: true,
                                         }
                                     }).collect(),
                                 };
@@ -1760,6 +1790,7 @@ impl SimpleComponent for AppModel {
                             size: None,
                             seed: None,
                             last_played: None,
+                            enabled: true,
                         })
                         .collect();
                     self.instance_editor.emit(EditorInput::Open(
@@ -1788,6 +1819,7 @@ impl SimpleComponent for AppModel {
                             size: None,
                             seed: None,
                             last_played: None,
+                            enabled: m.enabled,
                         })
                         .collect();
                     self.instance_editor.emit(EditorInput::Open(
@@ -1806,16 +1838,17 @@ impl SimpleComponent for AppModel {
                         .map(|rp| EditorItem {
                             id: rp.filename.clone(),
                             name: rp.name.clone(),
-                            version: String::new(),
+                            version: rp.format.map(|f| format!("Format {}", f)).unwrap_or_default(),
                             filename: rp.filename.clone(),
-                            description: None,
+                            description: rp.description.clone(),
                             homepage: None,
                             sources: None,
-                            icon_path: None,
+                            icon_path: rp.icon_path.clone(),
                             is_checked: false,
-                            size: None,
+                            size: Some(crate::frontend::utils::format_size(rp.size)),
                             seed: None,
                             last_played: None,
+                            enabled: true,
                         })
                         .collect();
                     self.instance_editor.emit(EditorInput::Open(
@@ -1836,14 +1869,15 @@ impl SimpleComponent for AppModel {
                             name: sp.name.clone(),
                             version: String::new(),
                             filename: sp.filename.clone(),
-                            description: None,
+                            description: sp.description.clone(),
                             homepage: None,
                             sources: None,
-                            icon_path: None,
+                            icon_path: sp.icon_path.clone(),
                             is_checked: false,
-                            size: None,
+                            size: Some(crate::frontend::utils::format_size(sp.size)),
                             seed: None,
                             last_played: None,
+                            enabled: true,
                         })
                         .collect();
                     self.instance_editor.emit(EditorInput::Open(
@@ -1874,6 +1908,7 @@ impl SimpleComponent for AppModel {
                                 size: Some(size_str),
                                 seed: w.seed.map(|s| s.to_string()),
                                 last_played: w.last_played.map(crate::frontend::utils::format_timestamp),
+                                enabled: true,
                             }
                         })
                         .collect();
@@ -1930,6 +1965,24 @@ impl SimpleComponent for AppModel {
                                     }
                                 }
                             }
+                            EditorOutput::SetModsEnabled(filenames, enable) => {
+                                let mut changed = false;
+                                if let Some(existing) = self.instances.get_mut(index) {
+                                    for filename in filenames {
+                                        if let Ok(new_filename) = crate::backend::instance::manager::toggle_mod_enabled(&existing.path, &filename, enable) {
+                                            if let Some(m) = existing.mods.iter_mut().find(|m| m.filename == filename) {
+                                                m.filename = new_filename;
+                                                m.enabled = enable;
+                                                changed = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                if changed {
+                                    let updated = self.instances[index].clone();
+                                    _sender.input(AppMsg::SelectedInstanceUpdated(updated));
+                                }
+                            }
                             EditorOutput::AddItems(editor_type, paths) => {
                                 let subfolder = match editor_type {
                                     EditorType::Mods => "mods",
@@ -1951,36 +2004,93 @@ impl SimpleComponent for AppModel {
                                     _ => "",
                                 };
                                 if !subfolder.is_empty() {
-                                    crate::frontend::utils::open_instance_subfolder(&inst.path, subfolder);
+                                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, subfolder);
                                 }
                             }
                             EditorOutput::BrowseModrinth(editor_type) => {
                                 _sender.input(AppMsg::BrowseModrinth(editor_type));
+                            }
+                            EditorOutput::RenameWorld(folder, new_name) => {
+                                if let Err(e) = crate::backend::instance::manager::rename_world(&inst.path, &folder, &new_name) {
+                                    eprintln!("Failed to rename world: {}", e);
+                                }
+                            }
+                            EditorOutput::MoveItems(editor_type, ids) => {
+                                self.show_target_instance_selector(editor_type, ids, false, _sender.input_sender().clone());
+                            }
+                            EditorOutput::CopyItems(editor_type, ids) => {
+                                self.show_target_instance_selector(editor_type, ids, true, _sender.input_sender().clone());
                             }
                         }
                         // Refresh only the selected instance
                         _sender.input(AppMsg::RefreshSelectedInstance);
                         // Reselect - inline to avoid ambiguous self.update call
                         self.selected_instance = Some(index);
-                        if let Some(_inst) = self.instances.get(index) {
-                            // Lists are now handled by InstanceEditorTab
+                    }
+                }
+            }
+            AppMsg::ConfirmMoveItems(editor_type, ids, target_idx) => {
+                if let Some(source_idx) = self.selected_instance {
+                    let source_inst = &self.instances[source_idx];
+                    let target_inst = &self.instances[target_idx];
+                    
+                    let subfolder = match editor_type {
+                        EditorType::Mods => "mods",
+                        EditorType::ResourcePacks => "resourcepacks",
+                        EditorType::ShaderPacks => "shaderpacks",
+                        EditorType::Worlds => "saves",
+                        _ => "mods",
+                    };
+                    
+                    for id in ids {
+                        let source_path = source_inst.minecraft_dir.join(subfolder).join(&id);
+                        if let Err(e) = crate::backend::instance::manager::add_instance_item(&target_inst.path, subfolder, &source_path) {
+                            eprintln!("Failed to copy item for move: {}", e);
+                        } else {
+                            // Remove from source after successful copy
+                            if let Err(e) = crate::backend::instance::manager::remove_instance_item(&source_inst.path, subfolder, &id) {
+                                eprintln!("Failed to remove source item after move: {}", e);
+                            }
                         }
                     }
+                    _sender.input(AppMsg::RefreshInstances);
+                }
+            }
+            AppMsg::ConfirmCopyItems(editor_type, ids, target_idx) => {
+                if let Some(source_idx) = self.selected_instance {
+                    let source_inst = &self.instances[source_idx];
+                    let target_inst = &self.instances[target_idx];
+                    
+                    let subfolder = match editor_type {
+                        EditorType::Mods => "mods",
+                        EditorType::ResourcePacks => "resourcepacks",
+                        EditorType::ShaderPacks => "shaderpacks",
+                        EditorType::Worlds => "saves",
+                        _ => "mods",
+                    };
+                    
+                    for id in ids {
+                        let source_path = source_inst.minecraft_dir.join(subfolder).join(&id);
+                        if let Err(e) = crate::backend::instance::manager::add_instance_item(&target_inst.path, subfolder, &source_path) {
+                            eprintln!("Failed to copy item: {}", e);
+                        }
+                    }
+                    _sender.input(AppMsg::RefreshInstances);
                 }
             }
             AppMsg::OpenModsFolder => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-                    crate::frontend::utils::open_instance_subfolder(&inst.path, "mods");
+                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, "mods");
                 }
             }
             AppMsg::OpenResourcePacksFolder => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-                    crate::frontend::utils::open_instance_subfolder(&inst.path, "resourcepacks");
+                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, "resourcepacks");
                 }
             }
             AppMsg::OpenShaderPacksFolder => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-                    crate::frontend::utils::open_instance_subfolder(&inst.path, "shaderpacks");
+                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, "shaderpacks");
                 }
             }
             AppMsg::OpenScreenshotsFolder => {
@@ -2115,7 +2225,7 @@ impl SimpleComponent for AppModel {
                         move |response| {
                             if response == "rename" {
                                 let new_name = entry.text().to_string();
-                                sender_clone.send(AppMsg::ConfirmRename(index, new_name)).unwrap();
+                                sender_clone.send(AppMsg::ConfirmRename(index, new_name)).ok();
                             }
                         },
                     );
@@ -2140,7 +2250,7 @@ impl SimpleComponent for AppModel {
                         None::<&gtk::gio::Cancellable>,
                         move |response| {
                             if response == "delete" {
-                                sender_clone.send(AppMsg::ConfirmDelete(index)).unwrap();
+                                sender_clone.send(AppMsg::ConfirmDelete(index)).ok();
                             }
                         },
                     );
@@ -3116,5 +3226,66 @@ impl AppModel {
                 }
             },
         );
+    }
+
+    fn show_target_instance_selector(&self, editor_type: EditorType, ids: Vec<String>, is_copy: bool, sender_clone: relm4::Sender<AppMsg>) {
+        if let Some(current_inst_index) = self.selected_instance {
+            let instances = self.instances.clone();
+            let ids_clone = ids.clone();
+            let type_clone = editor_type.clone();
+            
+            let heading = match (is_copy, ids.len()) {
+                (true, 1) => "Copy Item".to_string(),
+                (true, _) => format!("Copy {} Items", ids.len()),
+                (false, 1) => "Move Item".to_string(),
+                (false, _) => format!("Move {} Items", ids.len()),
+            };
+            
+            let dialog = adw::AlertDialog::builder()
+                .heading(&heading)
+                .body("Select the target instance:")
+                .build();
+            dialog.add_response("cancel", "Cancel");
+            
+            let list_box = gtk::ListBox::new();
+            list_box.set_selection_mode(gtk::SelectionMode::Single);
+            list_box.add_css_class("boxed-list");
+            
+            let mut inst_indices = Vec::new();
+            for (idx, other) in instances.iter().enumerate() {
+                if idx == current_inst_index { continue; }
+                inst_indices.push(idx);
+                let row = adw::ActionRow::builder()
+                    .title(&other.name)
+                    .activatable(true)
+                    .build();
+                list_box.append(&row);
+            }
+            
+            let scrolled = gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .min_content_height(200)
+                .max_content_height(400)
+                .child(&list_box)
+                .build();
+                
+            dialog.set_extra_child(Some(&scrolled));
+            
+            dialog.connect_response(None, move |_d, response| {
+                if response != "cancel" {
+                    if let Some(row) = list_box.selected_row() {
+                        let selected_row_idx = row.index() as usize;
+                        if let Some(&target_idx) = inst_indices.get(selected_row_idx) {
+                             if is_copy {
+                                 sender_clone.send(AppMsg::ConfirmCopyItems(type_clone.clone(), ids_clone.clone(), target_idx)).ok();
+                             } else {
+                                 sender_clone.send(AppMsg::ConfirmMoveItems(type_clone.clone(), ids_clone.clone(), target_idx)).ok();
+                             }
+                        }
+                    }
+                }
+            });
+            dialog.present(Some(&self.window));
+        }
     }
 }
