@@ -35,21 +35,14 @@ impl SimpleComponent for InstanceSharerDialog {
     type Output = SharerOutput;
 
     view! {
-        adw::Window {
-            set_title: Some("Share Instance"),
-            set_default_width: 450,
-            set_default_height: 300,
-            set_modal: true,
-            #[watch]
-            set_visible: model.visible,
-            #[watch]
-            set_transient_for: relm4::main_application().active_window().as_ref(),
-            connect_close_request[sender] => move |_| {
-                sender.input(SharerInput::Close);
-                gtk::glib::Propagation::Stop
-            },
+        adw::Dialog {
+            set_title: "Share Instance",
+            set_content_width: 450,
+            set_content_height: 300,
+            set_can_close: true,
 
-            adw::ToolbarView {
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
                     #[wrap(Some)]
                      set_title_widget = &adw::WindowTitle {
@@ -60,8 +53,6 @@ impl SimpleComponent for InstanceSharerDialog {
                 #[wrap(Some)]
                 set_content = &gtk::Stack {
                     set_transition_type: gtk::StackTransitionType::Crossfade,
-                    #[watch]
-                    set_visible_child_name: if model.is_loading { "loading" } else { "modes" },
 
                     add_named[Some("modes")] = &gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
@@ -137,7 +128,11 @@ impl SimpleComponent for InstanceSharerDialog {
                             set_margin_top: 8,
                             set_margin_bottom: 8,
                         },
-                    }
+                    },
+
+                    // Must come after add_named so children exist on first render
+                    #[watch]
+                    set_visible_child_name: if model.is_loading { "loading" } else { "modes" },
                 }
             }
         }
@@ -266,21 +261,14 @@ impl SimpleComponent for ImportDialog {
     type Output = ImportOutput;
 
     view! {
-        adw::Window {
-            set_title: Some("Import Instance"),
-            set_default_width: 550,
-            set_default_height: 400,
-            set_modal: true,
-            #[watch]
-            set_visible: model.visible,
-            #[watch]
-            set_transient_for: relm4::main_application().active_window().as_ref(),
-            connect_close_request[sender] => move |_| {
-                sender.input(ImportInput::Close);
-                gtk::glib::Propagation::Stop
-            },
+        adw::Dialog {
+            set_title: "Import Instance",
+            set_content_width: 550,
+            set_content_height: 400,
+            set_can_close: true,
 
-            adw::ToolbarView {
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
                     #[wrap(Some)]
                      set_title_widget = &adw::WindowTitle {
@@ -291,12 +279,6 @@ impl SimpleComponent for ImportDialog {
                 #[wrap(Some)]
                 set_content = &gtk::Stack {
                     set_transition_type: gtk::StackTransitionType::Crossfade,
-                    #[watch]
-                    set_visible_child_name: match model.step {
-                        ImportStep::Selection => "selection",
-                        ImportStep::CodeEntry => "entry",
-                        ImportStep::Progress => "progress",
-                    },
 
                     add_named[Some("selection")] = &gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
@@ -424,7 +406,15 @@ impl SimpleComponent for ImportDialog {
                             #[watch]
                             set_fraction: 0.5,
                         }
-                    }
+                    },
+
+                    // Must come after add_named so children exist on first render
+                    #[watch]
+                    set_visible_child_name: match model.step {
+                        ImportStep::Selection => "selection",
+                        ImportStep::CodeEntry => "entry",
+                        ImportStep::Progress => "progress",
+                    },
                 }
             }
         }

@@ -269,7 +269,24 @@ fn parse_description(val: &serde_json::Value) -> String {
     }
 }
 
-fn get_mod_info(path: &Path) -> ModInfo {
+fn extract_icon_to_cache(archive: &mut zip::ZipArchive<fs::File>, icon_path_in_jar: &str, cache_filename: &str) -> Option<String> {
+    let clean_path = icon_path_in_jar.strip_prefix('/').unwrap_or(icon_path_in_jar);
+    if let Ok(mut icon_file) = archive.by_name(clean_path) {
+        if let Some(proj_dirs) = directories::ProjectDirs::from("com", "magnotec", "obelisk-launcher") {
+            let icons_dir = proj_dirs.cache_dir().join("icons");
+            let _ = fs::create_dir_all(&icons_dir);
+            let out_path = icons_dir.join(cache_filename);
+            if let Ok(mut out_file) = fs::File::create(&out_path) {
+                if std::io::copy(&mut icon_file, &mut out_file).is_ok() {
+                    return Some(out_path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_mod_info(path: &Path, full: bool) -> ModInfo {
     let filename = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -285,6 +302,10 @@ fn get_mod_info(path: &Path) -> ModInfo {
         icon_path: None,
         enabled: !filename.ends_with(".disabled"),
     };
+
+    if !full {
+        return info;
+    }
 
     if let Ok(file) = fs::File::open(path) {
         if let Ok(mut archive) = zip::ZipArchive::new(file) {
@@ -318,30 +339,8 @@ fn get_mod_info(path: &Path) -> ModInfo {
                         };
 
                         if !icon_in_jar.is_empty() {
-                            let icon_path_in_jar = if icon_in_jar.starts_with('/') {
-                                &icon_in_jar[1..]
-                            } else {
-                                &icon_in_jar
-                            };
-                            if let Ok(mut icon_file) = archive.by_name(icon_path_in_jar) {
-                                if let Some(cache_dir) = directories::ProjectDirs::from(
-                                    "com",
-                                    "magnotec",
-                                    "minecraft-manager",
-                                )
-                                .map(|d| d.cache_dir().to_path_buf())
-                                {
-                                    let icons_dir = cache_dir.join("icons");
-                                    let _ = fs::create_dir_all(&icons_dir);
-                                    let out_path =
-                                        icons_dir.join(format!("{}-{}.png", info.id, info.version));
-                                    if let Ok(mut out_file) = fs::File::create(&out_path) {
-                                        let _ = std::io::copy(&mut icon_file, &mut out_file);
-                                        info.icon_path =
-                                            Some(out_path.to_string_lossy().to_string());
-                                    }
-                                }
-                            }
+                            let cache_filename = format!("{}-{}.png", info.id, info.version);
+                            info.icon_path = extract_icon_to_cache(&mut archive, &icon_in_jar, &cache_filename);
                         }
                     }
 
@@ -352,7 +351,6 @@ fn get_mod_info(path: &Path) -> ModInfo {
 
             // Check for Forge (mods.toml)
             if !found {
-                // Read mods.toml content in its own scope to release the borrow
                 let forge_content = {
                     if let Ok(mut mods_toml_file) = archive.by_name("META-INF/mods.toml") {
                         let mut content = String::new();
@@ -379,39 +377,10 @@ fn get_mod_info(path: &Path) -> ModInfo {
                             info.description = mod_data.description.clone();
                             info.homepage = mod_data.display_url.clone();
 
-                            // Extract Forge icon in a separate borrow scope
+                            // Extract Forge icon
                             if let Some(logo) = &mod_data.logo_file {
-                                let icon_path_in_jar = if logo.starts_with('/') {
-                                    &logo[1..]
-                                } else {
-                                    logo
-                                };
-
-                                if let Ok(mut icon_file) = archive.by_name(icon_path_in_jar) {
-                                    if let Some(cache_dir) = directories::ProjectDirs::from(
-                                        "com",
-                                        "magnotec",
-                                        "minecraft-manager",
-                                    )
-                                    .map(|d| d.cache_dir().to_path_buf())
-                                    {
-                                        let icons_dir = cache_dir.join("icons");
-                                        let _ = fs::create_dir_all(&icons_dir);
-                                        let out_path = icons_dir.join(format!(
-                                            "{}-{}-forge.png",
-                                            info.id, info.version
-                                        ));
-                                        if let Ok(mut out_file) = fs::File::create(&out_path) {
-                                            let _ = std::io::copy(&mut icon_file, &mut out_file);
-                                            info.icon_path =
-                                                Some(out_path.to_string_lossy().to_string());
-                                        }
-                                    }
-                                }
-                            }
-                            #[allow(unused_assignments)]
-                            {
-                                found = true;
+                                let cache_filename = format!("{}-{}-forge.png", info.id, info.version);
+                                info.icon_path = extract_icon_to_cache(&mut archive, logo, &cache_filename);
                             }
                         }
                     }
@@ -423,7 +392,7 @@ fn get_mod_info(path: &Path) -> ModInfo {
     info
 }
 
-fn get_resource_pack_info(path: &Path) -> ResourcePackInfo {
+fn get_resource_pack_info(path: &Path, full: bool) -> ResourcePackInfo {
     let filename = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -438,6 +407,10 @@ fn get_resource_pack_info(path: &Path) -> ResourcePackInfo {
         icon_path: None,
         format: None,
     };
+
+    if !full {
+        return info;
+    }
 
     // Size calculation
     if path.is_file() {
@@ -464,23 +437,8 @@ fn get_resource_pack_info(path: &Path) -> ResourcePackInfo {
                 }
 
                 // Extract pack.png icon
-                if let Ok(mut icon_file) = archive.by_name("pack.png") {
-                    if let Some(cache_dir) = directories::ProjectDirs::from(
-                        "com",
-                        "magnotec",
-                        "minecraft-manager",
-                    )
-                    .map(|d| d.cache_dir().to_path_buf())
-                    {
-                        let icons_dir = cache_dir.join("icons");
-                        let _ = fs::create_dir_all(&icons_dir);
-                        let out_path = icons_dir.join(format!("rp-{}.png", info.filename));
-                        if let Ok(mut out_file) = fs::File::create(&out_path) {
-                            let _ = std::io::copy(&mut icon_file, &mut out_file);
-                            info.icon_path = Some(out_path.to_string_lossy().to_string());
-                        }
-                    }
-                }
+                let cache_filename = format!("rp-{}.png", info.filename);
+                info.icon_path = extract_icon_to_cache(&mut archive, "pack.png", &cache_filename);
             }
         }
     } else if path.is_dir() {
@@ -503,7 +461,7 @@ fn get_resource_pack_info(path: &Path) -> ResourcePackInfo {
     info
 }
 
-fn get_shader_pack_info(path: &Path) -> ShaderPackInfo {
+fn get_shader_pack_info(path: &Path, full: bool) -> ShaderPackInfo {
     let filename = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -517,6 +475,10 @@ fn get_shader_pack_info(path: &Path) -> ShaderPackInfo {
         size: 0,
         icon_path: None,
     };
+
+    if !full {
+        return info;
+    }
 
     // Size calculation
     if path.is_file() {
@@ -535,23 +497,8 @@ fn get_shader_pack_info(path: &Path) -> ShaderPackInfo {
         if let Ok(file) = fs::File::open(path) {
             if let Ok(mut archive) = zip::ZipArchive::new(file) {
                 // Some shaderpacks have a pack.png too
-                if let Ok(mut icon_file) = archive.by_name("pack.png") {
-                    if let Some(cache_dir) = directories::ProjectDirs::from(
-                        "com",
-                        "magnotec",
-                        "minecraft-manager",
-                    )
-                    .map(|d| d.cache_dir().to_path_buf())
-                    {
-                        let icons_dir = cache_dir.join("icons");
-                        let _ = fs::create_dir_all(&icons_dir);
-                        let out_path = icons_dir.join(format!("sp-{}.png", info.filename));
-                        if let Ok(mut out_file) = fs::File::create(&out_path) {
-                            let _ = std::io::copy(&mut icon_file, &mut out_file);
-                            info.icon_path = Some(out_path.to_string_lossy().to_string());
-                        }
-                    }
-                }
+                let cache_filename = format!("sp-{}.png", info.filename);
+                info.icon_path = extract_icon_to_cache(&mut archive, "pack.png", &cache_filename);
             }
         }
     } else if path.is_dir() {
@@ -565,16 +512,21 @@ fn get_shader_pack_info(path: &Path) -> ShaderPackInfo {
 }
 
 pub fn scan_instances(instances_path: &Path) -> Vec<Instance> {
+    use rayon::prelude::*;
     let mut instances = Vec::new();
     if let Ok(entries) = fs::read_dir(instances_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(instance) = scan_single_instance(&path) {
-                    instances.push(instance);
+        let entries: Vec<_> = entries.flatten().collect();
+        instances = entries
+            .par_iter()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_single_instance(&path, false)
+                } else {
+                    None
                 }
-            }
-        }
+            })
+            .collect();
     }
     // Sort instances alphabetically by name
     instances.sort_by(|a, b| a.name.cmp(&b.name));
@@ -583,20 +535,14 @@ pub fn scan_instances(instances_path: &Path) -> Vec<Instance> {
 
 /// Rescans a single instance directory and returns the updated Instance.
 /// This is much faster than `scan_instances()` when only one instance changed.
-pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
+pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Instance> {
     if !instance_path.is_dir() {
         return None;
     }
 
     let has_mismatch = instance_path.join(".minecraft").is_dir() && instance_path.join("minecraft").is_dir();
 
-    let minecraft_dir = if instance_path.join(".minecraft").is_dir() {
-        instance_path.join(".minecraft")
-    } else if instance_path.join("minecraft").is_dir() {
-        instance_path.join("minecraft")
-    } else {
-        instance_path.to_path_buf()
-    };
+    let minecraft_dir = get_minecraft_dir(instance_path);
 
     let cfg_path = instance_path.join("instance.cfg");
     if !cfg_path.is_file() {
@@ -710,7 +656,7 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
                 if m_path.is_file() {
                     let fname = m_path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
                     if fname.ends_with(".jar") || fname.ends_with(".jar.disabled") {
-                         mods.push(get_mod_info(&m_path));
+                         mods.push(get_mod_info(&m_path, full_scan));
                     }
                 }
             }
@@ -720,7 +666,7 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
         let rp_dir = m_dir.join("resourcepacks");
         if let Ok(rp_entries) = fs::read_dir(rp_dir) {
             for rp_entry in rp_entries.flatten() {
-                resource_packs.push(get_resource_pack_info(&rp_entry.path()));
+                resource_packs.push(get_resource_pack_info(&rp_entry.path(), full_scan));
             }
         }
         resource_packs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -728,7 +674,7 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
         let sp_dir = m_dir.join("shaderpacks");
         if let Ok(sp_entries) = fs::read_dir(sp_dir) {
             for sp_entry in sp_entries.flatten() {
-                shader_packs.push(get_shader_pack_info(&sp_entry.path()));
+                shader_packs.push(get_shader_pack_info(&sp_entry.path(), full_scan));
             }
         }
         shader_packs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -739,7 +685,24 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
                 if w_entry.path().is_dir() {
                     let w_path = w_entry.path();
                     let folder_name = w_path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string();
-                    
+
+                    if !full_scan {
+                        worlds.push(WorldInfo {
+                            name: folder_name.clone(),
+                            folder_name: folder_name.clone(),
+                            file_size: 0,
+                            seed: None,
+                            mc_version: None,
+                            last_played: None,
+                        });
+                        continue;
+                    }
+
+                    let mut name = folder_name.clone();
+                    let mut seed = None;
+                    let mut mc_version = None;
+                    let mut last_played = None;
+
                     let file_size: u64 = walkdir::WalkDir::new(&w_path)
                         .into_iter()
                         .filter_map(|e| e.ok())
@@ -747,11 +710,6 @@ pub fn scan_single_instance(instance_path: &Path) -> Option<Instance> {
                         .filter(|m| m.is_file())
                         .map(|m| m.len())
                         .sum();
-
-                    let mut name = folder_name.clone();
-                    let mut seed = None;
-                    let mut mc_version = None;
-                    let mut last_played = None;
 
                     let level_dat = w_path.join("level.dat");
                     if let Ok(file) = fs::File::open(&level_dat) {
@@ -1056,6 +1014,16 @@ pub fn is_loader_component(uid: &str) -> bool {
     LOADER_UIDS.iter().any(|&u| uid == u)
 }
 
+pub fn get_minecraft_dir(instance_path: &Path) -> PathBuf {
+    if instance_path.join(".minecraft").is_dir() {
+        instance_path.join(".minecraft")
+    } else if instance_path.join("minecraft").is_dir() {
+        instance_path.join("minecraft")
+    } else {
+        instance_path.to_path_buf()
+    }
+}
+
 /// Reads `mmc-pack.json` from an instance directory as a JSON Value.
 /// Returns the parsed value, preserving all fields for round-trip editing.
 fn read_pack(instance_path: &Path) -> Result<MmcPack, String> {
@@ -1075,7 +1043,7 @@ fn write_pack(instance_path: &Path, pack: &MmcPack) -> Result<(), String> {
 
 /// Updates `instance.cfg` by replacing (or inserting) a key=value pair in the
 /// [General] section. Preserves all other content.
-fn update_cfg_key(instance_path: &Path, key: &str, value: &str) -> Result<(), String> {
+pub fn update_cfg_key(instance_path: &Path, key: &str, value: &str) -> Result<(), String> {
     let cfg_path = instance_path.join("instance.cfg");
     let content =
         fs::read_to_string(&cfg_path).map_err(|e| format!("Failed to read instance.cfg: {}", e))?;
@@ -1215,104 +1183,14 @@ pub fn set_minecraft_version(instance_path: &Path, new_version: &str) -> Result<
 /// Otherwise, any existing loader is replaced with the new one.
 /// Only modifies `mmc-pack.json`.
 pub fn set_mod_loader(instance_path: &Path, loader: &ModLoader) -> Result<(), String> {
-    let mut pack = read_pack(instance_path)?;
-
-    // 1. Find the current Minecraft version to use for intermediary/LWJGL if needed
-    let mc_version = pack
-        .components
-        .iter()
-        .find(|c| c.uid == "net.minecraft")
-        .map(|c| c.version.clone())
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    // 2. Remove any existing loader components (Fabric, Forge, Quilt, Intermediary)
-    pack.components
-        .retain(|comp| !is_loader_component(&comp.uid));
-
-    // 3. Add the new loader if not None
-    match loader {
-        ModLoader::Fabric => {
-            pack.components.push(MmcComponent {
-                uid: "net.fabricmc.intermediary".to_string(),
-                version: mc_version.clone(),
-                cached_name: Some("Intermediary Mappings".to_string()),
-                cached_version: Some(mc_version.clone()),
-                dependency_only: Some(true),
-                cached_requires: Some(vec![MmcRequirement {
-                    uid: "net.minecraft".to_string(),
-                    equals: Some(mc_version.clone()),
-                    suggests: None,
-                }]),
-                important: None,
-            });
-            pack.components.push(MmcComponent {
-                uid: "net.fabricmc.fabric-loader".to_string(),
-                version: "0.16.10".to_string(),
-                cached_name: Some("Fabric Loader".to_string()),
-                cached_version: Some("0.16.10".to_string()),
-                cached_requires: Some(vec![MmcRequirement {
-                    uid: "net.fabricmc.intermediary".to_string(),
-                    equals: None,
-                    suggests: None,
-                }]),
-                dependency_only: None,
-                important: None,
-            });
-        }
-        ModLoader::Forge => {
-            pack.components.push(MmcComponent {
-                uid: "net.minecraftforge".to_string(),
-                version: "54.1.2".to_string(),
-                cached_name: Some("Forge".to_string()),
-                cached_version: Some("54.1.2".to_string()),
-                cached_requires: None,
-                dependency_only: None,
-                important: None,
-            });
-        }
-        ModLoader::Quilt => {
-            pack.components.push(MmcComponent {
-                uid: "net.fabricmc.intermediary".to_string(),
-                version: mc_version.clone(),
-                cached_name: Some("Intermediary Mappings".to_string()),
-                cached_version: Some(mc_version.clone()),
-                dependency_only: Some(true),
-                cached_requires: Some(vec![MmcRequirement {
-                    uid: "net.minecraft".to_string(),
-                    equals: Some(mc_version.clone()),
-                    suggests: None,
-                }]),
-                important: None,
-            });
-            pack.components.push(MmcComponent {
-                uid: "org.quiltmc.quilt-loader".to_string(),
-                version: "0.26.3".to_string(),
-                cached_name: Some("Quilt Loader".to_string()),
-                cached_version: Some("0.26.3".to_string()),
-                cached_requires: Some(vec![MmcRequirement {
-                    uid: "net.fabricmc.intermediary".to_string(),
-                    equals: None,
-                    suggests: None,
-                }]),
-                dependency_only: None,
-                important: None,
-            });
-        }
-        ModLoader::NeoForge => {
-            pack.components.push(MmcComponent {
-                uid: "net.neoforged".to_string(),
-                version: "21.4.156".to_string(),
-                cached_name: Some("NeoForge".to_string()),
-                cached_version: Some("21.4.156".to_string()),
-                cached_requires: None,
-                dependency_only: None,
-                important: None,
-            });
-        }
-        ModLoader::None => {}
-    }
-
-    write_pack(instance_path, &pack)
+    let default_version = match loader {
+        ModLoader::Fabric => "0.16.10",
+        ModLoader::Forge => "54.1.2",
+        ModLoader::Quilt => "0.26.3",
+        ModLoader::NeoForge => "21.4.156",
+        ModLoader::None => "",
+    };
+    set_mod_loader_with_version(instance_path, loader, default_version)
 }
 
 /// Sets (or replaces) the mod loader for an existing instance, using a specific version.
@@ -1444,13 +1322,10 @@ pub fn remove_instance_item(
         return Err("Safety check failed: Filename cannot be empty".to_string());
     }
 
-    let minecraft_dir = if instance_path.join(".minecraft").is_dir() {
-        instance_path.join(".minecraft")
-    } else if instance_path.join("minecraft").is_dir() {
-        instance_path.join("minecraft")
-    } else {
+    let minecraft_dir = get_minecraft_dir(instance_path);
+    if minecraft_dir == instance_path {
         return Err("Could not find minecraft directory".to_string());
-    };
+    }
     let target_path = minecraft_dir.join(subfolder).join(filename);
     if target_path.exists() {
         if target_path.is_dir() {
@@ -1474,12 +1349,13 @@ pub fn add_instance_item(
     subfolder: &str,
     source_path: &Path,
 ) -> Result<(), String> {
-    let minecraft_dir = if instance_path.join(".minecraft").is_dir() {
-        instance_path.join(".minecraft")
-    } else if instance_path.join("minecraft").is_dir() {
-        instance_path.join("minecraft")
-    } else {
-        instance_path.join(".minecraft") // Create it if it doesn't exist
+    let minecraft_dir = {
+        let dir = get_minecraft_dir(instance_path);
+        if dir == instance_path {
+            instance_path.join(".minecraft")
+        } else {
+            dir
+        }
     };
     let dest_dir = minecraft_dir.join(subfolder);
     if !dest_dir.exists() {
@@ -1606,13 +1482,10 @@ pub fn toggle_mod_enabled(
     mod_filename: &str,
     enable: bool,
 ) -> Result<String, String> {
-    let minecraft_dir = if instance_path.join(".minecraft").is_dir() {
-        instance_path.join(".minecraft")
-    } else if instance_path.join("minecraft").is_dir() {
-        instance_path.join("minecraft")
-    } else {
+    let minecraft_dir = get_minecraft_dir(instance_path);
+    if minecraft_dir == instance_path {
         return Err("Could not find minecraft directory".to_string());
-    };
+    }
     let mods_dir = minecraft_dir.join("mods");
 
     let current_path = mods_dir.join(mod_filename);
@@ -1642,13 +1515,7 @@ pub fn toggle_mod_enabled(
 }
 
 pub fn rename_world(instance_path: &Path, folder_name: &str, new_name: &str) -> Result<(), String> {
-    let minecraft_dir = if instance_path.join(".minecraft").is_dir() {
-        instance_path.join(".minecraft")
-    } else if instance_path.join("minecraft").is_dir() {
-        instance_path.join("minecraft")
-    } else {
-        instance_path.to_path_buf()
-    };
+    let minecraft_dir = get_minecraft_dir(instance_path);
     
     let worlds_dir = minecraft_dir.join("saves");
     let world_path = worlds_dir.join(folder_name);
@@ -1685,21 +1552,9 @@ pub fn rename_world(instance_path: &Path, folder_name: &str, new_name: &str) -> 
 }
 
 pub fn move_world(source_instance_path: &Path, target_instance_path: &Path, folder_name: &str) -> Result<(), String> {
-    let source_minecraft_dir = if source_instance_path.join(".minecraft").is_dir() {
-        source_instance_path.join(".minecraft")
-    } else if source_instance_path.join("minecraft").is_dir() {
-        source_instance_path.join("minecraft")
-    } else {
-        source_instance_path.to_path_buf()
-    };
+    let source_minecraft_dir = get_minecraft_dir(source_instance_path);
 
-    let target_minecraft_dir = if target_instance_path.join(".minecraft").is_dir() {
-        target_instance_path.join(".minecraft")
-    } else if target_instance_path.join("minecraft").is_dir() {
-        target_instance_path.join("minecraft")
-    } else {
-        target_instance_path.to_path_buf()
-    };
+    let target_minecraft_dir = get_minecraft_dir(target_instance_path);
 
     let source_path = source_minecraft_dir.join("saves").join(folder_name);
     let target_saves_dir = target_minecraft_dir.join("saves");

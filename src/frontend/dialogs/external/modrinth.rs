@@ -1,8 +1,13 @@
 #![allow(unused_assignments)]
 
-use crate::backend::download::modrinth::{
-    clear_caches, get_project_versions, search_mods, ModrinthProject, ModrinthSearchResult,
-    ModrinthVersion,
+use crate::backend::download::manager::{
+    clear_modrinth_caches as clear_caches,
+    fetch_modrinth_project as get_project,
+    fetch_modrinth_versions as get_project_versions,
+    search_modrinth_mods as search_mods,
+    ModProject as ModrinthProject,
+    ModSearchResult as ModrinthSearchResult,
+    ModVersion as ModrinthVersion,
 };
 use crate::backend::instance::manager::ModLoader;
 use adw::prelude::*;
@@ -86,8 +91,6 @@ impl FactoryComponent for ProjectRow {
             add_prefix = &gtk::Stack {
                 set_hhomogeneous: true,
                 set_vhomogeneous: true,
-                #[watch]
-                set_visible_child_name: if self.icon.is_some() { "icon" } else { "fallback" },
 
                 add_named[Some("icon")] = &gtk::Image {
                     #[watch]
@@ -99,6 +102,10 @@ impl FactoryComponent for ProjectRow {
                     set_icon_name: Some("package-x-generic-symbolic"),
                     set_pixel_size: 40,
                 },
+
+                // Must come after add_named so children exist on first render
+                #[watch]
+                set_visible_child_name: if self.icon.is_some() { "icon" } else { "fallback" },
             },
 
             add_suffix = &gtk::Button {
@@ -217,22 +224,14 @@ impl FactoryComponent for VersionRow {
 pub struct QueueRow {
     pub project_id: String,
     pub item: QueueItem,
-    pub loading: bool,
-    pub fetched: bool,
     pub versions: Vec<ModrinthVersion>,
-    // Widget refs for imperative updates
-    version_label: gtk::Label,
-    version_list: gtk::ListBox,
-    popover: gtk::Popover,
+    pub string_list: gtk::StringList,
 }
 
 #[derive(Debug)]
 pub enum QueueRowInput {
     SetVersions(Vec<ModrinthVersion>),
     Select(u32),
-    OpenPopover,
-    FilterVersions(String),
-    Reset,
 }
 
 #[derive(Debug)]
@@ -252,73 +251,27 @@ impl FactoryComponent for QueueRow {
 
     view! {
         #[root]
-        gtk::ListBoxRow {
-            set_activatable: true,
-            set_selectable: false,
+        adw::ComboRow {
+            #[watch]
+            set_title: &escape(&self.item.title),
+            set_enable_search: true,
+            set_model: Some(&self.string_list),
+            #[watch]
+            set_selected: self.get_selected_index(),
 
-            gtk::Box {
+            connect_selected_notify[sender] => move |row| {
+                let idx = row.selected();
+                sender.input(QueueRowInput::Select(idx));
+            },
+
+            add_suffix = &gtk::Box {
                 set_orientation: gtk::Orientation::Horizontal,
-                set_margin_all: 12,
-                set_spacing: 12,
-
-                #[name = "info_box"]
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_hexpand: true,
-                    set_valign: gtk::Align::Center,
-                    set_spacing: 1,
-
-                    gtk::Label {
-                        set_label: &escape(&self.item.title),
-                        set_halign: gtk::Align::Start,
-                        set_css_classes: &["heading"],
-                        set_use_markup: true,
-                    },
-
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 4,
-                        set_halign: gtk::Align::Start,
-                        #[name = "version_anchor"]
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
-                            set_spacing: 4,
-
-                            #[name = "version_lbl"]
-                            gtk::Label {
-                                set_markup: "<span size='small'>Latest Compatible</span>",
-                                set_css_classes: &["dim-label"],
-                                set_halign: gtk::Align::Start,
-                                set_ellipsize: gtk::pango::EllipsizeMode::End,
-                                set_use_markup: true,
-                            },
-
-                            gtk::Image {
-                                set_icon_name: Some("pan-down-symbolic"),
-                                set_css_classes: &["dim-label"],
-                                set_pixel_size: 10,
-                                set_valign: gtk::Align::Center,
-                            },
-                        },
-                    },
-                },
-
-                gtk::Button {
-                    set_icon_name: "edit-undo-symbolic",
-                    set_css_classes: &["flat", "circular"],
-                    set_valign: gtk::Align::Center,
-                    set_tooltip_text: Some("Reset to latest compatible"),
-                    #[watch]
-                    set_visible: self.item.version_id.is_some(),
-                    connect_clicked[sender] => move |_| {
-                        sender.input(QueueRowInput::Reset);
-                    }
-                },
+                set_valign: gtk::Align::Center,
+                set_spacing: 6,
 
                 gtk::Button {
                     set_icon_name: "list-remove-symbolic",
                     set_css_classes: &["flat", "circular"],
-                    set_valign: gtk::Align::Center,
                     set_tooltip_text: Some("Remove from queue"),
                     connect_clicked[sender, pid = self.project_id.clone()] => move |_| {
                         sender.output(QueueRowOutput::Remove(pid.clone())).ok();
@@ -328,171 +281,51 @@ impl FactoryComponent for QueueRow {
         }
     }
 
-    fn init_model(init: Self::Init, _index: &DynamicIndex, sender: FactorySender<Self>) -> Self {
-        let version_list = gtk::ListBox::new();
-        version_list.set_selection_mode(gtk::SelectionMode::None);
-        version_list.set_css_classes(&["boxed-list"]);
-
-        // Function to create a version row
-        let create_row = |title: &str| {
-            adw::ActionRow::builder()
-                .title(title)
-                .activatable(true)
-                .build()
-        };
-
-        // Create version rows
-        for v in &init.2 {
-            version_list.append(&create_row(&format!("{} · {}", v.name, v.version_number)));
-        }
-
-        let search_entry = gtk::SearchEntry::new();
-        search_entry.set_placeholder_text(Some("Search versions..."));
-        search_entry.set_margin_all(6);
-
-        let scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .width_request(320)
-            .max_content_height(400)
-            .propagate_natural_height(true)
-            .child(&version_list)
-            .build();
-
-        let popover_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        popover_content.append(&search_entry);
-        popover_content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        popover_content.append(&scroll);
-
-        let popover = gtk::Popover::new();
-        popover.set_child(Some(&popover_content));
-
-        // Connect search entry
-        let sender_clone = sender.clone();
-        search_entry.connect_search_changed(move |entry| {
-            sender_clone.input(QueueRowInput::FilterVersions(entry.text().to_string()));
-        });
-
-        // Connect row activation
-        let sender_clone = sender.clone();
-        version_list.connect_row_activated(move |_, row| {
-            let idx = row.index() as u32;
-            sender_clone.input(QueueRowInput::Select(idx));
-        });
-
-        let version_label = gtk::Label::new(None);
-        version_label.set_use_markup(true);
-        version_label.set_markup("<span size='small'>Latest Compatible</span>");
-
-        // Set initial label if we have a selected version
-        if let Some(vid) = &init.1.version_id {
-            if let Some(v) = init.2.iter().find(|v| v.id == *vid) {
-                version_label.set_markup(&format!("<span size='small'>{} · {}</span>", glib::markup_escape_text(&v.name), glib::markup_escape_text(&v.version_number)));
-            }
-        }
+    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+        let strings: Vec<String> = init.2.iter()
+            .map(|v| format!("{} · {}", v.name, v.version_number))
+            .collect();
+        let refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
+        let string_list = gtk::StringList::new(&refs);
 
         Self {
             project_id: init.0,
             item: init.1,
-            loading: false,
-            fetched: !init.2.is_empty(),
             versions: init.2,
-            version_label,
-            version_list,
-            popover,
+            string_list,
         }
-    }
-
-    fn init_widgets(
-        &mut self,
-        _index: &DynamicIndex,
-        root: Self::Root,
-        _returned_widget: &<Self::ParentWidget as relm4::factory::FactoryView>::ReturnedWidget,
-        sender: FactorySender<Self>,
-    ) -> Self::Widgets {
-        let widgets = view_output!();
-
-        self.version_label = widgets.version_lbl.clone();
-        if let Some(vid) = &self.item.version_id {
-            if let Some(v) = self.versions.iter().find(|v| v.id == *vid) {
-                self.version_label.set_markup(&format!("<span size='small'>{} · {}</span>", glib::markup_escape_text(&v.name), glib::markup_escape_text(&v.version_number)));
-            }
-        }
-
-        self.popover.set_parent(&widgets.version_anchor);
-        self.popover.set_has_arrow(true);
-        self.popover.set_autohide(true);
-        self.popover.set_position(gtk::PositionType::Bottom);
-
-        // Open on click only on the info part
-        let gesture = gtk::GestureClick::new();
-        let sender_clone = sender.clone();
-        gesture.connect_pressed(move |_, _, _, _| {
-            sender_clone.input(QueueRowInput::OpenPopover);
-        });
-        widgets.info_box.add_controller(gesture);
-
-        // Also handle keyboard activation
-        let sender_clone2 = sender.clone();
-        root.connect_activate(move |_| {
-            sender_clone2.input(QueueRowInput::OpenPopover);
-        });
-
-        widgets
     }
 
     fn update(&mut self, msg: Self::Input, sender: FactorySender<Self>) {
         match msg {
             QueueRowInput::SetVersions(versions) => {
-                self.loading = false;
-                self.fetched = true;
                 self.versions = versions;
-                
-                // Clear existing rows
-                while let Some(child) = self.version_list.first_child() {
-                    self.version_list.remove(&child);
-                }
-
-                for v in &self.versions {
-                    let row = adw::ActionRow::builder()
-                        .title(&format!("{} · {}", v.name, v.version_number))
-                        .activatable(true)
-                        .build();
-                    self.version_list.append(&row);
-                }
+                let strings: Vec<String> = self.versions.iter()
+                    .map(|v| format!("{} · {}", v.name, v.version_number))
+                    .collect();
+                let refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
+                self.string_list.splice(0, self.string_list.n_items(), &refs);
             }
-            QueueRowInput::FilterVersions(query) => {
-                let query = query.to_lowercase();
-                
-                for (i, v) in self.versions.iter().enumerate() {
-                    if let Some(row) = self.version_list.row_at_index(i as i32) {
-                        let text = format!("{} {}", v.name, v.version_number).to_lowercase();
-                        row.set_visible(query.is_empty() || text.contains(&query));
+            QueueRowInput::Select(idx) => {
+                if let Some(v) = self.versions.get(idx as usize) {
+                    if self.item.version_id.as_ref() != Some(&v.id) {
+                        let filename = v.files.iter().find(|f| f.primary).or_else(|| v.files.first()).map(|f| f.filename.clone()).unwrap_or_default();
+                        self.item.version_id = Some(v.id.clone());
+                        self.item.version_name = Some(v.name.clone());
+                        self.item.filename = Some(filename.clone());
+                        sender.output(QueueRowOutput::SelectVersion(self.project_id.clone(), v.id.clone(), v.name.clone(), filename)).ok();
                     }
                 }
             }
-            QueueRowInput::Reset => {
-                self.version_label.set_markup("<span size='small'>Latest Compatible</span>");
-                self.item.version_id = None;
-                self.item.version_name = None;
-                self.item.filename = None;
-                sender.output(QueueRowOutput::SelectVersion(self.project_id.clone(), "".to_string(), "".to_string(), "".to_string())).ok();
-            }
-            QueueRowInput::OpenPopover => {
-                self.popover.popup();
-            }
-            QueueRowInput::Select(idx) => {
-                self.popover.popdown();
-
-                if let Some(v) = self.versions.get(idx as usize) {
-                    self.version_label.set_markup(&format!("<span size='small'>{} · {}</span>", glib::markup_escape_text(&v.name), glib::markup_escape_text(&v.version_number)));
-                    let filename = v.files.iter().find(|f| f.primary).or_else(|| v.files.first()).map(|f| f.filename.clone()).unwrap_or_default();
-                    self.item.version_id = Some(v.id.clone());
-                    self.item.version_name = Some(v.name.clone());
-                    self.item.filename = Some(filename.clone());
-                    sender.output(QueueRowOutput::SelectVersion(self.project_id.clone(), v.id.clone(), v.name.clone(), filename)).ok();
-                }
-            }
         }
+    }
+}
+
+impl QueueRow {
+    fn get_selected_index(&self) -> u32 {
+        self.item.version_id.as_ref()
+            .and_then(|vid| self.versions.iter().position(|v| v.id == *vid))
+            .unwrap_or(0) as u32
     }
 }
 
@@ -579,29 +412,22 @@ impl ModrinthBrowser {
 }
 
 #[relm4::component(pub)]
-impl SimpleComponent for ModrinthBrowser {
+impl Component for ModrinthBrowser {
     type Init = ();
     type Input = BrowserInput;
     type Output = BrowserOutput;
+    type CommandOutput = ();
 
     view! {
-        adw::Window {
-            set_title: Some("Browse Mods"),
-            set_default_width: 950,
-            set_default_height: 700,
-            set_modal: true,
-            #[watch]
-            set_transient_for: relm4::main_application().active_window().as_ref(),
-            #[watch]
-            set_visible: model.visible,
-            connect_close_request[sender] => move |_| {
-                sender.input(BrowserInput::Close);
-                gtk::glib::Propagation::Stop
-            },
+        adw::Dialog {
+            set_title: "Browse Mods",
+            set_content_width: 950,
+            set_content_height: 700,
+            set_can_close: true,
 
             #[name = "toast_overlay"]
             #[wrap(Some)]
-            set_content = &adw::ToastOverlay {
+            set_child = &adw::ToastOverlay {
                 adw::ToolbarView {
                     #[wrap(Some)]
                     set_content = &adw::NavigationSplitView {
@@ -658,9 +484,10 @@ impl SimpleComponent for ModrinthBrowser {
                                             set_visible: model.loading,
                                             set_title: "Searching...",
                                             #[wrap(Some)]
-                                            set_child = &gtk::Spinner {
-                                                set_spinning: true,
+                                            set_child = &adw::Spinner {
                                                 set_halign: gtk::Align::Center,
+                                                set_width_request: 32,
+                                                set_height_request: 32,
                                             }
                                         },
 
@@ -676,10 +503,11 @@ impl SimpleComponent for ModrinthBrowser {
                                             #[watch]
                                             set_visible: model.error.is_some(),
                                             #[watch]
-                                            set_title: "Error fetching data",
+                                            set_title: if model.error.as_deref().unwrap_or("").contains("No internet") { "No Internet Connection" } else { "Error fetching data" },
                                             #[watch]
                                             set_description: model.error.as_deref(),
-                                            set_icon_name: Some("dialog-error-symbolic"),
+                                            #[watch]
+                                            set_icon_name: Some(if model.error.as_deref().unwrap_or("").contains("No internet") { "network-offline-symbolic" } else { "dialog-error-symbolic" }),
                                         },
 
                                         #[local_ref]
@@ -725,11 +553,6 @@ impl SimpleComponent for ModrinthBrowser {
                         #[wrap(Some)]
                         set_child = &gtk::Stack {
                             set_transition_type: gtk::StackTransitionType::SlideLeftRight,
-                            #[watch]
-                            set_visible_child_name: match model.view_state {
-                                BrowserView::Details => "details",
-                                _ => "overview",
-                            },
 
                             // --- 1. Overview Page (Icon + Title) ---
                             add_named[Some("overview")] = &adw::NavigationPage {
@@ -799,8 +622,6 @@ impl SimpleComponent for ModrinthBrowser {
                                                     gtk::Stack {
                                                         set_hhomogeneous: true,
                                                         set_vhomogeneous: true,
-                                                        #[watch]
-                                                        set_visible_child_name: if model.selected_project.as_ref().and_then(|p| p.icon_url.as_ref()).and_then(|url| model.icon_cache.get(url)).is_some() { "icon" } else { "fallback" },
 
                                                         add_named[Some("icon")] = &gtk::Image {
                                                             #[watch]
@@ -813,7 +634,11 @@ impl SimpleComponent for ModrinthBrowser {
                                                             set_icon_name: Some("package-x-generic-symbolic"),
                                                             set_pixel_size: 96,
                                                             set_css_classes: &["icon-dropshadow"],
-                                                        }
+                                                        },
+
+                                                        // Must come after add_named so children exist on first render
+                                                        #[watch]
+                                                        set_visible_child_name: if model.selected_project.as_ref().and_then(|p| p.icon_url.as_ref()).and_then(|url| model.icon_cache.get(url)).is_some() { "icon" } else { "fallback" },
                                                     },
                                                     gtk::Box {
                                                         set_orientation: gtk::Orientation::Vertical,
@@ -894,7 +719,7 @@ impl SimpleComponent for ModrinthBrowser {
 
                                                     adw::ActionRow {
                                                         set_title: "Source Code",
-                                                        add_prefix = &gtk::Image { set_icon_name: Some("code-symbolic"), set_pixel_size: 16 },
+                                                        add_prefix = &gtk::Image { set_icon_name: Some("text-editor-symbolic"), set_pixel_size: 16 },
                                                         #[watch]
                                                         set_visible: model.selected_project.as_ref().and_then(|p| p.source_url.as_ref()).is_some(),
                                                         #[watch]
@@ -912,7 +737,7 @@ impl SimpleComponent for ModrinthBrowser {
                                                     },
                                                     adw::ActionRow {
                                                         set_title: "Discord",
-                                                        add_prefix = &gtk::Image { set_icon_name: Some("user-available-symbolic"), set_pixel_size: 16 },
+                                                        add_prefix = &gtk::Image { set_icon_name: Some("chat-message-new-symbolic"), set_pixel_size: 16 },
                                                         #[watch]
                                                         set_visible: model.selected_project.as_ref().and_then(|p| p.discord_url.as_ref()).is_some(),
                                                         #[watch]
@@ -950,7 +775,13 @@ impl SimpleComponent for ModrinthBrowser {
                                             },
                                         },
                                     }
-                                }
+                                },
+                            },
+
+                            #[watch]
+                            set_visible_child_name: match model.view_state {
+                                BrowserView::Details => "details",
+                                _ => "overview",
                             },
                         }
                     }
@@ -975,7 +806,8 @@ impl SimpleComponent for ModrinthBrowser {
                         },
 
                         pack_end = &gtk::Button {
-                            set_label: "Manage",
+                            set_label: "Install",
+                            set_css_classes: &["suggested-action"],
                             connect_clicked => BrowserInput::OpenQueueDialog,
                         },
                     },
@@ -1005,7 +837,6 @@ impl SimpleComponent for ModrinthBrowser {
             });
 
         let queue_dialog = QueueDialog::builder()
-            .transient_for(&root)
             .launch(())
             .forward(sender.input_sender(), |output| match output {
                 QueueDialogOutput::Remove(id) => BrowserInput::RemoveQueueItem(id),
@@ -1048,7 +879,12 @@ impl SimpleComponent for ModrinthBrowser {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+    fn update(
+        &mut self, 
+        msg: Self::Input, 
+        sender: ComponentSender<Self>,
+        root: &Self::Root,
+    ) {
         match msg {
             BrowserInput::Open(game_version, loader) => {
                 self.visible = true;
@@ -1067,6 +903,7 @@ impl SimpleComponent for ModrinthBrowser {
             }
             BrowserInput::Close => {
                 self.visible = false;
+                root.close();
             }
             BrowserInput::GoBack => match self.view_state {
                 BrowserView::Details | BrowserView::Results => {
@@ -1257,6 +1094,7 @@ impl SimpleComponent for ModrinthBrowser {
             }
             BrowserInput::OpenQueueDialog => {
                 self.queue_dialog.emit(QueueDialogInput::Open(self.download_queue.clone()));
+                self.queue_dialog.widget().present(Some(root));
             }
             BrowserInput::OpenProjectDetails(id) => {
                 sender.input(BrowserInput::ShowDetails(id));
@@ -1274,7 +1112,7 @@ impl SimpleComponent for ModrinthBrowser {
                 std::thread::spawn(move || {
                     let result = (|| {
                         let project =
-                            crate::backend::download::modrinth::get_project(&id_clone)?;
+                            get_project(&id_clone)?;
                         let versions =
                             get_project_versions(&id_clone, Some(&gv), Some(l))?;
                         Ok((project, versions))
@@ -1387,12 +1225,14 @@ impl SimpleComponent for ModrinthBrowser {
                 self.visible = false;
                 self.queue_dialog.emit(QueueDialogInput::Close);
                 sender.input(BrowserInput::ClearQueue);
+                root.close();
             }
             BrowserInput::InstallProject(pid, vid) => {
                 sender
                     .output(BrowserOutput::InstallMods(vec![(pid, vid)]))
                     .ok();
                 self.visible = false;
+                root.close();
             }
             BrowserInput::FetchVersions(id) => {
                 let gv = self.game_version.clone();
@@ -1467,72 +1307,82 @@ pub struct QueueDialog {
 }
 
 #[relm4::component(pub)]
-impl SimpleComponent for QueueDialog {
+impl Component for QueueDialog {
     type Init = ();
     type Input = QueueDialogInput;
     type Output = QueueDialogOutput;
+    type CommandOutput = ();
 
     view! {
-        #[name = "window"]
-        adw::Window {
-            set_title: Some("Download Queue"),
-            set_default_width: 500,
-            set_default_height: 400,
-            set_modal: true,
-            #[watch]
-            set_visible: model.visible,
-            connect_close_request[sender] => move |_| {
-                sender.input(QueueDialogInput::Close);
-                gtk::glib::Propagation::Stop
-            },
+        adw::Dialog {
+            set_title: "Download Queue",
+            set_content_width: 500,
+            set_content_height: 480,
+            set_can_close: true,
 
-            gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-
-                adw::HeaderBar {
-                    pack_start = &gtk::ToggleButton {
-                        set_icon_name: "system-search-symbolic",
-                        #[watch]
-                        set_active: search_bar.is_search_mode(),
-                        connect_toggled[search_bar] => move |btn| {
-                            search_bar.set_search_mode(btn.is_active());
-                        }
-                    },
-                    pack_end = &gtk::Button {
-                        set_label: "Install",
-                        set_css_classes: &["suggested-action"],
-                        connect_clicked => QueueDialogInput::Install,
-                        #[watch]
-                        set_sensitive: !model.all_items.is_empty(),
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {
+                    #[wrap(Some)]
+                    set_title_widget = &adw::WindowTitle {
+                        set_title: "Download Queue",
                     }
                 },
 
-                #[name = "search_bar"]
-                gtk::SearchBar {
-                    set_key_capture_widget: Some(&window),
-                    #[wrap(Some)]
-                    set_child = &gtk::SearchEntry {
+                #[wrap(Some)]
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 8,
+
+                    gtk::SearchEntry {
+                        set_margin_start: 16,
+                        set_margin_end: 16,
+                        set_margin_top: 12,
+                        set_margin_bottom: 4,
                         set_placeholder_text: Some("Search queue..."),
                         connect_search_changed[sender] => move |entry| {
                             sender.input(QueueDialogInput::Search(entry.text().to_string()));
                         }
+                    },
+
+                    gtk::ScrolledWindow {
+                        set_vexpand: true,
+                        set_hscrollbar_policy: gtk::PolicyType::Never,
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_margin_all: 16,
+                            set_spacing: 6,
+
+                            #[local_ref]
+                            queue_list -> gtk::ListBox {
+                                set_selection_mode: gtk::SelectionMode::None,
+                                set_css_classes: &["boxed-list"],
+                            }
+                        }
                     }
                 },
 
-                gtk::ScrolledWindow {
-                    set_vexpand: true,
-                    set_hscrollbar_policy: gtk::PolicyType::Never,
+                add_bottom_bar = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 12,
+                    set_margin_bottom: 16,
+                    set_margin_start: 16,
+                    set_margin_end: 16,
+                    set_halign: gtk::Align::Center,
 
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_margin_all: 12,
-                        set_spacing: 6,
+                    gtk::Button {
+                        set_label: "Install",
+                        set_css_classes: &["pill", "suggested-action"],
+                        connect_clicked => QueueDialogInput::Install,
+                        #[watch]
+                        set_sensitive: !model.all_items.is_empty(),
+                    },
 
-                        #[local_ref]
-                        queue_list -> gtk::ListBox {
-                            set_selection_mode: gtk::SelectionMode::None,
-                            set_css_classes: &["boxed-list"],
-                        }
+                    gtk::Button {
+                        set_label: "Cancel",
+                        set_css_classes: &["pill"],
+                        connect_clicked => QueueDialogInput::Close,
                     }
                 }
             }
@@ -1564,7 +1414,12 @@ impl SimpleComponent for QueueDialog {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+    fn update(
+        &mut self, 
+        msg: Self::Input, 
+        sender: ComponentSender<Self>,
+        root: &Self::Root,
+    ) {
         match msg {
             QueueDialogInput::Open(items) => {
                 self.all_items = items;
@@ -1597,9 +1452,11 @@ impl SimpleComponent for QueueDialog {
             }
             QueueDialogInput::Install => {
                 sender.output(QueueDialogOutput::Install).ok();
+                root.close();
             }
             QueueDialogInput::Close => {
                 self.visible = false;
+                root.close();
             }
             QueueDialogInput::FetchVersions(id) => {
                 sender.output(QueueDialogOutput::FetchVersions(id)).ok();
@@ -1666,7 +1523,7 @@ impl QueueDialog {
 fn fetch_icon(url: String, sender: relm4::Sender<BrowserInput>) {
     thread::spawn(move || {
         let client = reqwest::blocking::Client::builder()
-            .user_agent("minecraft-launcher-rs (github.com/magnotec/minecraft-manager)")
+            .user_agent("obelisk-launcher-rs (github.com/magnotec/obelisk-launcher)")
             .build()
             .unwrap();
         match client.get(&url).send() {

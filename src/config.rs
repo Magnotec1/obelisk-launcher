@@ -19,9 +19,6 @@ pub struct Config {
     /// Path to the global default instance icon image.
     #[serde(default)]
     pub default_instance_icon: Option<PathBuf>,
-    /// Recently used instance icon paths (most recent first, max 12).
-    #[serde(default)]
-    pub recent_instance_icons: Vec<PathBuf>,
     /// Total playtime across all instances (persistent even if instances are deleted).
     #[serde(default)]
     pub total_playtime: u64,
@@ -32,7 +29,7 @@ impl Default for Config {
         let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
 
         let mut mc_data = home.clone();
-        mc_data.push(".local/share/minecraft-manager");
+        mc_data.push(".local/share/obelisk-launcher");
 
         Self {
             instances_path: None,
@@ -45,7 +42,6 @@ impl Default for Config {
             accounts: Vec::new(),
             active_account_uuid: None,
             default_instance_icon: None,
-            recent_instance_icons: Vec::new(),
             total_playtime: 0,
         }
     }
@@ -55,7 +51,7 @@ impl Config {
     fn config_path() -> PathBuf {
         let mut path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
         path.push(".config");
-        path.push("minecraft-manager");
+        path.push("obelisk-launcher");
         path.push("config.json");
         path
     }

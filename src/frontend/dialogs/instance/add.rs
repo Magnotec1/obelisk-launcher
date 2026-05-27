@@ -13,12 +13,13 @@ use std::path::PathBuf;
 pub struct VersionRow {
     id: String,
     version_type: String,
+    selected: bool,
 }
 
 #[relm4::factory(pub)]
 impl FactoryComponent for VersionRow {
-    type Init = (String, String);
-    type Input = ();
+    type Init = (String, String, bool);
+    type Input = bool;
     type Output = usize;
     type CommandOutput = ();
     type ParentWidget = gtk::ListBox;
@@ -26,6 +27,11 @@ impl FactoryComponent for VersionRow {
     view! {
         adw::ActionRow {
             set_title: &self.id,
+            add_prefix = &gtk::Image {
+                set_icon_name: Some("object-select-symbolic"),
+                #[watch]
+                set_visible: self.selected,
+            },
             add_suffix = &gtk::Label {
                 set_label: &self.version_type,
                 set_css_classes: &["dim-label"],
@@ -41,7 +47,12 @@ impl FactoryComponent for VersionRow {
         Self {
             id: init.0,
             version_type: init.1,
+            selected: init.2,
         }
+    }
+
+    fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
+        self.selected = msg;
     }
 }
 
@@ -99,7 +110,7 @@ pub enum AddInstanceInput {
 
 #[derive(Debug)]
 pub enum AddInstanceOutput {
-    InstanceCreated(MinecraftVersion),
+    InstanceCreated(MinecraftVersion, PathBuf),
 }
 
 impl AddInstanceDialog {
@@ -138,21 +149,10 @@ impl AddInstanceDialog {
         let mut guard = self.version_list.guard();
         guard.clear();
 
-        // Find latest release overall to mark as recommended
-        let latest_release_id = self
-            .all_versions
-            .iter()
-            .find(|v| v.version_type == VersionType::Release)
-            .map(|v| v.id.clone());
-
         // Limit to 100 items to prevent UI freeze
         for v in self.filtered_versions.iter().take(100) {
-            let display_id = if Some(&v.id) == latest_release_id.as_ref() {
-                format!("{} ⭐", v.id)
-            } else {
-                v.id.clone()
-            };
-            guard.push_back((display_id, v.version_type.as_str().to_string()));
+            let is_selected = self.selected_version.as_ref() == Some(&v.id);
+            guard.push_back((v.id.clone(), v.version_type.as_str().to_string(), is_selected));
         }
     }
 }
@@ -164,21 +164,14 @@ impl SimpleComponent for AddInstanceDialog {
     type Output = AddInstanceOutput;
 
     view! {
-        adw::Window {
-            set_title: Some("Add Instance"),
-            set_default_width: 500,
-            set_default_height: 580,
-            set_modal: true,
-            #[watch]
-            set_transient_for: relm4::main_application().active_window().as_ref(),
-            #[watch]
-            set_visible: model.visible,
-            connect_close_request[sender] => move |_| {
-                sender.input(AddInstanceInput::Close);
-                gtk::glib::Propagation::Stop
-            },
+        adw::Dialog {
+            set_title: "Add Instance",
+            set_content_width: 500,
+            set_content_height: 580,
+            set_can_close: true,
 
-            adw::ToolbarView {
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
                     #[wrap(Some)]
                     set_title_widget = &adw::WindowTitle {
@@ -428,6 +421,12 @@ impl SimpleComponent for AddInstanceDialog {
                 if let Some(v) = self.filtered_versions.get(index) {
                     self.selected_version = Some(v.id.clone());
                     self.error_message = None;
+                    for i in 0..self.version_list.len() {
+                        if let Some(row) = self.version_list.get(i) {
+                            let is_sel = row.id == v.id;
+                            self.version_list.send(i, is_sel);
+                        }
+                    }
                 }
             }
 
@@ -501,12 +500,12 @@ impl SimpleComponent for AddInstanceDialog {
                     .cloned();
 
                 match create_instance(instances_path, options) {
-                    Ok(_path) => {
+                    Ok(path) => {
                         self.visible = false;
                         self.error_message = None;
                         if let Some(v) = selected_v_data {
                             sender
-                                .output(AddInstanceOutput::InstanceCreated(v))
+                                .output(AddInstanceOutput::InstanceCreated(v, path))
                                 .unwrap();
                         }
                     }

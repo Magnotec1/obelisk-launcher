@@ -9,7 +9,8 @@ pub enum ContextMenuOutput {
     DeleteInstance(usize),
     MoveToGroupRequest(usize),
     RemoveFromGroup(usize),
-    ChangeIcon(usize),
+    ChangeIconFromFile(usize),
+    ApplyDefaultIcon(usize),
     RenameGroup(String),
     DeleteGroup(String),
     ShareInstance(usize),
@@ -39,99 +40,80 @@ pub fn create_instance_popover(
     sender: impl Fn(ContextMenuOutput) + 'static + Clone,
     parent: Option<&impl IsA<gtk::Widget>>,
 ) -> gtk::Popover {
-    let popover = gtk::Popover::builder()
-        .has_arrow(true)
-        .autohide(true)
-        .build();
+    let menu = gtk::gio::Menu::new();
+    
+    // Main Section
+    let main_section = gtk::gio::Menu::new();
+    main_section.append(Some("Rename"), Some("pop.rename"));
+    menu.append_section(None, &main_section);
+    
+    // Icon Submenu
+    let icon_menu = gtk::gio::Menu::new();
+    icon_menu.append(Some("Choose from File…"), Some("pop.change_icon_file"));
+    icon_menu.append(Some("Use Default Icon"), Some("pop.change_icon_default"));
+    main_section.append_submenu(Some("Change Icon"), &icon_menu);
+    
+    main_section.append(Some("Share…"), Some("pop.share"));
+    
+    // Group Section
+    let group_section = gtk::gio::Menu::new();
+    group_section.append(Some("Move to Group…"), Some("pop.move_group"));
+    if is_in_group {
+        group_section.append(Some("Remove from Group"), Some("pop.remove_group"));
+    }
+    menu.append_section(None, &group_section);
+    
+    // Delete Section
+    let delete_section = gtk::gio::Menu::new();
+    delete_section.append(Some("Delete"), Some("pop.delete"));
+    menu.append_section(None, &delete_section);
+
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_has_arrow(true);
+    
     if let Some(p) = parent {
         popover.set_parent(p);
     }
     
-    let menu_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .css_classes(vec!["menu-box"])
-        .width_request(160)
-        .spacing(4)
-        .build();
-
-    // — Rename
-    let rename_btn = build_flat_menu_button("Rename");
-    {
-        let s = sender.clone();
-        let pop = popover.clone();
-        rename_btn.connect_clicked(move |_| {
-            pop.popdown();
-            s(ContextMenuOutput::RenameInstance(flat_idx));
-        });
-    }
-    menu_box.append(&rename_btn);
-
-    // — Change Icon
-    let icon_btn = build_flat_menu_button("Change Icon…");
-    {
-        let s = sender.clone();
-        let pop = popover.clone();
-        icon_btn.connect_clicked(move |_| {
-            pop.popdown();
-            s(ContextMenuOutput::ChangeIcon(flat_idx));
-        });
-    }
-    menu_box.append(&icon_btn);
-
-    // — Share
-    let share_btn = build_flat_menu_button("Share…");
-    {
-        let s = sender.clone();
-        let pop = popover.clone();
-        share_btn.connect_clicked(move |_| {
-            pop.popdown();
-            s(ContextMenuOutput::ShareInstance(flat_idx));
-        });
-    }
-    menu_box.append(&share_btn);
-
-    menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    // — Move to Group...
-    let move_to_group_btn = build_flat_menu_button("Move to Group…");
-    {
-        let s = sender.clone();
-        let pop = popover.clone();
-        move_to_group_btn.connect_clicked(move |_| {
-            pop.popdown();
-            s(ContextMenuOutput::MoveToGroupRequest(flat_idx));
-        });
-    }
-    menu_box.append(&move_to_group_btn);
+    let action_group = gtk::gio::SimpleActionGroup::new();
     
-    // — Remove from Group (only if in a group)
-    if is_in_group {
-        let remove_btn = build_flat_menu_button("Remove from Group");
-        let s = sender.clone();
-        let pop = popover.clone();
-        remove_btn.connect_clicked(move |_| {
-            pop.popdown();
-            s(ContextMenuOutput::RemoveFromGroup(flat_idx));
-        });
-        menu_box.append(&remove_btn);
-    }
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("rename", None);
+    act.connect_activate(move |_, _| s(ContextMenuOutput::RenameInstance(flat_idx)));
+    action_group.add_action(&act);
+    
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("change_icon_file", None);
+    act.connect_activate(move |_, _| s(ContextMenuOutput::ChangeIconFromFile(flat_idx)));
+    action_group.add_action(&act);
 
-    menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("change_icon_default", None);
+    act.connect_activate(move |_, _| s(ContextMenuOutput::ApplyDefaultIcon(flat_idx)));
+    action_group.add_action(&act);
 
-    // — Delete
-    let delete_btn = build_flat_menu_button("Delete");
-    {
-        let s = sender.clone();
-        let pop = popover.clone();
-        delete_btn.connect_clicked(move |_| {
-            pop.popdown();
-            s(ContextMenuOutput::DeleteInstance(flat_idx));
-        });
-    }
-    menu_box.append(&delete_btn);
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("share", None);
+    act.connect_activate(move |_, _| s(ContextMenuOutput::ShareInstance(flat_idx)));
+    action_group.add_action(&act);
 
-    popover.set_child(Some(&menu_box));
-    popover
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("move_group", None);
+    act.connect_activate(move |_, _| s(ContextMenuOutput::MoveToGroupRequest(flat_idx)));
+    action_group.add_action(&act);
+
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("remove_group", None);
+    act.connect_activate(move |_, _| s(ContextMenuOutput::RemoveFromGroup(flat_idx)));
+    action_group.add_action(&act);
+
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("delete", None);
+    act.connect_activate(move |_, _| s(ContextMenuOutput::DeleteInstance(flat_idx)));
+    action_group.add_action(&act);
+
+    popover.insert_action_group("pop", Some(&action_group));
+    popover.upcast::<gtk::Popover>()
 }
 
 pub fn create_group_popover(

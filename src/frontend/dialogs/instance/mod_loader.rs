@@ -1,9 +1,6 @@
 #![allow(unused_assignments)]
 use crate::backend::instance::manager::ModLoader;
-use crate::backend::runtime::versions::{
-    fetch_fabric_versions_for_game, fetch_forge_versions_for_game,
-    fetch_neoforge_versions_for_game, fetch_quilt_versions_for_game, LoaderVersion,
-};
+use crate::backend::runtime::versions::{fetch_loader_versions, LoaderVersion};
 use adw::prelude::*;
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
@@ -14,12 +11,14 @@ use relm4::prelude::*;
 pub struct VersionRow {
     id: String,
     version_type: String,
+    selected: bool,
+    is_newest: bool,
 }
 
 #[relm4::factory(pub)]
 impl FactoryComponent for VersionRow {
-    type Init = (String, String);
-    type Input = ();
+    type Init = (String, String, bool, bool);
+    type Input = bool;
     type Output = usize;
     type CommandOutput = ();
     type ParentWidget = gtk::ListBox;
@@ -27,8 +26,18 @@ impl FactoryComponent for VersionRow {
     view! {
         adw::ActionRow {
             set_title: &self.id,
+            add_prefix = &gtk::Image {
+                set_icon_name: Some("object-select-symbolic"),
+                #[watch]
+                set_visible: self.selected,
+            },
             add_suffix = &gtk::Label {
-                set_label: &self.version_type,
+                #[watch]
+                set_label: &if self.is_newest {
+                    format!("{} (Latest)", self.version_type)
+                } else {
+                    self.version_type.clone()
+                },
                 set_css_classes: &["dim-label"],
             },
             set_activatable: true,
@@ -42,7 +51,13 @@ impl FactoryComponent for VersionRow {
         Self {
             id: init.0,
             version_type: init.1,
+            selected: init.2,
+            is_newest: init.3,
         }
+    }
+
+    fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
+        self.selected = msg;
     }
 }
 
@@ -78,6 +93,7 @@ pub struct ModLoaderDialog {
 
     // Current loader display
     loader_title: String,
+    selected_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -91,6 +107,7 @@ pub enum ModLoaderDialogInput {
     ForgeLoaded(Result<Vec<LoaderVersion>, String>),
     NeoForgeLoaded(Result<Vec<LoaderVersion>, String>),
     SelectVersion(usize),
+    ConfirmInstall,
     SearchChanged(String),
 }
 
@@ -106,21 +123,14 @@ impl SimpleComponent for ModLoaderDialog {
     type Output = ModLoaderDialogOutput;
 
     view! {
-        adw::Window {
-            set_title: Some("Install Mod Loader"),
-            set_default_width: 450,
-            set_default_height: 500,
-            set_modal: true,
-            #[watch]
-            set_transient_for: relm4::main_application().active_window().as_ref(),
-            #[watch]
-            set_visible: model.visible,
-            connect_close_request[sender] => move |_| {
-                sender.input(ModLoaderDialogInput::Close);
-                gtk::glib::Propagation::Stop
-            },
+        adw::Dialog {
+            set_title: "Install Mod Loader",
+            set_content_width: 450,
+            set_content_height: 500,
+            set_can_close: true,
 
-            adw::ToolbarView {
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
                     pack_start = &gtk::Button {
                         set_icon_name: "go-previous-symbolic",
@@ -131,6 +141,7 @@ impl SimpleComponent for ModLoaderDialog {
                             sender.input(ModLoaderDialogInput::GoBack);
                         },
                     },
+
                     #[wrap(Some)]
                     set_title_widget = &adw::WindowTitle {
                         #[watch]
@@ -145,13 +156,6 @@ impl SimpleComponent for ModLoaderDialog {
                 #[wrap(Some)]
                 set_content = &gtk::Stack {
                     set_transition_type: gtk::StackTransitionType::SlideLeftRight,
-
-                    #[watch]
-                    set_visible_child_name: if model.page == Page::SelectLoader {
-                        "loader_page"
-                    } else {
-                        "version_page"
-                    },
 
                     add_named[Some("loader_page")] = &gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
@@ -258,7 +262,44 @@ impl SimpleComponent for ModLoaderDialog {
                             version_list_box -> gtk::ListBox {
                                 set_css_classes: &["boxed-list"],
                             }
+                        },
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 12,
+                            set_margin_top: 12,
+                            #[watch]
+                            set_visible: model.page == Page::SelectVersion && !model.is_current_loader_loading() && !model.is_current_loader_empty(),
+
+                            gtk::Button {
+                                set_label: "Cancel",
+                                set_css_classes: &["pill"],
+                                set_hexpand: true,
+                                connect_clicked[root] => move |_| {
+                                    root.close();
+                                }
+                            },
+
+                            gtk::Button {
+                                set_label: "Install",
+                                set_css_classes: &["pill", "suggested-action"],
+                                set_hexpand: true,
+                                #[watch]
+                                set_sensitive: model.selected_version.is_some(),
+                                connect_clicked[root, sender] => move |_| {
+                                    sender.input(ModLoaderDialogInput::ConfirmInstall);
+                                    root.close();
+                                }
+                            }
                         }
+                    },
+
+                    // Must come after add_named so children exist on first render
+                    #[watch]
+                    set_visible_child_name: if model.page == Page::SelectLoader {
+                        "loader_page"
+                    } else {
+                        "version_page"
                     },
                 }
             }
@@ -290,6 +331,7 @@ impl SimpleComponent for ModLoaderDialog {
             version_list,
             search_text: String::new(),
             loader_title: String::new(),
+            selected_version: None,
         };
 
         let version_list_box = model.version_list.widget();
@@ -306,6 +348,7 @@ impl SimpleComponent for ModLoaderDialog {
                 self.mc_version = mc_version.clone();
                 self.search_text.clear();
                 self.selected_loader = None;
+                self.selected_version = None;
                 self.version_list.guard().clear();
 
                 // Reset cached versions
@@ -321,7 +364,7 @@ impl SimpleComponent for ModLoaderDialog {
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
                 std::thread::spawn(move || {
-                    let res = fetch_fabric_versions_for_game(&mc_ver_clone);
+                    let res = fetch_loader_versions(&ModLoader::Fabric, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::FabricLoaded(res));
                 });
 
@@ -329,7 +372,7 @@ impl SimpleComponent for ModLoaderDialog {
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
                 std::thread::spawn(move || {
-                    let res = fetch_quilt_versions_for_game(&mc_ver_clone);
+                    let res = fetch_loader_versions(&ModLoader::Quilt, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::QuiltLoaded(res));
                 });
 
@@ -337,7 +380,7 @@ impl SimpleComponent for ModLoaderDialog {
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
                 std::thread::spawn(move || {
-                    let res = fetch_forge_versions_for_game(&mc_ver_clone);
+                    let res = fetch_loader_versions(&ModLoader::Forge, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::ForgeLoaded(res));
                 });
 
@@ -345,7 +388,7 @@ impl SimpleComponent for ModLoaderDialog {
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
                 std::thread::spawn(move || {
-                    let res = fetch_neoforge_versions_for_game(&mc_ver_clone);
+                    let res = fetch_loader_versions(&ModLoader::NeoForge, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::NeoForgeLoaded(res));
                 });
             }
@@ -356,6 +399,7 @@ impl SimpleComponent for ModLoaderDialog {
                 self.selected_loader = Some(loader.clone());
                 self.loader_title = format!("Select {} Version", loader.as_str());
                 self.search_text.clear();
+                self.selected_version = None;
                 self.page = Page::SelectVersion;
                 self.rebuild_list();
             }
@@ -363,6 +407,7 @@ impl SimpleComponent for ModLoaderDialog {
                 self.page = Page::SelectLoader;
                 self.selected_loader = None;
                 self.search_text.clear();
+                self.selected_version = None;
                 self.version_list.guard().clear();
             }
             ModLoaderDialogInput::FabricLoaded(res) => {
@@ -401,15 +446,23 @@ impl SimpleComponent for ModLoaderDialog {
                 let versions = self.get_current_versions();
                 let filtered = self.filter_versions(&versions);
                 if let Some(v) = filtered.get(idx) {
-                    let version = v.version.clone();
-                    if let Some(loader) = &self.selected_loader {
-                        sender
-                            .output(ModLoaderDialogOutput::InstallModLoader(
-                                loader.clone(),
-                                version,
-                            ))
-                            .ok();
+                    self.selected_version = Some(v.version.clone());
+                    for i in 0..self.version_list.len() {
+                        if let Some(row) = self.version_list.get(i) {
+                            let is_sel = row.id == v.version;
+                            self.version_list.send(i, is_sel);
+                        }
                     }
+                }
+            }
+            ModLoaderDialogInput::ConfirmInstall => {
+                if let (Some(loader), Some(version)) = (&self.selected_loader, &self.selected_version) {
+                    sender
+                        .output(ModLoaderDialogOutput::InstallModLoader(
+                            loader.clone(),
+                            version.clone(),
+                        ))
+                        .ok();
                     self.visible = false;
                 }
             }
@@ -451,9 +504,11 @@ impl ModLoaderDialog {
             versions.iter().filter(|v| v.version.to_lowercase().contains(&search)).collect()
         };
 
-        for v in filtered.iter().take(100) {
+        for (i, v) in filtered.iter().take(100).enumerate() {
             let suffix = if v.stable { "Stable" } else { "Beta" };
-            guard.push_back((v.version.clone(), suffix.to_string()));
+            let is_selected = self.selected_version.as_ref() == Some(&v.version);
+            let is_newest = i == 0;
+            guard.push_back((v.version.clone(), suffix.to_string(), is_selected, is_newest));
         }
     }
 

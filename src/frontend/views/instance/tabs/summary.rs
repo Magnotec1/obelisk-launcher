@@ -2,6 +2,20 @@ use crate::backend::instance::manager::Instance;
 use adw::prelude::*;
 use relm4::prelude::*;
 
+trait ImageExt {
+    fn set_custom_icon(&self, texture: Option<gtk::gdk::Texture>);
+}
+
+impl ImageExt for gtk::Image {
+    fn set_custom_icon(&self, texture: Option<gtk::gdk::Texture>) {
+        if let Some(tex) = texture {
+            self.set_paintable(Some(&tex));
+        } else {
+            self.set_icon_name(Some("application-x-executable-symbolic"));
+        }
+    }
+}
+
 pub struct InstanceSummary {
     pub instance: Option<Instance>,
     pub is_running: bool,
@@ -59,7 +73,8 @@ impl SimpleComponent for InstanceSummary {
                         gtk::Image {
                             #[watch]
                             set_pixel_size: if model.is_narrow { 64 } else { 96 },
-                            set_icon_name: Some("minecraft"),
+                            #[watch]
+                            set_custom_icon: InstanceSummary::get_icon_texture(&model.instance),
                             #[watch]
                             set_visible: true,
                         },
@@ -105,7 +120,7 @@ impl SimpleComponent for InstanceSummary {
                             set_title: "Mod Loader",
                             #[watch]
                             set_subtitle: model.instance.as_ref().and_then(|inst| inst.mod_loader.as_ref()).map(|s| s.as_str()).unwrap_or("Vanilla"),
-                            add_prefix = &gtk::Image::from_icon_name("system-software-install-symbolic"),
+                            add_prefix = &gtk::Image::from_icon_name("applications-engineering-symbolic"),
                         },
                         adw::ActionRow {
                             set_title: "Path",
@@ -168,7 +183,7 @@ impl SimpleComponent for InstanceSummary {
                         },
 
                         gtk::Button {
-                            set_icon_name: "emblem-shared-symbolic",
+                            set_icon_name: "preferences-system-sharing-symbolic",
                             set_tooltip_text: Some("Share Instance"),
                             set_css_classes: &["circular"],
                             #[watch]
@@ -218,6 +233,7 @@ impl SimpleComponent for InstanceSummary {
             }
         }
     }
+
 }
 
 impl InstanceSummary {
@@ -228,5 +244,21 @@ impl InstanceSummary {
         let days = hours / 24.0;
 
         format!("{:.0} minutes\n{:.1} days", minutes, days)
+    }
+
+    fn get_icon_texture(instance: &Option<Instance>) -> Option<gtk::gdk::Texture> {
+        instance.as_ref().and_then(|inst| {
+            let p1 = inst.path.join("icon.png");
+            if p1.exists() {
+                gtk::gdk::Texture::from_filename(&p1).ok()
+            } else {
+                let p2 = inst.minecraft_dir.join("icon.png");
+                if p2.exists() {
+                    gtk::gdk::Texture::from_filename(&p2).ok()
+                } else {
+                    None
+                }
+            }
+        })
     }
 }

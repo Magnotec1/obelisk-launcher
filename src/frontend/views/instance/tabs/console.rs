@@ -87,7 +87,7 @@ impl SimpleComponent for InstanceConsole {
                 gtk::Button {
                     set_icon_name: "edit-clear-all-symbolic",
                     set_tooltip_text: Some("Clear Console"),
-                    set_css_classes: &["flat", "circular"],
+                    set_css_classes: &["flat"],
                     connect_clicked[sender] => move |_| {
                         sender.output(ConsoleOutput::Clear).unwrap();
                     },
@@ -97,8 +97,6 @@ impl SimpleComponent for InstanceConsole {
             #[name = "console_stack"]
             adw::ViewStack {
                 set_vexpand: true,
-                #[watch]
-                set_visible_child_name: if model.buffer.char_count() == 0 { "empty" } else { "logs" },
 
                 add_titled[Some("empty"), "Empty"] = &adw::StatusPage {
                     set_title: "No Logs Yet",
@@ -128,7 +126,11 @@ impl SimpleComponent for InstanceConsole {
                         set_buffer: Some(&model.buffer),
                         set_css_classes: &["console-text"],
                     }
-                }
+                },
+
+                // Must come after add_titled so children exist on first render
+                #[watch]
+                set_visible_child_name: if model.buffer.char_count() == 0 { "empty" } else { "logs" },
             },
 
             // Bottom Action Row

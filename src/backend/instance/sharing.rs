@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::backend::instance::manager::{Instance, ModLoader, create_instance, CreateInstanceOptions};
-use crate::backend::download::modrinth;
+use crate::backend::download::sources::modrinth;
 use std::path::Path;
 use sha2::{Sha512, Digest};
 use std::io::{Read, Write};
@@ -121,6 +121,7 @@ pub fn import_shared_instance(
             &shared.minecraft_version,
             shared.mod_loader.clone(),
             &mods_dir,
+            |_, _| {},
         ) {
             eprintln!("Failed to install mod {}: {}", sm.name, e);
             failed_mods.push(sm.name);

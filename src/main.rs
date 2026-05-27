@@ -8,7 +8,7 @@ use relm4::prelude::*;
 
 fn main() {
     let config = Config::load();
-    let app = RelmApp::new("com.magnotec.obelisk");
+    let app = RelmApp::new("com.magnotec.obelisk.dev");
 
     relm4::set_global_css(
         "
@@ -63,10 +63,24 @@ fn main() {
         .settings-sidebar row {
             padding: 0px 0px;
         }
+        .download-footer {
+            border-top: 1px solid var(--border-color);
+        }
         .shortcut-label {
             font-size: 0.9em;
             opacity: 0.5;
             font-weight: normal;
+        }
+        .menu-shortcut {
+            font-size: 0.8em;
+            opacity: 0.4;
+            font-weight: normal;
+            margin-left: 12px;
+        }
+        .shortcut-badge {
+            background-color: alpha(currentColor, 0.08);
+            border-radius: 6px;
+            padding: 2px 8px;
         }
         .status-bar-container {
             padding: 2px 4px;
@@ -89,9 +103,14 @@ fn main() {
         .pill-badge {
             background-color: alpha(currentColor, 0.08);
             border-radius: 999px;
-            padding: 4px 12px;
+            padding: 2px 8px;
             font-size: 13px;
             font-weight: 500;
+        }
+
+        .numeric {
+            font-family: monospace;
+            font-variant-numeric: tabular-nums;
         }
 
         /* ── Overview Grid ────────────────────────────────────────────── */
@@ -100,13 +119,13 @@ fn main() {
             background-color: transparent;
         }
 
-        .overview-back-bar {
-            padding: 8px 4px;
+        .overview-folder-header {
+            min-height: 48px;
+            background-color: transparent;
         }
 
-        .overview-back-btn {
-            min-width: 36px;
-            min-height: 36px;
+        .header-separator {
+            opacity: 1;
         }
 
         .overview-card-child {
@@ -119,41 +138,24 @@ fn main() {
         }
 
         .overview-card {
-            background-color: alpha(@card_bg_color, 0.5);
-            border-radius: 12px;
-            min-height: 80px;
-            box-shadow: 0 2px 6px alpha(black, 0.08);
-            transition: all 0.2s;
-        }
-
-        .overview-card:hover {
             background-color: @card_bg_color;
-            box-shadow: 0 4px 12px alpha(black, 0.1);
-        }
-
-        /* Custom focus borders removed to match native Adwaita flowboxchild focus */
-        .overview-grid-mode flowboxchild.menu-open > box {
-            background-color: alpha(@card_bg_color, 0.85);
-            box-shadow: 0 8px 24px alpha(black, 0.2);
-        }
-
-        .overview-card-info {
-            padding: 16px;
+            border: none;
             border-radius: 12px;
+            transition: background-color 200ms ease;
+        }
+
+        .overview-grid-mode flowboxchild:hover .overview-card {
+            background-color: alpha(@window_fg_color, 0.05);
+        }
+
+        .overview-grid-mode flowboxchild:selected .overview-card {
+            background-color: alpha(@accent_color, 0.15);
         }
 
         .overview-card-title {
             font-weight: 600;
             font-size: 14px;
-        }
-
-        .overview-card-mini-icon {
-            opacity: 0.8;
-            color: @accent_color;
-        }
-
-        .overview-card:hover .overview-card-mini-icon {
-            opacity: 1.0;
+            color: @window_fg_color;
         }
 
         .overview-card-subtitle {
@@ -213,31 +215,63 @@ fn main() {
             border-radius: 12px;
         }
 
-        .overview-list-mode flowboxchild:hover {
-            background-color: alpha(currentColor, 0.07);
+        .overview-list-card {
+            background-color: @card_bg_color;
+            border: none;
+            border-radius: 12px;
+            padding: 12px 16px;
+            transition: background-color 200ms ease;
         }
 
-        .overview-list-mode adwactionrow {
-            padding: 8px 16px;
-            background: transparent;
+        .overview-list-mode flowboxchild:hover .overview-list-card {
+            background-color: alpha(@window_fg_color, 0.05);
+        }
+
+        .overview-list-mode flowboxchild:selected .overview-list-card {
+            background-color: alpha(@accent_color, 0.15);
+        }
+
+        .overview-list-mode flowboxchild.menu-open .overview-list-card {
+            background-color: alpha(@window_fg_color, 0.05);
         }
 
         .overview-list-row {
             border-radius: 12px;
         }
 
-        .overview-list-mode flowboxchild.menu-open {
-            background-color: alpha(currentColor, 0.07); /* matches hover */
-        }
-
         .overview-grid flowboxchild:selected {
             background-color: transparent;
         }
 
+        /* ── Stat Chips ──────────────────────────────────────────────── */
+        .overview-stat-chip {
+            font-size: 11px;
+            opacity: 0.6;
+            padding: 1px 0;
+        }
+
+        .overview-stat-separator {
+            opacity: 0.3;
+            font-size: 10px;
+        }
+
+        .overview-stats-row {
+            margin-top: 4px;
+        }
+
         .caption-heading {
             font-size: 0.75rem;
-            font-weight: 700;
+            font-weight: normal;
             color: alpha(currentColor, 0.8);
+        }
+
+        .overview-folder-header {
+            background-color: @window_bg_color;
+            padding: 4px 8px;
+        }
+
+        .header-separator {
+            background-color: alpha(@window_fg_color, 0.1);
         }
 
         .status-dot {
@@ -250,31 +284,45 @@ fn main() {
 
         .account-status-button {
             padding: 2px 6px;
-            border-radius: 6px;
+            border-radius: 999px;
         }
         .account-status-button:hover {
             background-color: alpha(currentColor, 0.08);
         }
 
-        /* ── Icon Chooser Recents ─────────────────────────────────────── */
-        .icon-chooser-recents flowboxchild {
-            background: none;
-            border: none;
-            transition: none;
+        .playtime-button {
+            padding: 2px 6px;
+            border-radius: 999px;
+        }
+        .playtime-button:hover {
+            background-color: alpha(currentColor, 0.08);
         }
 
-        .icon-chooser-recent-btn {
-            padding: 0;
-            margin: 0;
-            border-radius: 10px;
-            background: none;
-            border: none;
-            box-shadow: none;
-            transition: background-color 0.2s;
+        /* ── Monospace Terminal Log View ───────────────────────────────── */
+        .terminal-log-view {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 11px;
+            background-color: #121212;
+            color: #d4d4d4;
+            padding: 8px;
+            border-radius: 6px;
         }
 
-        .icon-chooser-recent-btn:hover {
-            background-color: alpha(currentColor, 0.1);
+        /* ── Nautilus-style Floating OSD bubble ─────────────────────── */
+        .floating-bar {
+            background-color: @card_bg_color;
+            border-radius: 12px;
+            padding: 4px 12px;
+            margin: 2px;
+        }
+        .floating-bar label {
+            font-size: 13px;
+        }
+
+        /* ── Selected Sidebar List Item Highlight ─────────────────────── */
+        .navigation-sidebar row.selected {
+            background-color: alpha(@accent_color, 0.15);
+            color: @accent_color;
         }
     ",
     );

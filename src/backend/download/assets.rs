@@ -137,7 +137,7 @@ pub fn scan_assets(
                             .to_string();
                         if let Ok(content) = fs::read_to_string(&p) {
                             if let Ok(index) = serde_json::from_str::<
-                                crate::backend::download::manager::AssetObjects,
+                                crate::backend::download::sources::minecraft::AssetObjects,
                             >(&content)
                             {
                                 let mut type_sizes: HashMap<String, u64> = HashMap::new();
@@ -503,7 +503,7 @@ pub fn scan_versions(data_path: &Path, shared_path: Option<&Path>) -> Vec<AssetG
                 let jar_size = dir_size(&v_dir);
                 if jar_size > 0 {
                     entries.push(AssetEntry {
-                        name: format!("Client JAR ({})", format_size(jar_size)),
+                        name: format!("Client JAR"),
                         size: jar_size,
                         path: v_dir.clone(),
                     });
@@ -527,7 +527,7 @@ pub fn scan_versions(data_path: &Path, shared_path: Option<&Path>) -> Vec<AssetG
                         }
                     }
                     entries.push(AssetEntry {
-                        name: format!("Version Metadata ({})", format_size(meta_size)),
+                        name: format!("Version Metadata"),
                         size: meta_size,
                         path: meta_path,
                     });
@@ -543,9 +543,8 @@ pub fn scan_versions(data_path: &Path, shared_path: Option<&Path>) -> Vec<AssetG
                     let index_size = index_path.metadata().map(|m| m.len()).unwrap_or(0);
                     entries.push(AssetEntry {
                         name: format!(
-                            "Asset Index \"{}\" ({}) — shared objects not included",
-                            index_id,
-                            format_size(index_size)
+                            "Asset Index {} — shared objects not included",
+                            index_id
                         ),
                         size: index_size,
                         path: index_path,

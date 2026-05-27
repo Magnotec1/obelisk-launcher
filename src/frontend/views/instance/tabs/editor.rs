@@ -70,7 +70,7 @@ impl FactoryComponent for ComponentRow {
                     set_tooltip_text: Some("Edit Version"),
                     set_css_classes: &["flat", "circular"],
                     #[watch]
-                    set_visible: self.data.uid == "net.minecraft" || crate::backend::instance::manager::is_loader_component(&self.data.uid),
+                    set_visible: (self.data.uid == "net.minecraft" || crate::backend::instance::manager::is_loader_component(&self.data.uid)) && self.data.uid != "net.fabricmc.intermediary",
                     connect_clicked[sender, uid = self.data.uid.clone()] => move |_| {
                         sender.output(EditorTabOutput::OpenComponentSwap(uid.clone())).unwrap();
                     },
@@ -81,7 +81,7 @@ impl FactoryComponent for ComponentRow {
                     set_tooltip_text: Some("Delete Modloader"),
                     set_css_classes: &["flat", "circular", "destructive-action"],
                     #[watch]
-                    set_visible: crate::backend::instance::manager::is_loader_component(&self.data.uid),
+                    set_visible: crate::backend::instance::manager::is_loader_component(&self.data.uid) && self.data.uid != "net.fabricmc.intermediary",
                     connect_clicked[sender, uid = self.data.uid.clone()] => move |_| {
                         sender.output(EditorTabOutput::RemoveComponent(uid.clone())).unwrap();
                     },
@@ -132,7 +132,7 @@ impl Component for InstanceEditorTab {
                 #[local_ref]
                 components_expander -> adw::ExpanderRow {
                     set_title: "Components",
-                    add_prefix = &gtk::Image::from_icon_name("system-software-install-symbolic"),
+                    add_prefix = &gtk::Image::from_icon_name("package-x-generic-symbolic"),
                     #[watch]
                     set_subtitle: &format!("{} components", model.instance.as_ref().map(|inst| inst.components.len()).unwrap_or(0) + 1),
                     set_expanded: true,

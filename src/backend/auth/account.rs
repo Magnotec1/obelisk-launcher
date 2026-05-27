@@ -14,8 +14,6 @@ pub enum AccountStatus {
     ExpiringSoon,
     /// Token has expired and needs refresh
     Expired,
-    /// Offline account — always playable
-    Offline,
     /// Could not verify (network error, etc.)
     Unknown(String),
 }
@@ -26,7 +24,6 @@ impl fmt::Display for AccountStatus {
             AccountStatus::Valid => write!(f, "Valid"),
             AccountStatus::ExpiringSoon => write!(f, "Expiring Soon"),
             AccountStatus::Expired => write!(f, "Expired"),
-            AccountStatus::Offline => write!(f, "Offline"),
             AccountStatus::Unknown(e) => write!(f, "Unknown: {}", e),
         }
     }
@@ -142,7 +139,7 @@ pub fn create_offline_account(username: &str) -> Account {
 /// Check the current status of an account's token.
 pub fn verify_account_status(account: &Account) -> AccountStatus {
     match account.account_type {
-        AccountType::Offline => AccountStatus::Offline,
+        AccountType::Offline => AccountStatus::Valid,
         AccountType::Microsoft => {
             let now = now_secs();
             if account.token_expiry == 0 {
@@ -163,7 +160,7 @@ pub fn verify_account_status(account: &Account) -> AccountStatus {
 /// This is a blocking network call.
 pub fn verify_account_online(account: &Account) -> AccountStatus {
     match account.account_type {
-        AccountType::Offline => AccountStatus::Offline,
+        AccountType::Offline => AccountStatus::Valid,
         AccountType::Microsoft => {
             match get_minecraft_profile(&account.access_token) {
                 Ok(_profile) => {

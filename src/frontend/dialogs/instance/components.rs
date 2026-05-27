@@ -1,7 +1,7 @@
 #![allow(unused_assignments)]
 use crate::backend::runtime::versions::{
-    fetch_fabric_versions_for_game, fetch_forge_versions_for_game, fetch_quilt_versions_for_game,
-    fetch_versions, filter_versions, LoaderVersion, MinecraftVersion, VersionType,
+    fetch_loader_versions_by_uid, fetch_versions, filter_versions, LoaderVersion,
+    MinecraftVersion, VersionType,
 };
 use adw::prelude::*;
 use relm4::factory::FactoryVecDeque;
@@ -11,12 +11,15 @@ use relm4::prelude::*;
 pub struct VersionRow {
     id: String,
     version_type: String,
+    selected: bool,
+    is_current: bool,
+    is_newest: bool,
 }
 
 #[relm4::factory(pub)]
 impl FactoryComponent for VersionRow {
-    type Init = (String, String);
-    type Input = ();
+    type Init = (String, String, bool, bool, bool);
+    type Input = bool;
     type Output = usize;
     type CommandOutput = ();
     type ParentWidget = gtk::ListBox;
@@ -24,8 +27,23 @@ impl FactoryComponent for VersionRow {
     view! {
         adw::ActionRow {
             set_title: &self.id,
+            add_prefix = &gtk::Image {
+                set_icon_name: Some("object-select-symbolic"),
+                #[watch]
+                set_visible: self.selected,
+            },
             add_suffix = &gtk::Label {
-                set_label: &self.version_type,
+                #[watch]
+                set_label: &{
+                    let mut suffix = self.version_type.clone();
+                    if self.is_current {
+                        suffix = format!("{} (Current)", suffix);
+                    }
+                    if self.is_newest {
+                        suffix = format!("{} (Latest)", suffix);
+                    }
+                    suffix
+                },
                 set_css_classes: &["dim-label"],
             },
             set_activatable: true,
@@ -39,7 +57,14 @@ impl FactoryComponent for VersionRow {
         Self {
             id: init.0,
             version_type: init.1,
+            selected: init.2,
+            is_current: init.3,
+            is_newest: init.4,
         }
+    }
+
+    fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
+        self.selected = msg;
     }
 }
 
@@ -62,15 +87,19 @@ pub struct ComponentEditorDialog {
     search_text: String,
     show_releases: bool,
     show_snapshots: bool,
+
+    selected_version: Option<String>,
+    current_version: Option<String>,
 }
 
 #[derive(Debug)]
 pub enum ComponentEditorInput {
-    Open(String, Option<String>), // UID, Current Version (optional)
+    Open(String, Option<String>, Option<String>), // UID, MC version, Current Version
     Close,
     VersionsLoaded(Result<Vec<MinecraftVersion>, String>),
     LoadersLoaded(Result<Vec<LoaderVersion>, String>),
     SelectVersion(usize),
+    ConfirmInstall,
     SearchChanged(String),
     ToggleSnapshots(bool),
     ToggleReleases(bool),
@@ -88,23 +117,17 @@ impl SimpleComponent for ComponentEditorDialog {
     type Output = ComponentEditorOutput;
 
     view! {
-        adw::Window {
+        adw::Dialog {
             #[watch]
-            set_title: Some(&model.title),
-            set_default_width: 450,
-            set_default_height: 500,
-            set_modal: true,
-            #[watch]
-            set_transient_for: relm4::main_application().active_window().as_ref(),
-            #[watch]
-            set_visible: model.visible,
-            connect_close_request[sender] => move |_| {
-                sender.input(ComponentEditorInput::Close);
-                gtk::glib::Propagation::Stop
-            },
+            set_title: &model.title,
+            set_content_width: 450,
+            set_content_height: 500,
+            set_can_close: true,
 
-            adw::ToolbarView {
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
+
                     #[wrap(Some)]
                     set_title_widget = &adw::WindowTitle {
                         #[watch]
@@ -153,20 +176,73 @@ impl SimpleComponent for ComponentEditorDialog {
                         }
                     },
 
-                    gtk::Spinner {
+                    // Loading indicator
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 8,
+                        set_halign: gtk::Align::Center,
+                        set_valign: gtk::Align::Center,
+                        set_vexpand: true,
                         #[watch]
                         set_visible: model.loading,
-                        set_spinning: true,
+
+                        adw::Spinner {
+                            set_width_request: 32,
+                            set_height_request: 32,
+                        },
+
+                        gtk::Label {
+                            set_label: "Loading versions...",
+                            set_css_classes: &["dim-label"],
+                        }
+                    },
+
+                    // Error label
+                    gtk::Label {
+                        #[watch]
+                        set_visible: model.error.is_some() && !model.loading,
+                        #[watch]
+                        set_label: model.error.as_deref().unwrap_or(""),
+                        set_css_classes: &["error"],
+                        set_wrap: true,
                         set_halign: gtk::Align::Center,
                     },
 
                     gtk::ScrolledWindow {
                         set_vexpand: true,
                         #[watch]
-                        set_visible: !model.loading,
+                        set_visible: !model.loading && model.error.is_none(),
                         #[local_ref]
                         version_list_box -> gtk::ListBox {
                             set_css_classes: &["boxed-list"],
+                            set_selection_mode: gtk::SelectionMode::None,
+                        }
+                    },
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 12,
+                        set_margin_top: 12,
+
+                        gtk::Button {
+                            set_label: "Cancel",
+                            set_css_classes: &["pill"],
+                            set_hexpand: true,
+                            connect_clicked[root] => move |_| {
+                                root.close();
+                            }
+                        },
+
+                        gtk::Button {
+                            set_label: "Confirm",
+                            set_css_classes: &["pill", "suggested-action"],
+                            set_hexpand: true,
+                            #[watch]
+                            set_sensitive: !model.loading && model.selected_version.is_some() && model.selected_version != model.current_version,
+                            connect_clicked[root, sender] => move |_| {
+                                sender.input(ComponentEditorInput::ConfirmInstall);
+                                root.close();
+                            }
                         }
                     }
                 }
@@ -196,6 +272,8 @@ impl SimpleComponent for ComponentEditorDialog {
             search_text: String::new(),
             show_releases: true,
             show_snapshots: false,
+            selected_version: None,
+            current_version: None,
         };
 
         let version_list_box = model.version_list.widget();
@@ -206,12 +284,14 @@ impl SimpleComponent for ComponentEditorDialog {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            ComponentEditorInput::Open(uid, mc_version) => {
+            ComponentEditorInput::Open(uid, mc_version, current_ver) => {
                 self.visible = true;
                 self.uid = uid.clone();
                 self.loading = true;
                 self.error = None;
                 self.search_text.clear();
+                self.current_version = current_ver.clone();
+                self.selected_version = current_ver;
 
                 let sender_clone = sender.input_sender().clone();
                 match uid.as_str() {
@@ -222,33 +302,18 @@ impl SimpleComponent for ComponentEditorDialog {
                             let _ = sender_clone.send(ComponentEditorInput::VersionsLoaded(res));
                         });
                     }
-                    "net.fabricmc.fabric-loader" => {
-                        self.title = "Select Fabric Loader Version".to_string();
+                    "net.fabricmc.fabric-loader" | "org.quiltmc.quilt-loader" | "net.minecraftforge" | "net.neoforged" => {
+                        let name = match uid.as_str() {
+                            "net.fabricmc.fabric-loader" => "Fabric Loader",
+                            "org.quiltmc.quilt-loader" => "Quilt Loader",
+                            "net.minecraftforge" => "Forge",
+                            "net.neoforged" => "NeoForge",
+                            _ => "",
+                        };
+                        self.title = format!("Select {} Version", name);
                         std::thread::spawn(move || {
                             let res = if let Some(mv) = mc_version {
-                                fetch_fabric_versions_for_game(&mv)
-                            } else {
-                                Ok(vec![])
-                            };
-                            let _ = sender_clone.send(ComponentEditorInput::LoadersLoaded(res));
-                        });
-                    }
-                    "org.quiltmc.quilt-loader" => {
-                        self.title = "Select Quilt Loader Version".to_string();
-                        std::thread::spawn(move || {
-                            let res = if let Some(mv) = mc_version {
-                                fetch_quilt_versions_for_game(&mv)
-                            } else {
-                                Ok(vec![])
-                            };
-                            let _ = sender_clone.send(ComponentEditorInput::LoadersLoaded(res));
-                        });
-                    }
-                    "net.minecraftforge" => {
-                        self.title = "Select Forge Version".to_string();
-                        std::thread::spawn(move || {
-                            let res = if let Some(mv) = mc_version {
-                                fetch_forge_versions_for_game(&mv)
+                                fetch_loader_versions_by_uid(&uid, &mv)
                             } else {
                                 Ok(vec![])
                             };
@@ -304,8 +369,19 @@ impl SimpleComponent for ComponentEditorDialog {
                 };
 
                 if let Some(v) = version {
+                    self.selected_version = Some(v.clone());
+                    for i in 0..self.version_list.len() {
+                        if let Some(row) = self.version_list.get(i) {
+                            let is_sel = row.id == v;
+                            self.version_list.send(i, is_sel);
+                        }
+                    }
+                }
+            }
+            ComponentEditorInput::ConfirmInstall => {
+                if let Some(v) = &self.selected_version {
                     sender
-                        .output(ComponentEditorOutput::SetVersion(self.uid.clone(), v))
+                        .output(ComponentEditorOutput::SetVersion(self.uid.clone(), v.clone()))
                         .ok();
                     self.visible = false;
                 }
@@ -335,12 +411,16 @@ impl ComponentEditorDialog {
             }
 
             self.filtered_mc_versions = filtered;
-            for v in self.filtered_mc_versions.iter().take(50) {
-                guard.push_back((v.id.clone(), v.version_type.as_str().to_string()));
+            for (i, v) in self.filtered_mc_versions.iter().take(50).enumerate() {
+                let is_selected = self.selected_version.as_ref() == Some(&v.id);
+                let is_current = self.current_version.as_ref() == Some(&v.id);
+                let is_newest = i == 0;
+                guard.push_back((v.id.clone(), v.version_type.as_str().to_string(), is_selected, is_current, is_newest));
             }
         } else if self.uid == "net.fabricmc.fabric-loader"
             || self.uid == "org.quiltmc.quilt-loader"
             || self.uid == "net.minecraftforge"
+            || self.uid == "net.neoforged"
         {
             let mut filtered = self.loader_versions.clone();
             if !self.search_text.is_empty() {
@@ -348,9 +428,12 @@ impl ComponentEditorDialog {
                 filtered.retain(|v| v.version.to_lowercase().contains(&query));
             }
 
-            for v in filtered.iter().take(50) {
+            for (i, v) in filtered.iter().take(50).enumerate() {
                 let suffix = if v.stable { "Stable" } else { "Experimental" };
-                guard.push_back((v.version.clone(), suffix.to_string()));
+                let is_selected = self.selected_version.as_ref() == Some(&v.version);
+                let is_current = self.current_version.as_ref() == Some(&v.version);
+                let is_newest = i == 0;
+                guard.push_back((v.version.clone(), suffix.to_string(), is_selected, is_current, is_newest));
             }
         }
     }

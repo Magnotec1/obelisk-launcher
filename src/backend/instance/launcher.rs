@@ -29,7 +29,7 @@ impl Default for LaunchOptions {
         let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
 
         let mut mc_data = home.clone();
-        mc_data.push(".local/share/minecraft-manager");
+        mc_data.push(".local/share/obelisk-launcher");
 
         Self {
             java_path: PathBuf::from("java"),
@@ -361,17 +361,56 @@ pub fn launch_instance(
                             if path.exists() {
                                 let parts: Vec<&str> = lib.name.split(':').collect();
                                 if parts.len() >= 2 {
-                                    let mut key = format!("{}:{}", parts[0], parts[1]);
-                                    if parts.len() > 3 {
-                                        let classifier =
-                                            parts[3].split('@').next().unwrap_or(parts[3]);
-                                        key.push_str(&format!(":{}", classifier));
+                                    let mut artifact = parts[1].to_string();
+                                    let mut classifier = if parts.len() > 3 {
+                                        Some(parts[3].split('@').next().unwrap_or(parts[3]).to_string())
+                                    } else {
+                                        None
+                                    };
+
+                                    // Normalize LWJGL natives-as-artifact-name to natives-as-classifier
+                                    if artifact.starts_with("lwjgl") && artifact.contains("-natives-") {
+                                        if let Some(pos) = artifact.find("-natives-") {
+                                            let actual_classifier = artifact[pos + 1..].to_string();
+                                            artifact = artifact[..pos].to_string();
+                                            classifier = Some(actual_classifier);
+                                        }
+                                    }
+
+                                    let mut key = format!("{}:{}", parts[0], artifact);
+                                    if let Some(c) = classifier {
+                                        key.push_str(&format!(":{}", c));
                                     }
                                     classpath_map.insert(key, path);
                                 }
                             }
 
-                            // Collect native classifier JARs for extraction
+                            // LWJGL 3+: natives are shipped as separate classifier JARs
+                            // (e.g. org.lwjgl:lwjgl:3.4.1:natives-linux) that must be
+                            // ON the classpath so the JVM can load them via its built-in
+                            // JAR extraction. Do NOT rely on -Djava.library.path for these.
+                            let native_classifier_name = format!("{}:natives-linux", lib.name);
+                            let mut native_classifier_path = resolve_library_path(&native_classifier_name, &options.mc_data_path);
+                            if !native_classifier_path.exists() {
+                                native_classifier_path = resolve_library_path(&native_classifier_name, &options.shared_data_path);
+                            }
+                            if native_classifier_path.exists() {
+                                let parts: Vec<&str> = lib.name.split(':').collect();
+                                if parts.len() >= 2 {
+                                    let mut artifact = parts[1].to_string();
+                                    // Normalize LWJGL artifact name if it's already a native-style name
+                                    if artifact.starts_with("lwjgl") && artifact.contains("-natives-") {
+                                        if let Some(pos) = artifact.find("-natives-") {
+                                            artifact = artifact[..pos].to_string();
+                                        }
+                                    }
+                                    let key = format!("{}:{}:natives-linux", parts[0], artifact);
+                                    classpath_map.insert(key, native_classifier_path);
+                                }
+                            }
+
+                            // Legacy LWJGL 2: collect native classifier JARs for extraction
+                            // (these use the old downloads.classifiers format)
                             if let Some(ref downloads) = lib.downloads {
                                 if let Some(ref classifiers) = downloads.classifiers {
                                     if let Some(native_artifact) = classifiers.get("natives-linux") {
@@ -459,6 +498,7 @@ pub fn launch_instance(
 
     // Extract native libraries from classifier JARs
     let natives_dir = instance.path.join("natives");
+    let _ = fs::remove_dir_all(&natives_dir);
     let _ = fs::create_dir_all(&natives_dir);
     for native_jar in &native_jar_paths {
         if let Err(e) = extract_natives_jar(native_jar, &natives_dir) {
@@ -481,8 +521,8 @@ pub fn launch_instance(
     for jvm_arg in &jvm_args_template {
         let resolved = jvm_arg
             .replace("${natives_directory}", &natives_dir_str)
-            .replace("${launcher_name}", "minecraft-manager")
-            .replace("${launcher_version}", "1.0")
+            .replace("${launcher_name}", "obelisk-launcher")
+            .replace("${launcher_version}", "0.1.0")
             .replace("${classpath}", &classpath_str)
             .replace("${library_directory}", &options.mc_data_path.join("libraries").to_string_lossy())
             .replace("${game_directory}", &minecraft_dir.to_string_lossy())
@@ -490,10 +530,14 @@ pub fn launch_instance(
         cmd.arg(&resolved);
     }
 
-    // Always ensure -Djava.library.path is set (critical for LWJGL 2 in older versions)
-    // Even if arguments.jvm already included it via template, dedup won't hurt
+    // Always ensure -Djava.library.path is set for legacy LWJGL 2 (1.12.2 and below).
+    // For modern LWJGL 3 (1.13+), natives are on the classpath as separate JARs —
+    // setting -Djava.library.path to the wrong/stale folder would make the JVM load
+    // old system natives instead of the bundled ones, causing crashes.
     let has_library_path = jvm_args_template.iter().any(|a| a.contains("java.library.path"));
-    if !has_library_path {
+    let has_native_classifiers = !native_jar_paths.is_empty();
+    if !has_library_path && has_native_classifiers {
+        // Only set it when we actually have legacy extracted natives to point to
         cmd.arg(format!("-Djava.library.path={}", natives_dir_str));
     }
 
@@ -714,7 +758,7 @@ pub fn check_instance_assets(instance: &Instance, options: &LaunchOptions) -> bo
                             }
                             if let Ok(index_content) = fs::read_to_string(&index_path) {
                                 if let Ok(assets) = serde_json::from_str::<
-                                    crate::backend::download::manager::AssetObjects,
+                                    crate::backend::download::sources::minecraft::AssetObjects,
                                 >(&index_content)
                                 {
                                     for obj in assets.objects.values() {

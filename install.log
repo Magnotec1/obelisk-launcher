@@ -1,0 +1,8 @@
+[19:44:24 2026-05-18] FETCHING Version 2.43.2
+[19:44:24 2026-05-18] DOWNLOADING https://github.com/spicetify/cli/releases/download/v2.43.2/spicetify-2.43.2-linux-amd64.tar.gz
+[19:44:25 2026-05-18] EXTRACTING /home/magnotec/.spicetify/spicetify.tar.gz
+[19:44:25 2026-05-18] SETTING EXECUTABLE PERMISSIONS TO /home/magnotec/.spicetify/spicetify
+[19:44:25 2026-05-18] REMOVING /home/magnotec/.spicetify/spicetify.tar.gz
+[19:44:25 2026-05-18] APPENDING /home/magnotec/.spicetify to PATH in /home/magnotec/.bashrc
+[19:44:25 2026-05-18] spicetify v2.43.2 was installed successfully to /home/magnotec/.spicetify
+[19:44:25 2026-05-18] Run 'spicetify --help' to get started
