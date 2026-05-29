@@ -32,7 +32,7 @@ jobs:
         flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
     - name: Build Flatpak Package
-      uses: flatpak/flatpak-github-actions/flatpak-builder@v1
+      uses: flatpak/flatpak-github-actions/flatpak-builder@v6
       with:
         bundle: com.magnotec.obelisk.flatpak
         manifest-path: flatpak/com.magnotec.obelisk.yaml
