@@ -25,6 +25,11 @@ jobs:
       with:
         submodules: recursive
 
+    - name: Pre-install Flatpak Runtimes
+      run: |
+        flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+        flatpak install --user -y flathub org.gnome.Sdk/x86_64/50 org.gnome.Platform/x86_64/50
+
     - name: Build Flatpak Package
       uses: flatpak/flatpak-github-actions/flatpak-builder@v6
       with:
