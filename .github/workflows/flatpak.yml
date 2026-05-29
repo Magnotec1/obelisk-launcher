@@ -27,10 +27,9 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y flatpak flatpak-builder
 
-    - name: Pre-install Flatpak Runtimes
+    - name: Set up Flathub System-wide
       run: |
-        flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-        flatpak install --user -y flathub org.gnome.Sdk/x86_64/50 org.gnome.Platform/x86_64/50
+        sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
     - name: Build Flatpak Package
       uses: flatpak/flatpak-github-actions/flatpak-builder@v6
