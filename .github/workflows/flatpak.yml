@@ -2,54 +2,43 @@ name: Build and Release Flatpak
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
   build:
     name: Build Flatpak Bundle
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+
     permissions:
       contents: write
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-    - name: Install Flatpak and Builder
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y flatpak flatpak-builder
+      - name: Build Flatpak Package
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: com.magnotec.obelisk.flatpak
+          manifest-path: flatpak/com.magnotec.obelisk.yaml
+          cache-key: flatpak-builder-${{ github.sha }}
 
-    - name: Set up Flathub System-wide
-      run: |
-        sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-
-    - name: Build Flatpak Package
-      uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-      with:
-        bundle: com.magnotec.obelisk.flatpak
-        manifest-path: flatpak/com.magnotec.obelisk.yaml
-        cache-key: flatpak-builder-cache-${{ github.sha }}
-
-    - name: Upload Flatpak Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: com.magnotec.obelisk.flatpak
-        path: com.magnotec.obelisk.flatpak
-
-    - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: com.magnotec.obelisk.flatpak
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: com.magnotec.obelisk.flatpak
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
