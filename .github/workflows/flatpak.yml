@@ -29,7 +29,7 @@ jobs:
 
     - name: Set up Flathub
       run: |
-        flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+        sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
     - name: Build Flatpak Package
       uses: flatpak/flatpak-github-actions/flatpak-builder@v6
@@ -37,7 +37,6 @@ jobs:
         bundle: com.magnotec.obelisk.flatpak
         manifest-path: flatpak/com.magnotec.obelisk.yaml
         cache-key: flatpak-builder-cache-${{ github.sha }}
-        restore-cache-key: flatpak-builder-cache-
 
     - name: Upload Flatpak Artifact
       uses: actions/upload-artifact@v4
