@@ -13,9 +13,6 @@ jobs:
   build:
     name: Build Flatpak Bundle
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
-      options: --privileged
     permissions:
       contents: write
 
@@ -24,6 +21,11 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
+
+    - name: Install Flatpak and Builder
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y flatpak flatpak-builder
 
     - name: Pre-install Flatpak Runtimes
       run: |
