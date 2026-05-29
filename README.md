@@ -1,6 +1,6 @@
 > [!WARNING]
-> In-development software, don't expect everything to work perfectly.
-> Data may be lost.
+> To be transparent, development has been assisted by AI
+> In development, expect the possibility of data loss
 
 # Obelisk Launcher
 A minecraft launcher built for the GNOME desktop. **Obelisk** focuses heavily on UI design and feature completeness, 
