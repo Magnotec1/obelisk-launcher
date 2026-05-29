@@ -512,6 +512,31 @@ pub fn launch_instance(
     cmd.arg(format!("-Xms{}M", options.min_memory));
     cmd.arg("-Duser.language=en");
 
+    if instance.use_wayland {
+        let paths = [
+            "/usr/lib/glfw-wayland/libglfw.so.3",
+            "/usr/lib/glfw-wayland/libglfw.so.3.5",
+            "/usr/lib/x86_64-linux-gnu/libglfw.so.3",
+            "/usr/lib/x86_64-linux-gnu/libglfw.so",
+            "/usr/lib/libglfw.so.3",
+            "/usr/lib/libglfw.so",
+            "/usr/lib64/libglfw.so.3",
+            "/usr/lib64/libglfw.so",
+        ];
+        let mut found_glfw = false;
+        for path in &paths {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                cmd.arg(format!("-Dorg.lwjgl.glfw.libname={}", path));
+                found_glfw = true;
+                break;
+            }
+        }
+        if !found_glfw {
+            cmd.arg("-Dorg.lwjgl.glfw.libname=glfw");
+        }
+    }
+
     // Detect Java major version of the selected Java executable
     let java_major_version = crate::backend::runtime::java::probe_java(&options.java_path)
         .as_ref()

@@ -137,6 +137,7 @@ pub struct Instance {
     pub feral_gamemode: bool,
     pub discrete_gpu: bool,
     pub zink_vulkan: bool,
+    pub use_wayland: bool,
     pub id: String,
 }
 
@@ -562,6 +563,7 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
     let mut feral_gamemode = false;
     let mut discrete_gpu = false;
     let mut zink_vulkan = false;
+    let mut use_wayland = false;
     let mut id = None;
     let mut components = Vec::new();
 
@@ -589,6 +591,7 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
                         "FeralGameMode" => feral_gamemode = value.trim() == "true",
                         "DiscreteGpu" => discrete_gpu = value.trim() == "true",
                         "ZinkVulkan" => zink_vulkan = value.trim() == "true",
+                        "UseWayland" => use_wayland = value.trim() == "true",
                         "instanceId" => id = Some(value.trim().to_string()),
                         _ => {}
                     }
@@ -813,6 +816,7 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
         feral_gamemode,
         discrete_gpu,
         zink_vulkan,
+        use_wayland,
         id: final_id,
     })
 }

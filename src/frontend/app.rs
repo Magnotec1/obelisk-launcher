@@ -242,6 +242,7 @@ pub enum AppMsg {
     SetInstanceFeralGameMode(bool),
     SetInstanceDiscreteGpu(bool),
     SetInstanceZinkVulkan(bool),
+    SetInstanceUseWayland(bool),
 
     // Downloading
     DownloadStart(RawVersion, ModLoader, Option<String>),
@@ -371,6 +372,7 @@ impl AppModel {
             SettingsTabOutput::SetFeralGameMode(e) => sender.input(AppMsg::SetInstanceFeralGameMode(e)),
             SettingsTabOutput::SetDiscreteGpu(e) => sender.input(AppMsg::SetInstanceDiscreteGpu(e)),
             SettingsTabOutput::SetZinkVulkan(e) => sender.input(AppMsg::SetInstanceZinkVulkan(e)),
+            SettingsTabOutput::SetUseWayland(e) => sender.input(AppMsg::SetInstanceUseWayland(e)),
         }
     }
 
@@ -2850,6 +2852,20 @@ impl SimpleComponent for AppModel {
                     if let Some(idx) = self.selected_instance {
                         if let Some(inst) = self.instances.get_mut(idx) {
                             inst.zink_vulkan = enabled;
+                        }
+                    }
+                }
+            }
+            AppMsg::SetInstanceUseWayland(enabled) => {
+                if let Some(path) = self.get_active_instance_path() {
+                    let _ = crate::backend::instance::manager::set_instance_performance_tweak(
+                        &path,
+                        "UseWayland",
+                        enabled,
+                    );
+                    if let Some(idx) = self.selected_instance {
+                        if let Some(inst) = self.instances.get_mut(idx) {
+                            inst.use_wayland = enabled;
                         }
                     }
                 }

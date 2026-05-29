@@ -18,6 +18,7 @@ pub enum SettingsTabOutput {
     SetFeralGameMode(bool),
     SetDiscreteGpu(bool),
     SetZinkVulkan(bool),
+    SetUseWayland(bool),
 }
 
 #[relm4::component(pub)]
@@ -93,6 +94,25 @@ impl Component for InstanceSettingsTab {
                             set_active: model.instance.as_ref().map(|i| i.zink_vulkan).unwrap_or(false),
                             connect_state_set[sender] => move |_, state| {
                                 sender.output(SettingsTabOutput::SetZinkVulkan(state)).unwrap();
+                                gtk::glib::Propagation::Proceed
+                            }
+                        }
+                    },
+
+                    adw::ActionRow {
+                        set_title: "Native Wayland (Experimental)",
+                        set_subtitle: "Forces GLFW to run natively on Wayland using the system/Flatpak GLFW library.",
+                        set_subtitle_lines: 2,
+                        add_prefix = &gtk::Image::from_icon_name("preferences-desktop-display-symbolic"),
+                        #[watch]
+                        set_sensitive: model.instance.is_some(),
+
+                        add_suffix = &gtk::Switch {
+                            set_valign: gtk::Align::Center,
+                            #[watch]
+                            set_active: model.instance.as_ref().map(|i| i.use_wayland).unwrap_or(false),
+                            connect_state_set[sender] => move |_, state| {
+                                sender.output(SettingsTabOutput::SetUseWayland(state)).unwrap();
                                 gtk::glib::Propagation::Proceed
                             }
                         }
