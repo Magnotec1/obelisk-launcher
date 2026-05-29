@@ -30,6 +30,10 @@ pub fn find_java_versions(launcher_java_dir: Option<&Path>) -> Vec<JavaInstance>
                         if let Some(mut instance) = probe_java(&java_bin) {
                             instance.source = JavaSource::Launcher;
                             versions.push(instance);
+                        } else {
+                            // The installation folder has a bin/java, but it is unexecutable (e.g. wrong dynamic linker/libc type)
+                            // or corrupt. Let's delete it so it can heal.
+                            let _ = fs::remove_dir_all(&path);
                         }
                     }
                 }

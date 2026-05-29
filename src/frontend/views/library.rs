@@ -1,5 +1,6 @@
 use crate::backend::instance::groups::InstanceGroups;
 use crate::backend::instance::manager::Instance;
+use crate::config::SortBy;
 use crate::frontend::views::instance::helpers::{self, ContextMenuOutput};
 use adw::prelude::*;
 use relm4::prelude::*;
@@ -73,6 +74,8 @@ pub enum OverviewInput {
     SetNarrow(bool),
     /// Set layout mode.
     SetLayoutMode(LayoutMode),
+    /// Set sort option.
+    SetSortBy(SortBy),
     SetLoading(bool),
     ClearTextureCache(PathBuf),
 }
@@ -134,6 +137,7 @@ pub struct OverviewGrid {
     group_flow_box: gtk::FlowBox,
     nav_stack: gtk::Stack,
     layout_mode: LayoutMode,
+    sort_by: SortBy,
     loading: bool,
     popovers: std::cell::RefCell<Vec<gtk::Popover>>,
     texture_cache: std::cell::RefCell<HashMap<PathBuf, gtk::gdk::Texture>>,
@@ -143,7 +147,7 @@ pub struct OverviewGrid {
 
 #[relm4::component(pub)]
 impl SimpleComponent for OverviewGrid {
-    type Init = ();
+    type Init = (LayoutMode, SortBy);
     type Input = OverviewInput;
     type Output = OverviewOutput;
 
@@ -336,10 +340,11 @@ impl SimpleComponent for OverviewGrid {
     }
 
     fn init(
-        _: Self::Init,
+        init: Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let (layout_mode, sort_by) = init;
         let root_flow_box = gtk::FlowBox::new();
         let group_flow_box = gtk::FlowBox::new();
         let nav_stack = gtk::Stack::new();
@@ -363,7 +368,8 @@ impl SimpleComponent for OverviewGrid {
             root_flow_box: root_flow_box.clone(),
             group_flow_box: group_flow_box.clone(),
             nav_stack: nav_stack.clone(),
-            layout_mode: LayoutMode::Grid,
+            layout_mode,
+            sort_by,
             loading: true,
             popovers: std::cell::RefCell::new(Vec::new()),
             texture_cache: std::cell::RefCell::new(HashMap::new()),
@@ -402,32 +408,30 @@ impl SimpleComponent for OverviewGrid {
                         let gname = self.groups.sorted_group_names()[idx as usize].to_string();
                         sender.input(OverviewInput::SwitchToGroup(gname));
                     } else {
+                        let mut ungrouped: Vec<(usize, &Instance)> = self.instances.iter().enumerate()
+                            .filter(|(_, inst)| {
+                                let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                                self.groups.get_instance_group(folder).is_none()
+                            })
+                            .collect();
+                        self.sort_instances(&mut ungrouped);
+
                         let ungrouped_idx = idx as usize - group_count;
-                        let mut ungrouped_found = 0;
-                        for (flat_idx, inst) in self.instances.iter().enumerate() {
-                            let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            if self.groups.get_instance_group(folder).is_none() {
-                                if ungrouped_found == ungrouped_idx {
-                                    sender.output(OverviewOutput::SelectInstance(flat_idx)).ok();
-                                    break;
-                                }
-                                ungrouped_found += 1;
-                            }
+                        if let Some(&(flat_idx, _)) = ungrouped.get(ungrouped_idx) {
+                            sender.output(OverviewOutput::SelectInstance(flat_idx)).ok();
                         }
                     }
                 } else if let GridView::Group(ref gname) = self.current_view {
                     let info = &self.groups.groups[gname];
-                    let mut members: Vec<usize> = self.instances.iter().enumerate()
+                    let mut members: Vec<(usize, &Instance)> = self.instances.iter().enumerate()
                         .filter(|(_, inst)| {
                             let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                             info.instances.contains(folder)
                         })
-                        .map(|(i, _)| i)
                         .collect();
-                    let insts = &self.instances;
-                    members.sort_by(|&a, &b| insts[a].name.cmp(&insts[b].name));
+                    self.sort_instances(&mut members);
 
-                    if let Some(&flat_idx) = members.get(idx as usize) {
+                    if let Some(&(flat_idx, _)) = members.get(idx as usize) {
                         sender.output(OverviewOutput::SelectInstance(flat_idx)).ok();
                     }
                 }
@@ -443,6 +447,10 @@ impl SimpleComponent for OverviewGrid {
                 self.layout_mode = mode;
                 self.rebuild_grid(&sender);
             }
+            OverviewInput::SetSortBy(sort_by) => {
+                self.sort_by = sort_by;
+                self.rebuild_grid(&sender);
+            }
             OverviewInput::SetLoading(loading) => {
                 self.loading = loading;
             }
@@ -456,6 +464,30 @@ impl SimpleComponent for OverviewGrid {
 // ─── Grid builder ─────────────────────────────────────────────────────────────
 
 impl OverviewGrid {
+    fn sort_instances(&self, list: &mut Vec<(usize, &Instance)>) {
+        match self.sort_by {
+            SortBy::Alphabetical => {
+                list.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()));
+            }
+            SortBy::LastPlayed => {
+                list.sort_by(|a, b| {
+                    let a_time = a.1.last_launched.unwrap_or(0);
+                    let b_time = b.1.last_launched.unwrap_or(0);
+                    b_time.cmp(&a_time)
+                        .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+                });
+            }
+            SortBy::Playtime => {
+                list.sort_by(|a, b| {
+                    let a_play = a.1.total_time_played;
+                    let b_play = b.1.total_time_played;
+                    b_play.cmp(&a_play)
+                        .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+                });
+            }
+        }
+    }
+
     fn rebuild_grid(&self, _sender: &ComponentSender<Self>) {
         for pop in self.popovers.borrow_mut().drain(..) {
             pop.unparent();
@@ -491,12 +523,18 @@ impl OverviewGrid {
             flow_box.append(&card);
         }
 
-        for (flat_idx, inst) in self.instances.iter().enumerate() {
-            let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if self.groups.get_instance_group(folder).is_none() {
-                let card = self.build_instance_card(flat_idx, inst, _sender);
-                flow_box.append(&card);
-            }
+        let mut ungrouped_instances: Vec<(usize, &Instance)> = self.instances.iter().enumerate()
+            .filter(|(_, inst)| {
+                let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                self.groups.get_instance_group(folder).is_none()
+            })
+            .collect();
+        
+        self.sort_instances(&mut ungrouped_instances);
+
+        for (flat_idx, inst) in ungrouped_instances {
+            let card = self.build_instance_card(flat_idx, inst, _sender);
+            flow_box.append(&card);
         }
     }
 
@@ -515,7 +553,8 @@ impl OverviewGrid {
                 info.instances.contains(folder)
             })
             .collect();
-        group_instances.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        
+        self.sort_instances(&mut group_instances);
 
         for (flat_idx, inst) in group_instances {
             let card = self.build_instance_card(flat_idx, inst, _sender);

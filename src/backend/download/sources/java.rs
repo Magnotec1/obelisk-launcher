@@ -15,6 +15,8 @@ pub struct JavaPackage {
     pub architecture: String,
     pub package_type: String,
     pub filename: String,
+    #[serde(default)]
+    pub size: Option<i64>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -39,9 +41,19 @@ pub fn get_available_packages() -> Result<Vec<JavaPackage>, String> {
         "x64"
     };
 
+    // Detect if we are running on a musl-based system (like Alpine) or glibc
+    let libc_type = if Path::new("/lib/ld-musl-x86_64.so.1").exists()
+        || Path::new("/lib/ld-musl-aarch64.so.1").exists()
+        || Path::new("/lib64/ld-musl-x86_64.so.1").exists()
+    {
+        "musl"
+    } else {
+        "glibc"
+    };
+
     let url = format!(
-        "https://api.foojay.io/disco/v3.0/packages?operating_system=linux&architecture={}&package_type=jdk&release_status=ga&latest=available",
-        arch
+        "https://api.foojay.io/disco/v3.0/packages?operating_system=linux&libc_type={}&architecture={}&package_type=jdk&release_status=ga&latest=available",
+        libc_type, arch
     );
     
     let response = reqwest::blocking::get(url)

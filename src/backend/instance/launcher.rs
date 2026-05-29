@@ -558,7 +558,7 @@ pub fn launch_instance(
         let resolved = jvm_arg
             .replace("${natives_directory}", &natives_dir_str)
             .replace("${launcher_name}", "obelisk-launcher")
-            .replace("${launcher_version}", "0.1.0")
+            .replace("${launcher_version}", env!("CARGO_PKG_VERSION"))
             .replace("${classpath}", &classpath_str)
             .replace("${library_directory}", &options.mc_data_path.join("libraries").to_string_lossy())
             .replace("${game_directory}", &minecraft_dir.to_string_lossy())

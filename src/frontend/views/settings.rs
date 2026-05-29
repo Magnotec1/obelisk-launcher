@@ -67,8 +67,11 @@ pub enum SettingsInput {
     UpdateConfig(Config),
     SetPage(String),
     SetInstancesPath(PathBuf),
+    ClearInstancesPath,
     SetSharedPath(PathBuf),
+    ClearSharedPath,
     SetJavaPath(PathBuf),
+    ClearJavaPath,
     SetMaxMemory(u32),
     SetMinMemory(u32),
     SetClientId(String),
@@ -132,15 +135,30 @@ impl SimpleComponent for SettingsDialog {
                                 .map(|p| p.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "Not set".to_string()),
 
-                            add_suffix = &gtk::Button {
+                            add_suffix = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 8,
                                 set_valign: gtk::Align::Center,
-                                set_label: "Select",
-                                connect_clicked[sender] => move |_| {
-                                    let dialog = gtk::FileDialog::builder().title("Select Instance Folder").build();
-                                    let sender = sender.clone();
-                                    dialog.select_folder(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
-                                        if let Ok(f) = res { if let Some(p) = f.path() { sender.input(SettingsInput::SetInstancesPath(p)); } }
-                                    });
+
+                                gtk::Button {
+                                    set_label: "Select",
+                                    set_tooltip_text: Some("Select instance folder"),
+                                    connect_clicked[sender] => move |_| {
+                                        let dialog = gtk::FileDialog::builder().title("Select Instance Folder").build();
+                                        let sender = sender.clone();
+                                        dialog.select_folder(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
+                                            if let Ok(f) = res { if let Some(p) = f.path() { sender.input(SettingsInput::SetInstancesPath(p)); } }
+                                        });
+                                    }
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: "edit-clear-symbolic",
+                                    set_css_classes: &["flat", "circular"],
+                                    set_tooltip_text: Some("Clear instance folder path"),
+                                    #[watch]
+                                    set_sensitive: model.config.instances_path.is_some(),
+                                    connect_clicked => SettingsInput::ClearInstancesPath,
                                 }
                             }
                         },
@@ -153,15 +171,30 @@ impl SimpleComponent for SettingsDialog {
                                 .map(|p| p.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "Not set".to_string()),
 
-                            add_suffix = &gtk::Button {
+                            add_suffix = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 8,
                                 set_valign: gtk::Align::Center,
-                                set_label: "Select",
-                                connect_clicked[sender] => move |_| {
-                                    let dialog = gtk::FileDialog::builder().title("Select Shared Assets Folder").build();
-                                    let sender = sender.clone();
-                                    dialog.select_folder(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
-                                        if let Ok(f) = res { if let Some(p) = f.path() { sender.input(SettingsInput::SetSharedPath(p)); } }
-                                    });
+
+                                gtk::Button {
+                                    set_label: "Select",
+                                    set_tooltip_text: Some("Select shared assets folder"),
+                                    connect_clicked[sender] => move |_| {
+                                        let dialog = gtk::FileDialog::builder().title("Select Shared Assets Folder").build();
+                                        let sender = sender.clone();
+                                        dialog.select_folder(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
+                                            if let Ok(f) = res { if let Some(p) = f.path() { sender.input(SettingsInput::SetSharedPath(p)); } }
+                                        });
+                                    }
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: "edit-clear-symbolic",
+                                    set_css_classes: &["flat", "circular"],
+                                    set_tooltip_text: Some("Clear shared assets folder path"),
+                                    #[watch]
+                                    set_sensitive: model.config.shared_data_path.is_some(),
+                                    connect_clicked => SettingsInput::ClearSharedPath,
                                 }
                             }
                         }
@@ -233,10 +266,25 @@ impl SimpleComponent for SettingsDialog {
                                 .map(|p| p.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "java".to_string()),
 
-                            add_suffix = &gtk::Button {
+                            add_suffix = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 8,
                                 set_valign: gtk::Align::Center,
-                                set_label: "Select",
-                                connect_clicked => SettingsInput::OpenJavaSelector,
+
+                                gtk::Button {
+                                    set_label: "Select",
+                                    set_tooltip_text: Some("Select default Java executable path"),
+                                    connect_clicked => SettingsInput::OpenJavaSelector,
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: "edit-clear-symbolic",
+                                    set_css_classes: &["flat", "circular"],
+                                    set_tooltip_text: Some("Clear default Java path (reverts to system 'java')"),
+                                    #[watch]
+                                    set_sensitive: model.config.java_path.is_some(),
+                                    connect_clicked => SettingsInput::ClearJavaPath,
+                                }
                             }
                         },
 
@@ -306,6 +354,7 @@ impl SimpleComponent for SettingsDialog {
                         adw::EntryRow {
                             set_title: "Client ID",
                             set_show_apply_button: true,
+                            #[watch]
                             set_text: &model.config.microsoft_client_id.clone().unwrap_or_default(),
                             connect_apply[sender] => move |entry| {
                                 sender.input(SettingsInput::SetClientId(entry.text().to_string()));
@@ -388,6 +437,7 @@ impl SimpleComponent for SettingsDialog {
         match msg {
             SettingsInput::UpdateConfig(config) => {
                 self.config = config;
+                sender.input(SettingsInput::RefreshJava);
             }
             SettingsInput::SetPage(page) => {
                 self.active_page = page;
@@ -443,6 +493,27 @@ impl SimpleComponent for SettingsDialog {
             }
             SettingsInput::ClearDefaultIcon => {
                 self.config.default_instance_icon = None;
+                let _ = self.config.save();
+                sender
+                    .output(SettingsOutput::ConfigUpdated(self.config.clone()))
+                    .unwrap();
+            }
+            SettingsInput::ClearInstancesPath => {
+                self.config.instances_path = None;
+                let _ = self.config.save();
+                sender
+                    .output(SettingsOutput::ConfigUpdated(self.config.clone()))
+                    .unwrap();
+            }
+            SettingsInput::ClearSharedPath => {
+                self.config.shared_data_path = None;
+                let _ = self.config.save();
+                sender
+                    .output(SettingsOutput::ConfigUpdated(self.config.clone()))
+                    .unwrap();
+            }
+            SettingsInput::ClearJavaPath => {
+                self.config.java_path = None;
                 let _ = self.config.save();
                 sender
                     .output(SettingsOutput::ConfigUpdated(self.config.clone()))

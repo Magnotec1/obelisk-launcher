@@ -123,6 +123,7 @@ pub struct Instance {
     pub path: PathBuf,
     pub icon_key: Option<String>,
     pub total_time_played: u64,
+    pub last_launched: Option<u64>,
     pub minecraft_version: Option<String>,
     pub mod_loader: Option<String>,
     pub components: Vec<InstanceComponent>,
@@ -557,6 +558,7 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
         .to_string();
     let mut icon_key = None;
     let mut total_time_played = 0;
+    let mut last_launched = None;
     let mut minecraft_version = None;
     let mut mod_loader = None;
     let mut java_path = None;
@@ -583,6 +585,9 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
                         "iconKey" => icon_key = Some(value.trim().to_string()),
                         "totalTimePlayed" => {
                             total_time_played = value.trim().parse().unwrap_or(0)
+                        }
+                        "lastLaunchTime" => {
+                            last_launched = value.trim().parse().ok();
                         }
                         "IntendedVersion" => {
                             minecraft_version = Some(value.trim().to_string())
@@ -802,6 +807,7 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
         path: instance_path.to_path_buf(),
         icon_key,
         total_time_played,
+        last_launched,
         minecraft_version,
         mod_loader,
         components,

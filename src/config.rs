@@ -3,6 +3,23 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PreferredViewType {
+    #[default]
+    Grid,
+    List,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SortBy {
+    #[default]
+    Alphabetical,
+    LastPlayed,
+    Playtime,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     pub instances_path: Option<PathBuf>,
@@ -22,6 +39,10 @@ pub struct Config {
     /// Total playtime across all instances (persistent even if instances are deleted).
     #[serde(default)]
     pub total_playtime: u64,
+    #[serde(default)]
+    pub preferred_view_type: PreferredViewType,
+    #[serde(default)]
+    pub sort_by: SortBy,
 }
 
 impl Default for Config {
@@ -43,6 +64,8 @@ impl Default for Config {
             active_account_uuid: None,
             default_instance_icon: None,
             total_playtime: 0,
+            preferred_view_type: PreferredViewType::default(),
+            sort_by: SortBy::default(),
         }
     }
 }
@@ -74,7 +97,9 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(path, content)?;
+        let tmp_path = path.with_extension("tmp");
+        fs::write(&tmp_path, content)?;
+        fs::rename(tmp_path, path)?;
         Ok(())
     }
 }

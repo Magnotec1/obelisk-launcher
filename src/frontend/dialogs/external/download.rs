@@ -388,9 +388,21 @@ impl Component for DownloadDialog {
 // 3. Status Bar Component
 // ---------------------------------------------------------------------------
 
+pub trait RedrawOnUpdate {
+    fn trigger_redraw(&self, _val: f64);
+}
+
+impl RedrawOnUpdate for gtk::DrawingArea {
+    fn trigger_redraw(&self, _val: f64) {
+        self.queue_draw();
+    }
+}
+
 pub struct DownloadStatusBar {
     pub state: DownloadState,
     pub visible: bool,
+    pub progress_value: std::rc::Rc<std::cell::Cell<f64>>,
+    pub is_downloading: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 #[derive(Debug)]
@@ -412,57 +424,98 @@ impl SimpleComponent for DownloadStatusBar {
     type Output = DownloadStatusBarOutput;
 
     view! {
-        gtk::Box {
-            set_css_classes: &["clickable-bar-container"],
-            set_hexpand: true,
-            set_margin_start: 4,
-            set_margin_end: 4,
-            set_margin_bottom: 4,
-            set_margin_top: 4,
-            set_visible: true, // Always visible as footer
-            set_orientation: gtk::Orientation::Horizontal,
-            set_spacing: 8,
-            gtk::Button {
-                set_icon_name: "folder-download-symbolic",
-                set_tooltip_text: Some("Open Download Queue"),
-                set_valign: gtk::Align::Center,
-                connect_clicked[sender] => move |_| {
-                    sender.output(DownloadStatusBarOutput::Clicked).unwrap();
-                }
+        gtk::Button {
+            set_css_classes: &["flat"],
+            set_width_request: 34,
+            set_height_request: 34,
+            #[watch]
+            set_tooltip_text: Some("Downloads"),
+            connect_clicked[sender] => move |_| {
+                sender.output(DownloadStatusBarOutput::Clicked).unwrap();
             },
-            gtk::Separator {
-                set_orientation: gtk::Orientation::Vertical,
-            },
-            gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-                set_spacing: 2,
-                set_hexpand: true,
-                set_valign: gtk::Align::Center,
-
-                gtk::Label {
+            #[wrap(Some)]
+            set_child = &gtk::Overlay {
+                #[wrap(Some)]
+                #[name = "progress_circle"]
+                set_child = &gtk::DrawingArea {
+                    set_css_classes: &["download-progress-circle"],
+                    set_content_width: 16,
+                    set_content_height: 16,
+                    set_halign: gtk::Align::Center,
+                    set_valign: gtk::Align::Center,
                     #[watch]
-                    set_label: &model.get_status_text(),
-                    set_halign: gtk::Align::Start,
-                    set_css_classes: &["caption"],
-                    set_ellipsize: gtk::pango::EllipsizeMode::End,
+                    trigger_redraw: model.get_progress(),
                 },
-                gtk::ProgressBar {
+
+                add_overlay = &gtk::Image {
                     #[watch]
-                    set_fraction: model.get_progress(),
+                    set_icon_name: Some(if model.is_downloading() {
+                        "arrow4-down-symbolic"
+                    } else {
+                        "arrow3-down-symbolic"
+                    }),
                     #[watch]
-                    set_visible: matches!(model.state, DownloadState::Starting | DownloadState::Downloading { .. }),
+                    set_pixel_size: if model.is_downloading() {
+                        12
+                    } else {
+                        16
+                    },
+                    set_halign: gtk::Align::Fill,
+                    set_valign: gtk::Align::Fill,
                 }
             }
         }
     }
 
     fn init(_init: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        let progress_value = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let is_downloading = std::rc::Rc::new(std::cell::Cell::new(false));
         let model = DownloadStatusBar {
             state: DownloadState::Idle,
             visible: true,
+            progress_value: progress_value.clone(),
+            is_downloading: is_downloading.clone(),
         };
 
         let widgets = view_output!();
+
+        let progress_clone = progress_value.clone();
+        let downloading_clone = is_downloading.clone();
+        widgets.progress_circle.set_draw_func(move |_area, cr, width, height| {
+            if !downloading_clone.get() {
+                return;
+            }
+            let progress = progress_clone.get();
+            let cx = width as f64 / 2.0;
+            let cy = height as f64 / 2.0;
+            let radius = (width.min(height) as f64 / 2.0) - 1.2; // leave padding
+            
+            if radius > 0.0 {
+                // Draw background track (light gray with transparency)
+                cr.set_source_rgba(0.7, 0.7, 0.7, 0.35);
+                cr.set_line_width(2.2);
+                cr.arc(cx, cy, radius, 0.0, 2.0 * std::f64::consts::PI);
+                let _ = cr.stroke();
+
+                if progress > 0.0 {
+                    // Query dynamic theme accent color using non-deprecated Widget::color()
+                    let accent_color = _area.color();
+
+                    cr.set_source_rgba(
+                        accent_color.red() as f64,
+                        accent_color.green() as f64,
+                        accent_color.blue() as f64,
+                        accent_color.alpha() as f64,
+                    );
+                    cr.set_line_width(2.2);
+                    let start_angle = -std::f64::consts::FRAC_PI_2;
+                    let end_angle = start_angle + progress * 2.0 * std::f64::consts::PI;
+                    cr.arc(cx, cy, radius, start_angle, end_angle);
+                    let _ = cr.stroke();
+                }
+            }
+        });
+
         ComponentParts { model, widgets }
     }
 
@@ -471,30 +524,22 @@ impl SimpleComponent for DownloadStatusBar {
             DownloadStatusBarInput::Update(state, _visible) => {
                 self.state = state;
                 self.visible = true;
+                self.progress_value.set(self.get_progress());
+                self.is_downloading.set(self.is_downloading());
             }
             DownloadStatusBarInput::Dismiss => {
                 self.state = DownloadState::Idle;
                 self.visible = true;
+                self.progress_value.set(0.0);
+                self.is_downloading.set(false);
             }
         }
     }
 }
 
 impl DownloadStatusBar {
-    fn get_status_text(&self) -> String {
-        match &self.state {
-            DownloadState::Idle => "Idle".to_string(),
-            DownloadState::Starting => "Starting...".to_string(),
-            DownloadState::Downloading { task, item_name, .. } => {
-                if item_name.is_empty() {
-                    task.clone()
-                } else {
-                    format!("{}: {}", task, item_name)
-                }
-            }
-            DownloadState::Finished => "Download finished".to_string(),
-            DownloadState::Failed(err) => format!("Error: {}", err),
-        }
+    fn is_downloading(&self) -> bool {
+        matches!(self.state, DownloadState::Starting | DownloadState::Downloading { .. })
     }
 
     fn get_progress(&self) -> f64 {

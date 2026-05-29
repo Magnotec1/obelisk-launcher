@@ -699,13 +699,27 @@ impl Component for ModrinthBrowser {
                                                 // Description
                                                 adw::PreferencesGroup {
                                                     set_title: "Description",
-                                                    gtk::Label {
-                                                        #[watch]
-                                                        set_label: &escape(model.selected_project.as_ref().map(|p| p.description.as_str()).unwrap_or("")),
-                                                        set_wrap: true,
-                                                        set_halign: gtk::Align::Start,
-                                                        set_margin_all: 12,
-                                                        set_use_markup: true,
+                                                    gtk::ScrolledWindow {
+                                                        set_hscrollbar_policy: gtk::PolicyType::Never,
+                                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                                                        set_min_content_height: 100,
+                                                        set_max_content_height: 250,
+                                                        set_propagate_natural_height: true,
+                                                        set_hexpand: true,
+                                                        set_halign: gtk::Align::Fill,
+
+                                                        gtk::Label {
+                                                            #[watch]
+                                                            set_label: &escape(model.selected_project.as_ref().map(|p| p.description.as_str()).unwrap_or("")),
+                                                            set_wrap: true,
+                                                            set_halign: gtk::Align::Fill,
+                                                            set_valign: gtk::Align::Fill,
+                                                            set_hexpand: true,
+                                                            set_xalign: 0.0,
+                                                            set_yalign: 0.0,
+                                                            set_margin_all: 12,
+                                                            set_use_markup: true,
+                                                        },
                                                     }
                                                 },
 

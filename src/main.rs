@@ -7,8 +7,27 @@ use crate::frontend::app::AppModel;
 use relm4::prelude::*;
 
 fn main() {
+    // ── Register custom icon GResource bundle ────────────────────────────
+    // The binary blob is compiled into the executable at build time so no
+    // external file access is needed at runtime.
+    let resources = gtk::gio::Resource::from_data(
+        &gtk::glib::Bytes::from_static(include_bytes!(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/data/resources.gresource")
+        )),
+    )
+    .expect("Failed to load GResource bundle");
+    gtk::gio::resources_register(&resources);
+
     let config = Config::load();
     let app = RelmApp::new("com.magnotec.obelisk.dev");
+
+    // ── Register icon search path so GTK finds our bundled SVGs ──────────
+    // GTK must be initialised (i.e. RelmApp created) before touching the
+    // default display / icon theme.
+    if let Some(display) = gtk::gdk::Display::default() {
+        let icon_theme = gtk::IconTheme::for_display(&display);
+        icon_theme.add_resource_path("/com/magnotec/obelisk/icons");
+    }
 
     relm4::set_global_css(
         "
@@ -62,9 +81,6 @@ fn main() {
         }
         .settings-sidebar row {
             padding: 0px 0px;
-        }
-        .download-footer {
-            border-top: 1px solid var(--border-color);
         }
         .shortcut-label {
             font-size: 0.9em;
@@ -323,6 +339,10 @@ fn main() {
         .navigation-sidebar row.selected {
             background-color: alpha(@accent_color, 0.15);
             color: @accent_color;
+        }
+        .download-progress-circle {
+            color: @accent_bg_color;
+            transform: scale(1.25);
         }
     ",
     );

@@ -41,10 +41,12 @@ use crate::frontend::dialogs::instance::sharing::{
 use crate::frontend::dialogs::system::java::{
     JavaSelectorDialog, JavaSelectorInput, JavaSelectorOutput,
 };
+use crate::frontend::dialogs::system::setup::{SetupDialog, SetupInput, SetupOutput};
 use crate::frontend::dialogs::system::shortcuts::ShortcutsDialog;
 use crate::backend::instance::groups::InstanceGroups;
 use crate::backend::instance::sharing::{export_instance, import_shared_instance, SharedInstance, export_instance_to_zip, import_instance_from_zip};
 pub use crate::frontend::views::instance::tabs::console::{LogLevel, LogLine};
+use crate::config::{SortBy, PreferredViewType};
 use crate::frontend::views::account::{AccountInput, AccountView};
 use crate::frontend::views::library::{LayoutMode, OverviewGrid, OverviewInput, OverviewOutput};
 use crate::frontend::views::playtime::{PlaytimeInput, PlaytimeView};
@@ -99,6 +101,7 @@ pub struct AppModel {
     account_view: Controller<AccountView>,
     asset_view: Controller<AssetManagerView>,
     settings_dialog: Controller<SettingsDialog>,
+    setup_dialog: Controller<SetupDialog>,
     download_status_bar: Controller<DownloadStatusBar>,
 
     window: adw::Window,
@@ -133,6 +136,7 @@ pub struct AppModel {
 #[derive(Debug)]
 pub enum AppMsg {
     OpenSettings,
+    OpenSetup,
     OpenAbout,
     OpenShortcuts,
     OpenAssetManager,
@@ -274,6 +278,8 @@ pub enum AppMsg {
     ConfirmMoveItems(EditorType, Vec<String>, usize), // type, IDs, target_instance_index
     ConfirmCopyItems(EditorType, Vec<String>, usize), // type, IDs, target_instance_index
     ToggleOverviewLayout,
+    SetOverviewSortBy(crate::config::SortBy),
+    InstanceLaunched(PathBuf, u64),
 }
 
 impl AppModel {
@@ -420,16 +426,17 @@ impl SimpleComponent for AppModel {
                         adw::StatusPage {
                             #[watch]
                             set_visible: model.config.instances_path.is_none(),
-                            set_title: "No Instance Folder",
-                            set_description: Some("Please set your instances directory in settings."),
-                            set_icon_name: Some("folder-open-symbolic"),
+                            set_title: "Workspace Setup Required",
+                            set_description: Some("To start building, managing, and playing Minecraft instances, let's complete a brief setup walkthrough to configure your workspace directory, player account, and Java runtimes."),
+                            set_icon_name: Some("applications-system-symbolic"),
                             set_vexpand: true,
 
                             gtk::Button {
-                                set_label: "Configure Settings",
+                                set_label: "Start Setup Walkthrough",
                                 set_halign: gtk::Align::Center,
-                                set_css_classes: &["suggested-action"],
-                                connect_clicked => AppMsg::OpenSettings,
+                                set_css_classes: &["suggested-action", "pill"],
+                                set_tooltip_text: Some("Open the launcher initial configuration walkthrough"),
+                                connect_clicked => AppMsg::OpenSetup,
                             }
                         },
 
@@ -465,7 +472,7 @@ impl SimpleComponent for AppModel {
                                          },
 
                                         pack_end = &gtk::MenuButton {
-                                            set_icon_name: "view-more-symbolic",
+                                            set_icon_name: "open-menu-symbolic",
                                             set_tooltip_text: Some("Options"),
                                             #[wrap(Some)]
                                             set_popover: main_popover = &gtk::Popover {
@@ -476,6 +483,30 @@ impl SimpleComponent for AppModel {
                                                     set_orientation: gtk::Orientation::Vertical,
                                                     set_css_classes: &["menu-box"],
                                                     set_width_request: 200,
+
+                                                    gtk::Button {
+                                                        set_has_frame: false,
+                                                        set_css_classes: &["flat", "menu-btn"],
+                                                        #[wrap(Some)]
+                                                        set_child = &gtk::Box {
+                                                            set_orientation: gtk::Orientation::Horizontal,
+                                                            set_spacing: 12,
+                                                            gtk::Label {
+                                                                set_label: "Setup Walkthrough",
+                                                                set_hexpand: true,
+                                                                set_halign: gtk::Align::Start,
+                                                            },
+                                                        },
+                                                        connect_clicked[sender, main_popover] => move |_| {
+                                                            main_popover.popdown();
+                                                            sender.input(AppMsg::OpenSetup);
+                                                        },
+                                                    },
+
+                                                    gtk::Separator {
+                                                        set_margin_top: 4,
+                                                        set_margin_bottom: 4,
+                                                    },
 
                                                     gtk::Button {
                                                         set_has_frame: false,
@@ -549,13 +580,12 @@ impl SimpleComponent for AppModel {
                                                 }
                                             }
                                         },
+                                        pack_start = model.download_status_bar.widget(),
                                     },
 
                                     // Sidebar content
                                     #[wrap(Some)]
                                     set_content = model.sidebar.widget(),
-
-                                     add_bottom_bar = model.download_status_bar.widget(),
                                 }
                             },
 
@@ -605,10 +635,17 @@ impl SimpleComponent for AppModel {
                                             add_named[Some("assets")] = &adw::WindowTitle {
                                                 set_title: "Assets",
                                             },
-                                            add_named[Some("details")] = &adw::ViewSwitcher {
-                                                set_policy: adw::ViewSwitcherPolicy::Narrow,
+                                            add_named[Some("details")] = &adw::WindowTitle {
                                                 #[watch]
-                                                set_stack: Some(&detail_stack),
+                                                set_title: model.selected_instance
+                                                    .and_then(|i| model.instances.get(i))
+                                                    .map(|inst| inst.name.as_str())
+                                                    .unwrap_or("Instance Details"),
+                                                #[watch]
+                                                set_subtitle: model.selected_instance
+                                                    .and_then(|i| model.instances.get(i))
+                                                    .and_then(|inst| inst.minecraft_version.as_deref())
+                                                    .unwrap_or(""),
                                             },
                                             // Must come after add_named so children exist on first render
                                             #[watch]
@@ -707,13 +744,110 @@ impl SimpleComponent for AppModel {
                                                     }
                                                 },
 
-                                                gtk::Button {
+                                                adw::SplitButton {
                                                     #[watch]
                                                     set_icon_name: if model.overview_layout == LayoutMode::Grid { "view-list-symbolic" } else { "view-grid-symbolic" },
                                                     #[watch]
                                                     set_tooltip_text: Some(if model.overview_layout == LayoutMode::Grid { "List View" } else { "Grid View" }),
-                                                    set_css_classes: &["flat"],
                                                     connect_clicked => AppMsg::ToggleOverviewLayout,
+                                                    #[wrap(Some)]
+                                                    set_popover: sort_popover = &gtk::Popover {
+                                                        set_autohide: true,
+                                                        set_has_arrow: true,
+                                                        #[wrap(Some)]
+                                                        set_child = &gtk::Box {
+                                                            set_orientation: gtk::Orientation::Vertical,
+                                                            set_css_classes: &["menu-box"],
+                                                            set_width_request: 180,
+
+                                                            gtk::Button {
+                                                                set_has_frame: false,
+                                                                set_css_classes: &["flat", "menu-btn"],
+                                                                #[wrap(Some)]
+                                                                set_child = &gtk::Box {
+                                                                    set_orientation: gtk::Orientation::Horizontal,
+                                                                    set_spacing: 12,
+                                                                    gtk::Image {
+                                                                        set_icon_name: Some("object-select-symbolic"),
+                                                                        #[watch]
+                                                                        set_visible: model.config.sort_by == SortBy::Alphabetical,
+                                                                    },
+                                                                    gtk::Box {
+                                                                        set_width_request: 16,
+                                                                        #[watch]
+                                                                        set_visible: model.config.sort_by != SortBy::Alphabetical,
+                                                                    },
+                                                                    gtk::Label {
+                                                                        set_label: "Alphabetical",
+                                                                        set_hexpand: true,
+                                                                        set_halign: gtk::Align::Start,
+                                                                    },
+                                                                },
+                                                                connect_clicked[sender, sort_popover] => move |_| {
+                                                                    sort_popover.popdown();
+                                                                    sender.input(AppMsg::SetOverviewSortBy(SortBy::Alphabetical));
+                                                                }
+                                                            },
+
+                                                            gtk::Button {
+                                                                set_has_frame: false,
+                                                                set_css_classes: &["flat", "menu-btn"],
+                                                                #[wrap(Some)]
+                                                                set_child = &gtk::Box {
+                                                                    set_orientation: gtk::Orientation::Horizontal,
+                                                                    set_spacing: 12,
+                                                                    gtk::Image {
+                                                                        set_icon_name: Some("object-select-symbolic"),
+                                                                        #[watch]
+                                                                        set_visible: model.config.sort_by == SortBy::LastPlayed,
+                                                                    },
+                                                                    gtk::Box {
+                                                                        set_width_request: 16,
+                                                                        #[watch]
+                                                                        set_visible: model.config.sort_by != SortBy::LastPlayed,
+                                                                    },
+                                                                    gtk::Label {
+                                                                        set_label: "Last Played",
+                                                                        set_hexpand: true,
+                                                                        set_halign: gtk::Align::Start,
+                                                                    },
+                                                                },
+                                                                connect_clicked[sender, sort_popover] => move |_| {
+                                                                    sort_popover.popdown();
+                                                                    sender.input(AppMsg::SetOverviewSortBy(SortBy::LastPlayed));
+                                                                }
+                                                            },
+
+                                                            gtk::Button {
+                                                                set_has_frame: false,
+                                                                set_css_classes: &["flat", "menu-btn"],
+                                                                #[wrap(Some)]
+                                                                set_child = &gtk::Box {
+                                                                    set_orientation: gtk::Orientation::Horizontal,
+                                                                    set_spacing: 12,
+                                                                    gtk::Image {
+                                                                        set_icon_name: Some("object-select-symbolic"),
+                                                                        #[watch]
+                                                                        set_visible: model.config.sort_by == SortBy::Playtime,
+                                                                    },
+                                                                    gtk::Box {
+                                                                        set_width_request: 16,
+                                                                        #[watch]
+                                                                        set_visible: model.config.sort_by != SortBy::Playtime,
+                                                                    },
+                                                                    gtk::Label {
+                                                                        set_label: "Playtime",
+                                                                        set_hexpand: true,
+                                                                        set_halign: gtk::Align::Start,
+                                                                    },
+                                                                },
+                                                                connect_clicked[sender, sort_popover] => move |_| {
+                                                                    sort_popover.popdown();
+                                                                    sender.input(AppMsg::SetOverviewSortBy(SortBy::Playtime));
+                                                                }
+                                                            },
+                                                        }
+                                                    }
                                                 },
 
                                                 gtk::Button {
@@ -857,6 +991,29 @@ impl SimpleComponent for AppModel {
 
                                                 },
 
+                                                // Toolbar for instance tabs
+                                                gtk::Box {
+                                                    set_orientation: gtk::Orientation::Horizontal,
+                                                    set_css_classes: &["toolbar"],
+                                                    #[watch]
+                                                    set_visible: model.selected_instance.is_some(),
+                                                    set_halign: gtk::Align::Fill,
+
+                                                    adw::ViewSwitcher {
+                                                        set_stack: Some(&detail_stack),
+                                                        #[watch]
+                                                        set_policy: if model.is_narrow { adw::ViewSwitcherPolicy::Narrow } else { adw::ViewSwitcherPolicy::Wide },
+                                                        set_hexpand: true,
+                                                        set_halign: gtk::Align::Center,
+                                                    }
+                                                },
+
+                                                gtk::Separator {
+                                                    set_orientation: gtk::Orientation::Horizontal,
+                                                    #[watch]
+                                                    set_visible: model.selected_instance.is_some(),
+                                                },
+
                                                 // Instance detail tabs
                                                 #[name = "detail_stack"]
                                                 adw::ViewStack {
@@ -871,24 +1028,28 @@ impl SimpleComponent for AppModel {
 
                                                     #[name = "summary_tab"]
                                                     add_titled_with_icon[Some("summary"), "Summary", "go-home-symbolic"] = &adw::Bin {
+                                                        set_tooltip_text: Some("View instance summary and details"),
                                                         #[wrap(Some)]
                                                         set_child = model.instance_summary.widget(),
                                                     },
 
                                                     #[name = "editor_tab"]
                                                     add_titled_with_icon[Some("editor"), "Editor", "document-edit-symbolic"] = &adw::Bin {
+                                                        set_tooltip_text: Some("Edit instance files and configuration"),
                                                         #[wrap(Some)]
                                                         set_child = model.instance_editor_tab.widget(),
                                                     },
 
                                                     #[name = "settings_tab"]
                                                     add_titled_with_icon[Some("settings"), "Settings", "emblem-system-symbolic"] = &adw::Bin {
+                                                        set_tooltip_text: Some("Configure instance settings"),
                                                         #[wrap(Some)]
                                                         set_child = model.instance_settings_tab.widget(),
                                                     },
 
                                                     #[name = "console_tab"]
                                                     add_titled_with_icon[Some("console"), "Console", "utilities-terminal-symbolic"] = &adw::Bin {
+                                                        set_tooltip_text: Some("View instance console logs and output"),
                                                         #[wrap(Some)]
                                                         set_child = model.instance_console.widget(),
                                                     },
@@ -929,6 +1090,14 @@ impl SimpleComponent for AppModel {
             |msg| match msg {
                 SettingsOutput::ConfigUpdated(new_config) => AppMsg::ConfigUpdated(new_config),
                 SettingsOutput::OpenAccountManager => AppMsg::AccountAction,
+            },
+        );
+
+        let setup_dialog = SetupDialog::builder().launch(config.clone()).forward(
+            sender.input_sender(),
+            |msg| match msg {
+                SetupOutput::StartMicrosoftLogin => AppMsg::LoginStart,
+                SetupOutput::ConfigUpdated(new_config) => AppMsg::ConfigUpdated(new_config),
             },
         );
 
@@ -1024,7 +1193,13 @@ impl SimpleComponent for AppModel {
             .forward(sender.input_sender(), AppMsg::SidebarEvent);
 
         let overview_grid = OverviewGrid::builder()
-            .launch(())
+            .launch((
+                match config.preferred_view_type {
+                    PreferredViewType::Grid => LayoutMode::Grid,
+                    PreferredViewType::List => LayoutMode::List,
+                },
+                config.sort_by,
+            ))
             .forward(sender.input_sender(), AppMsg::OverviewEvent);
 
         let mut model = AppModel {
@@ -1048,6 +1223,7 @@ impl SimpleComponent for AppModel {
             overview_grid,
             asset_view,
             settings_dialog,
+            setup_dialog,
             active_sidebar_page: SidebarPage::Library,
 
             instance_summary: InstanceSummary::builder()
@@ -1094,7 +1270,10 @@ impl SimpleComponent for AppModel {
             toast_overlay: adw::ToastOverlay::new(),
             active_editor_type: None,
             is_narrow: false,
-            overview_layout: LayoutMode::Grid,
+            overview_layout: match config.preferred_view_type {
+                PreferredViewType::Grid => LayoutMode::Grid,
+                PreferredViewType::List => LayoutMode::List,
+            },
             current_folder: None,
             playtime_manager: PlaytimeManager::load(),
             sharing_loading: false,
@@ -1103,10 +1282,6 @@ impl SimpleComponent for AppModel {
         };
 
         let widgets = view_output!();
-
-        if let Some(parent) = model.download_status_bar.widget().parent() {
-            parent.add_css_class("download-footer");
-        }
 
         // Store reference to the real OverlaySplitView widget
         model.split_view = widgets.split_view.clone();
@@ -1120,7 +1295,7 @@ impl SimpleComponent for AppModel {
         // the sidebar to uncollapse when the window shrinks further.
         let bp_condition = adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
-            550.0,
+            560.0,
             adw::LengthUnit::Sp,
         );
         let bp = adw::Breakpoint::new(bp_condition);
@@ -1272,6 +1447,25 @@ impl SimpleComponent for AppModel {
             AppMsg::SetOverviewLayout(mode) => {
                 self.overview_layout = mode;
                 self.overview_grid.emit(OverviewInput::SetLayoutMode(mode));
+                self.config.preferred_view_type = match mode {
+                    LayoutMode::Grid => PreferredViewType::Grid,
+                    LayoutMode::List => PreferredViewType::List,
+                };
+                let _ = self.config.save();
+            }
+            AppMsg::SetOverviewSortBy(sort_by) => {
+                self.config.sort_by = sort_by;
+                let _ = self.config.save();
+                self.overview_grid.emit(OverviewInput::SetSortBy(sort_by));
+            }
+            AppMsg::InstanceLaunched(path, timestamp) => {
+                for inst in &mut self.instances {
+                    if inst.path == path {
+                        inst.last_launched = Some(timestamp);
+                        break;
+                    }
+                }
+                self.rebuild_overview();
             }
             AppMsg::ToggleOverviewLayout => {
                 let new_mode = if self.overview_layout == LayoutMode::Grid {
@@ -1395,6 +1589,11 @@ impl SimpleComponent for AppModel {
                 self.settings_dialog.emit(SettingsInput::UpdateConfig(self.config.clone()));
                 self.settings_dialog.widget().present(Some(&self.window));
             }
+            AppMsg::OpenSetup => {
+                self.setup_dialog.emit(SetupInput::UpdateConfig(self.config.clone()));
+                self.setup_dialog.emit(SetupInput::Open);
+                self.setup_dialog.widget().present(Some(&self.window));
+            }
             AppMsg::OpenAccountSettings => {
                 self.settings_dialog.emit(SettingsInput::UpdateConfig(self.config.clone()));
                 self.settings_dialog.emit(SettingsInput::SetPage("accounts".to_string()));
@@ -1444,11 +1643,11 @@ impl SimpleComponent for AppModel {
             AppMsg::OpenAbout => {
                 let about = adw::AboutDialog::builder()
                     .application_name("Obelisk Launcher")
-                    .version("50-rc1")
+                    .version(env!("CARGO_PKG_VERSION"))
                     .developer_name("Magnotec")
                     .license_type(gtk::License::Gpl30)
-                    .website("https://github.com/magnotec/obelisk-launcher")
-                    .issue_url("https://github.com/magnotec/obelisk-launcher/issues")
+                    .website("https://github.com/Magnotec1/obelisk-launcher")
+                    .issue_url("https://github.com/Magnotec1/obelisk-launcher/issues")
                     .comments(
                         "A modern Minecraft instance manager built with Rust and GTK4/Libadwaita. Designed around the same format as MultiMC/PolyMC/Prism Launcher, for compatibility.",
                     )
@@ -1534,6 +1733,8 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::ConfigUpdated(new_config) => {
                 self.config = new_config.clone();
+                self.setup_dialog
+                    .emit(SetupInput::UpdateConfig(new_config.clone()));
                 self.account_view
                     .emit(AccountInput::UpdateConfig(new_config.clone()));
                 self.instance_editor_tab.emit(EditorTabInput::Update(
@@ -2780,6 +2981,8 @@ impl SimpleComponent for AppModel {
                         // Propagate config to account view and settings so new account appears immediately
                         self.account_view
                             .emit(AccountInput::UpdateConfig(self.config.clone()));
+                        self.setup_dialog
+                            .emit(SetupInput::UpdateConfig(self.config.clone()));
                         self.settings_dialog
                             .emit(SettingsInput::RefreshJava); // This also refreshes accounts in settings
 
@@ -3123,6 +3326,11 @@ impl SimpleComponent for AppModel {
                                     let mut guard = game_process.lock().unwrap();
                                     *guard = Some(child);
                                 }
+
+                                // Record last launch time to instance.cfg and memory
+                                let now = chrono::Utc::now().timestamp() as u64;
+                                let _ = crate::backend::instance::manager::update_cfg_key(&instance_path, "lastLaunchTime", &now.to_string());
+                                let _ = sender_clone.send(AppMsg::InstanceLaunched(instance_path.clone(), now));
 
                                 // Spawn a concurrent thread to read stderr in real time
                                 let sender_clone_err = sender_clone.clone();
