@@ -36,6 +36,332 @@ pub struct AssetManagerView {
 }
 
 impl AssetManagerView {
+    fn create_page_box(&self) -> gtk::Box {
+        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        content_box.set_margin_top(16);
+        content_box
+    }
+
+    fn remove_widgets_for_paths(
+        w_map: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>>,
+        paths: &[PathBuf],
+    ) {
+        let mut map = w_map.borrow_mut();
+        for path in paths {
+            if let Some(widgets) = map.remove(path) {
+                for widget in widgets {
+                    if let Some(parent) = widget.parent() {
+                        if let Ok(list_box) = parent.downcast::<gtk::ListBox>() {
+                            list_box.remove(&widget);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn build_versions_page(
+        &self,
+        version_groups: &[crate::backend::download::assets::AssetGroup],
+        path_widgets: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>>,
+    ) -> gtk::Box {
+        let content_box = self.create_page_box();
+
+        let ver_group = adw::PreferencesGroup::new();
+        ver_group.set_title("By Minecraft Version");
+        ver_group.set_description(Some("Clean up all data for a specific version"));
+
+        for group in version_groups {
+            let grp_row = adw::ExpanderRow::new();
+            grp_row.set_title(&group.name);
+            grp_row.set_subtitle(&format!(
+                "{} — client JAR + metadata + asset index",
+                format_size(group.total_size)
+            ));
+
+            // Group-level delete
+            let all_paths: Vec<PathBuf> = group
+                .entries
+                .iter()
+                .map(|e| e.path.clone())
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect();
+            let grp_size: u64 = group
+                .entries
+                .iter()
+                .filter(|e| !e.path.as_os_str().is_empty())
+                .map(|e| e.size)
+                .sum();
+            let grp_name = group.name.clone();
+            let grp_del_btn = gtk::Button::new();
+            grp_del_btn.set_icon_name("user-trash-symbolic");
+            grp_del_btn.set_css_classes(&["flat", "circular", "color-destructive"]);
+            grp_del_btn.set_tooltip_text(Some(&format!("Delete all {} data", grp_name)));
+            grp_del_btn.set_valign(gtk::Align::Center);
+
+            let w_map = path_widgets.clone();
+            let p_group = ver_group.clone();
+            let g_row = grp_row.clone();
+
+            grp_del_btn.connect_clicked(move |b| {
+                let dialog = adw::AlertDialog::new(
+                    Some(&format!("Delete Minecraft {} Data?", grp_name)),
+                    Some(&format!(
+                        "This will delete the client JAR, version metadata, and asset index for Minecraft {}.\n\nTotal freed: approximately {}.\n\nThis action cannot be undone.",
+                        grp_name,
+                        format_size(grp_size)
+                    )),
+                );
+                dialog.add_response("cancel", "Cancel");
+                dialog.add_response("delete", "Delete Version Data");
+                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+
+                let paths = all_paths.clone();
+                let w_map_clone = w_map.clone();
+                let parent_group = p_group.clone();
+                let row_to_remove = g_row.clone();
+
+                dialog.connect_response(None, move |_dlg, response| {
+                    if response == "delete" {
+                        for path in &paths {
+                            let _ = delete_asset(path);
+                        }
+                        Self::remove_widgets_for_paths(&w_map_clone, &paths);
+                        parent_group.remove(&row_to_remove);
+                    }
+                });
+
+                if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
+                    dialog.present(Some(&win));
+                }
+            });
+
+            let grp_suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            grp_suffix.set_valign(gtk::Align::Center);
+            grp_suffix.append(&grp_del_btn);
+            grp_row.add_suffix(&grp_suffix);
+
+            for entry in &group.entries {
+                let ent_row = adw::ActionRow::new();
+                ent_row.set_title(&entry.name);
+                ent_row.set_subtitle(&format_size(entry.size));
+                ent_row.add_css_class("nested");
+
+                let entry_path = entry.path.clone();
+                let entry_name = entry.name.clone();
+                let entry_size = entry.size;
+
+                let widget_ref = ent_row.clone().upcast::<gtk::Widget>();
+                path_widgets.borrow_mut().entry(entry_path.clone()).or_default().push(widget_ref);
+
+                let del_btn = gtk::Button::new();
+                del_btn.set_icon_name("user-trash-symbolic");
+                del_btn.set_css_classes(&["flat", "circular"]);
+                del_btn.set_tooltip_text(Some("Delete"));
+                del_btn.set_valign(gtk::Align::Center);
+                del_btn.set_visible(!entry_path.as_os_str().is_empty());
+
+                let w_map = path_widgets.clone();
+                del_btn.connect_clicked(move |b| {
+                    let dialog = adw::AlertDialog::new(
+                        Some("Delete Data?"),
+                        Some(&format!(
+                            "Delete \"{}\"?\n\nThis will free approximately {}.\n\nThis action cannot be undone.",
+                            entry_name,
+                            format_size(entry_size)
+                        )),
+                    );
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("delete", "Delete");
+                    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                    dialog.set_default_response(Some("cancel"));
+                    dialog.set_close_response("cancel");
+
+                    let path = entry_path.clone();
+                    let w_map_clone = w_map.clone();
+                    dialog.connect_response(None, move |_dlg, response| {
+                        if response == "delete" {
+                            let _ = delete_asset(&path);
+                            Self::remove_widgets_for_paths(&w_map_clone, &[path.clone()]);
+                        }
+                    });
+
+                    if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
+                        dialog.present(Some(&win));
+                    }
+                });
+
+                let suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                suffix.set_valign(gtk::Align::Center);
+                suffix.append(&del_btn);
+                ent_row.add_suffix(&suffix);
+                grp_row.add_row(&ent_row);
+            }
+
+            ver_group.add(&grp_row);
+        }
+
+        content_box.append(&ver_group);
+        content_box
+    }
+
+    fn build_category_page(
+        &self,
+        category: &crate::backend::download::assets::AssetCategory,
+        path_widgets: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>>,
+    ) -> gtk::Box {
+        let content_box = self.create_page_box();
+
+        let cat_group = adw::PreferencesGroup::new();
+        cat_group.set_title(&category.name);
+        cat_group.set_description(Some(&format_size(category.total_size)));
+
+        for group in &category.groups {
+            let grp_row = adw::ExpanderRow::new();
+            grp_row.set_title(&group.name);
+            grp_row.set_subtitle(&format_size(group.total_size));
+
+            let suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            suffix.set_valign(gtk::Align::Center);
+
+            if category.name != "Instance Data" {
+                let grp_del_btn = gtk::Button::new();
+                grp_del_btn.set_icon_name("user-trash-symbolic");
+                grp_del_btn.set_css_classes(&["flat", "circular", "color-destructive"]);
+                grp_del_btn.set_tooltip_text(Some(&format!("Delete all in {}", group.name)));
+                grp_del_btn.set_valign(gtk::Align::Center);
+
+                let all_paths: Vec<std::path::PathBuf> = group
+                    .entries
+                    .iter()
+                    .map(|e| e.path.clone())
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .collect();
+                let grp_size: u64 = group
+                    .entries
+                    .iter()
+                    .filter(|e| !e.path.as_os_str().is_empty())
+                    .map(|e| e.size)
+                    .sum();
+                let grp_name = group.name.clone();
+                let is_game_assets = category.name == "Game Assets";
+
+                let w_map = path_widgets.clone();
+                let p_group = cat_group.clone();
+                let g_row = grp_row.clone();
+
+                grp_del_btn.connect_clicked(move |b| {
+                    let extra_info = if is_game_assets {
+                        "\n\nNote: Game asset objects are shared and will not be deleted; only the index file will be removed."
+                    } else {
+                        "\n\nThese are renewable asset files and can be redownloaded if needed."
+                    };
+
+                    let dialog = adw::AlertDialog::new(
+                        Some(&format!("Delete all files in \"{}\"?", grp_name)),
+                        Some(&format!(
+                            "This will delete all files in this group.\n\nTotal freed: approximately {}.{}{}\n\nThis action cannot be undone.",
+                            format_size(grp_size),
+                            extra_info,
+                            ""
+                        )),
+                    );
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("delete", "Delete All");
+                    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                    dialog.set_default_response(Some("cancel"));
+                    dialog.set_close_response("cancel");
+
+                    let paths = all_paths.clone();
+                    let w_map_clone = w_map.clone();
+                    let parent_group = p_group.clone();
+                    let row_to_remove = g_row.clone();
+
+                    dialog.connect_response(None, move |_dlg, response| {
+                        if response == "delete" {
+                            for path in &paths {
+                                let _ = delete_asset(path);
+                            }
+                            Self::remove_widgets_for_paths(&w_map_clone, &paths);
+                            parent_group.remove(&row_to_remove);
+                        }
+                    });
+
+                    if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
+                        dialog.present(Some(&win));
+                    }
+                });
+                suffix.append(&grp_del_btn);
+            }
+
+            grp_row.add_suffix(&suffix);
+
+            for entry in &group.entries {
+                let ent_row = adw::ActionRow::new();
+                ent_row.set_title(&entry.name);
+                ent_row.set_subtitle(&format_size(entry.size));
+                ent_row.add_css_class("nested");
+
+                let entry_path = entry.path.clone();
+                let entry_name = entry.name.clone();
+                let entry_size = entry.size;
+
+                let widget_ref = ent_row.clone().upcast::<gtk::Widget>();
+                path_widgets.borrow_mut().entry(entry_path.clone()).or_default().push(widget_ref);
+
+                let del_btn = gtk::Button::new();
+                del_btn.set_icon_name("user-trash-symbolic");
+                del_btn.set_css_classes(&["flat", "circular"]);
+                del_btn.set_tooltip_text(Some("Delete"));
+                del_btn.set_valign(gtk::Align::Center);
+                del_btn.set_visible(!entry_path.as_os_str().is_empty());
+
+                let w_map = path_widgets.clone();
+                del_btn.connect_clicked(move |b| {
+                    let dialog = adw::AlertDialog::new(
+                        Some("Delete Data?"),
+                        Some(&format!(
+                            "Delete \"{}\"?\n\nThis will free approximately {}.\n\nThis action cannot be undone.",
+                            entry_name,
+                            format_size(entry_size)
+                        )),
+                    );
+                    dialog.add_response("cancel", "Cancel");
+                    dialog.add_response("delete", "Delete");
+                    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                    dialog.set_default_response(Some("cancel"));
+                    dialog.set_close_response("cancel");
+
+                    let path = entry_path.clone();
+                    let w_map_clone = w_map.clone();
+                    dialog.connect_response(None, move |_dlg, response| {
+                        if response == "delete" {
+                            let _ = delete_asset(&path);
+                            Self::remove_widgets_for_paths(&w_map_clone, &[path.clone()]);
+                        }
+                    });
+
+                    if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
+                        dialog.present(Some(&win));
+                    }
+                });
+
+                let suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                suffix.set_valign(gtk::Align::Center);
+                suffix.append(&del_btn);
+                ent_row.add_suffix(&suffix);
+                grp_row.add_row(&ent_row);
+            }
+
+            cat_group.add(&grp_row);
+        }
+
+        content_box.append(&cat_group);
+        content_box
+    }
+
     fn rebuild_list(&mut self) {
         let _sender = match &self.sender {
             Some(s) => s.clone(),
@@ -60,343 +386,18 @@ impl AssetManagerView {
 
         let path_widgets: Rc<RefCell<HashMap<PathBuf, Vec<gtk::Widget>>>> = Rc::new(RefCell::new(HashMap::new()));
 
-        let create_page_box = || -> gtk::Box {
-            let content_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
-            content_box.set_margin_top(16);
-            content_box
-        };
-
-        // -----------------------------------------------------------------------
-        // "By Version" section at the top
-        // -----------------------------------------------------------------------
+        // 1. Build Versions page if there are versions
         let version_groups = scan_versions(&self.data_path, self.shared_path.as_deref());
         if !version_groups.is_empty() {
-            let content_box = create_page_box();
-
-            let ver_group = adw::PreferencesGroup::new();
-            ver_group.set_title("By Minecraft Version");
-            ver_group.set_description(Some("Clean up all data for a specific version"));
-
-            for group in &version_groups {
-                let grp_row = adw::ExpanderRow::new();
-                grp_row.set_title(&group.name);
-                grp_row.set_subtitle(&format!(
-                    "{} — client JAR + metadata + asset index",
-                    format_size(group.total_size)
-                ));
-
-                // Group-level delete
-                let all_paths: Vec<PathBuf> = group
-                    .entries
-                    .iter()
-                    .map(|e| e.path.clone())
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .collect();
-                let grp_size: u64 = group
-                    .entries
-                    .iter()
-                    .filter(|e| !e.path.as_os_str().is_empty())
-                    .map(|e| e.size)
-                    .sum();
-                let grp_name = group.name.clone();
-                let grp_del_btn = gtk::Button::new();
-                grp_del_btn.set_icon_name("user-trash-symbolic");
-                grp_del_btn.set_css_classes(&["flat", "circular", "color-destructive"]);
-                grp_del_btn.set_tooltip_text(Some(&format!("Delete all {} data", grp_name)));
-                grp_del_btn.set_valign(gtk::Align::Center);
-
-                let widgets_map = path_widgets.clone();
-                let p_group = ver_group.clone();
-                let g_row = grp_row.clone();
-
-                grp_del_btn.connect_clicked(move |b| {
-                    let dialog = adw::AlertDialog::new(
-                        Some(&format!("Delete Minecraft {} Data?", grp_name)),
-                        Some(&format!(
-                            "This will delete the client JAR, version metadata, and asset index for Minecraft {}.\n\nTotal freed: approximately {}.\n\nThis action cannot be undone.",
-                            grp_name,
-                            format_size(grp_size)
-                        )),
-                    );
-                    dialog.add_response("cancel", "Cancel");
-                    dialog.add_response("delete", "Delete Version Data");
-                    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                    dialog.set_default_response(Some("cancel"));
-                    dialog.set_close_response("cancel");
-
-                    let paths: Vec<PathBuf> = all_paths.iter().filter(|p| !p.as_os_str().is_empty()).cloned().collect();
-                    let w_map = widgets_map.clone();
-                    let parent_group = p_group.clone();
-                    let row_to_remove = g_row.clone();
-
-                    dialog.connect_response(None, move |_dlg, response| {
-                        if response == "delete" {
-                            for path in &paths {
-                                let _ = delete_asset(path);
-                                if let Some(widgets) = w_map.borrow_mut().remove(path) {
-                                    for widget in widgets {
-                                        if let Some(parent) = widget.parent() {
-                                            if let Ok(list_box) = parent.downcast::<gtk::ListBox>() {
-                                                list_box.remove(&widget);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            parent_group.remove(&row_to_remove);
-                        }
-                    });
-
-                    if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                        dialog.present(Some(&win));
-                    }
-                });
-
-                let grp_suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                grp_suffix.set_valign(gtk::Align::Center);
-                grp_suffix.append(&grp_del_btn);
-                grp_row.add_suffix(&grp_suffix);
-
-                for entry in &group.entries {
-                    let ent_row = adw::ActionRow::new();
-                    ent_row.set_title(&entry.name);
-                    ent_row.set_subtitle(&format_size(entry.size));
-                    ent_row.add_css_class("nested");
-
-                    let entry_path = entry.path.clone();
-                    let entry_name = entry.name.clone();
-                    let entry_size = entry.size;
-
-                    let widget_ref = ent_row.clone().upcast::<gtk::Widget>();
-                    path_widgets.borrow_mut().entry(entry_path.clone()).or_default().push(widget_ref);
-
-                    let del_btn = gtk::Button::new();
-                    del_btn.set_icon_name("user-trash-symbolic");
-                    del_btn.set_css_classes(&["flat", "circular"]);
-                    del_btn.set_tooltip_text(Some("Delete"));
-                    del_btn.set_valign(gtk::Align::Center);
-                    del_btn.set_visible(!entry_path.as_os_str().is_empty());
-
-                    let w_map = path_widgets.clone();
-                    del_btn.connect_clicked(move |b| {
-                        let dialog = adw::AlertDialog::new(
-                            Some("Delete Data?"),
-                            Some(&format!(
-                                "Delete \"{}\"?\n\nThis will free approximately {}.\n\nThis action cannot be undone.",
-                                entry_name,
-                                format_size(entry_size)
-                            )),
-                        );
-                        dialog.add_response("cancel", "Cancel");
-                        dialog.add_response("delete", "Delete");
-                        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                        dialog.set_default_response(Some("cancel"));
-                        dialog.set_close_response("cancel");
-
-                        let path = entry_path.clone();
-                        let w_map_clone = w_map.clone();
-                        dialog.connect_response(None, move |_dlg, response| {
-                            if response == "delete" {
-                                let _ = delete_asset(&path);
-                                if let Some(widgets) = w_map_clone.borrow_mut().remove(&path) {
-                                    for widget in widgets {
-                                        if let Some(parent) = widget.parent() {
-                                            if let Ok(list_box) = parent.downcast::<gtk::ListBox>() {
-                                                list_box.remove(&widget);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        });
-
-                        if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                            dialog.present(Some(&win));
-                        }
-                    });
-
-                    let suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                    suffix.set_valign(gtk::Align::Center);
-                    suffix.append(&del_btn);
-                    ent_row.add_suffix(&suffix);
-                    grp_row.add_row(&ent_row);
-                }
-
-                ver_group.add(&grp_row);
-            }
-
-            content_box.append(&ver_group);
+            let content_box = self.build_versions_page(&version_groups, &path_widgets);
             self.view_stack.add_titled(&content_box, Some("versions"), "Versions");
-            
             self.dropdown_model.append("Versions");
             self.page_ids.push("versions".to_string());
         }
 
-        // Categories
-        for category in scan.categories.iter() {
-            let content_box = create_page_box();
-
-            let cat_group = adw::PreferencesGroup::new();
-            cat_group.set_title(&category.name);
-            cat_group.set_description(Some(&format_size(category.total_size)));
-
-            for group in category.groups.iter() {
-                let grp_row = adw::ExpanderRow::new();
-                grp_row.set_title(&group.name);
-                grp_row.set_subtitle(&format_size(group.total_size));
-
-                let suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                suffix.set_valign(gtk::Align::Center);
-
-                if category.name != "Instance Data" {
-                    let grp_del_btn = gtk::Button::new();
-                    grp_del_btn.set_icon_name("user-trash-symbolic");
-                    grp_del_btn.set_css_classes(&["flat", "circular", "color-destructive"]);
-                    grp_del_btn.set_tooltip_text(Some(&format!("Delete all in {}", group.name)));
-                    grp_del_btn.set_valign(gtk::Align::Center);
-
-                    let all_paths: Vec<std::path::PathBuf> = group
-                        .entries
-                        .iter()
-                        .map(|e| e.path.clone())
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .collect();
-                    let grp_size: u64 = group
-                        .entries
-                        .iter()
-                        .filter(|e| !e.path.as_os_str().is_empty())
-                        .map(|e| e.size)
-                        .sum();
-                    let grp_name = group.name.clone();
-                    let is_game_assets = category.name == "Game Assets";
-                    
-                    let widgets_map = path_widgets.clone();
-                    let p_group = cat_group.clone();
-                    let g_row = grp_row.clone();
-
-                    grp_del_btn.connect_clicked(move |b| {
-                        let extra_info = if is_game_assets {
-                            "\n\nNote: Game asset objects are shared and will not be deleted; only the index file will be removed."
-                        } else {
-                            "\n\nThese are renewable asset files and can be redownloaded if needed."
-                        };
-
-                        let dialog = adw::AlertDialog::new(
-                            Some(&format!("Delete all files in \"{}\"?", grp_name)),
-                            Some(&format!(
-                                "This will delete all files in this group.\n\nTotal freed: approximately {}.{}{}\n\nThis action cannot be undone.",
-                                format_size(grp_size),
-                                extra_info,
-                                ""
-                            )),
-                        );
-                        dialog.add_response("cancel", "Cancel");
-                        dialog.add_response("delete", "Delete All");
-                        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                        dialog.set_default_response(Some("cancel"));
-                        dialog.set_close_response("cancel");
-
-                        let paths = all_paths.clone();
-                        let w_map = widgets_map.clone();
-                        let parent_group = p_group.clone();
-                        let row_to_remove = g_row.clone();
-
-                        dialog.connect_response(None, move |_dlg, response| {
-                            if response == "delete" {
-                                for path in &paths {
-                                    let _ = delete_asset(path);
-                                    if let Some(widgets) = w_map.borrow_mut().remove(path) {
-                                        for widget in widgets {
-                                            if let Some(parent) = widget.parent() {
-                                                if let Ok(list_box) = parent.downcast::<gtk::ListBox>() {
-                                                    list_box.remove(&widget);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                parent_group.remove(&row_to_remove);
-                            }
-                        });
-
-                        if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                            dialog.present(Some(&win));
-                        }
-                    });
-                    suffix.append(&grp_del_btn);
-                }
-
-                grp_row.add_suffix(&suffix);
-
-                for entry in group.entries.iter() {
-                    let ent_row = adw::ActionRow::new();
-                    ent_row.set_title(&entry.name);
-                    ent_row.set_subtitle(&format_size(entry.size));
-                    ent_row.add_css_class("nested");
-
-                    let entry_path = entry.path.clone();
-                    let entry_name = entry.name.clone();
-                    let entry_size = entry.size;
-
-                    let widget_ref = ent_row.clone().upcast::<gtk::Widget>();
-                    path_widgets.borrow_mut().entry(entry_path.clone()).or_default().push(widget_ref);
-
-                    let del_btn = gtk::Button::new();
-                    del_btn.set_icon_name("user-trash-symbolic");
-                    del_btn.set_css_classes(&["flat", "circular"]);
-                    del_btn.set_tooltip_text(Some("Delete"));
-                    del_btn.set_valign(gtk::Align::Center);
-                    del_btn.set_visible(!entry_path.as_os_str().is_empty());
-
-                    let w_map = path_widgets.clone();
-                    del_btn.connect_clicked(move |b| {
-                        let dialog = adw::AlertDialog::new(
-                            Some("Delete Data?"),
-                            Some(&format!(
-                                "Delete \"{}\"?\n\nThis will free approximately {}.\n\nThis action cannot be undone.",
-                                entry_name,
-                                format_size(entry_size)
-                            )),
-                        );
-                        dialog.add_response("cancel", "Cancel");
-                        dialog.add_response("delete", "Delete");
-                        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                        dialog.set_default_response(Some("cancel"));
-                        dialog.set_close_response("cancel");
-
-                        let path = entry_path.clone();
-                        let w_map_clone = w_map.clone();
-                        dialog.connect_response(None, move |_dlg, response| {
-                            if response == "delete" {
-                                let _ = delete_asset(&path);
-                                if let Some(widgets) = w_map_clone.borrow_mut().remove(&path) {
-                                    for widget in widgets {
-                                        if let Some(parent) = widget.parent() {
-                                            if let Ok(list_box) = parent.downcast::<gtk::ListBox>() {
-                                                list_box.remove(&widget);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        });
-
-                        if let Some(win) = b.root().and_then(|r| r.downcast::<gtk::Window>().ok()) {
-                            dialog.present(Some(&win));
-                        }
-                    });
-
-                    let suffix = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                    suffix.set_valign(gtk::Align::Center);
-                    suffix.append(&del_btn);
-                    ent_row.add_suffix(&suffix);
-                    grp_row.add_row(&ent_row);
-                }
-
-                cat_group.add(&grp_row);
-            }
-
-            content_box.append(&cat_group);
+        // 2. Build Category pages
+        for category in &scan.categories {
+            let content_box = self.build_category_page(category, &path_widgets);
             let id = category.name.to_lowercase().replace(" ", "-");
             let page = self.view_stack.add_titled(&content_box, Some(&id), &category.name);
             page.set_icon_name(Some("folder-symbolic"));
@@ -578,6 +579,8 @@ impl SimpleComponent for AssetManagerView {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let view_stack = adw::ViewStack::new();
+        view_stack.set_vhomogeneous(false);
+        view_stack.set_hhomogeneous(false);
 
         let model = AssetManagerView {
             loading: true,
