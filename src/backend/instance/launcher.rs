@@ -512,6 +512,17 @@ pub fn launch_instance(
     cmd.arg(format!("-Xms{}M", options.min_memory));
     cmd.arg("-Duser.language=en");
 
+    // Detect Java major version of the selected Java executable
+    let java_major_version = crate::backend::runtime::java::probe_java(&options.java_path)
+        .as_ref()
+        .and_then(|j| crate::backend::runtime::java::get_java_major_version(&j.version))
+        .unwrap_or(8); // Default to 8 if unknown
+
+    // Inject optimized JVM/GC flags
+    for arg in get_optimized_jvm_args(options.max_memory, java_major_version) {
+        cmd.arg(arg);
+    }
+
     // Apply JVM args from version meta (arguments.jvm), with variable substitution
     let assets_dir_for_jvm = if options.mc_data_path.join("assets").exists() {
         options.mc_data_path.join("assets")
@@ -836,4 +847,53 @@ pub fn check_instance_assets(instance: &Instance, options: &LaunchOptions) -> bo
     }
 
     true
+}
+
+/// Generates a set of optimized GC, performance, and compatibility JVM flags
+/// tailored to the memory allocation and Java major version.
+pub fn get_optimized_jvm_args(max_memory_mb: u32, java_major_version: u32) -> Vec<String> {
+    let mut args = Vec::new();
+
+    // 1. Core safety option to ignore unrecognized flags across different Java versions
+    args.push("-XX:+IgnoreUnrecognizedVMOptions".to_string());
+
+    // 2. High-performance Garbage Collection (GC) options: Aikar's Flags (tailored for G1GC)
+    // G1GC is highly recommended for Minecraft when allocating >= 2GB.
+    if max_memory_mb >= 2048 {
+        args.push("-XX:+UseG1GC".to_string());
+        args.push("-XX:+ParallelRefProcEnabled".to_string());
+        args.push("-XX:MaxGCPauseMillis=200".to_string());
+        args.push("-XX:+UnlockExperimentalVMOptions".to_string());
+        args.push("-XX:+AlwaysPreTouch".to_string());
+        args.push("-XX:G1NewSizePercent=30".to_string());
+        args.push("-XX:G1MaxNewSizePercent=40".to_string());
+        args.push("-XX:G1HeapRegionSize=8m".to_string());
+        args.push("-XX:G1ReservePercent=20".to_string());
+        args.push("-XX:G1HeapWastePercent=5".to_string());
+        args.push("-XX:G1MixedGCCountTarget=4".to_string());
+        args.push("-XX:InitiatingHeapFraction=15".to_string());
+        args.push("-XX:G1MixedGCLiveThresholdPercent=90".to_string());
+        args.push("-XX:G1RSetUpdatingPauseTimePercent=5".to_string());
+        args.push("-XX:SurvivorRatio=32".to_string());
+        args.push("-XX:+PerfDisableSharedMem".to_string());
+        args.push("-XX:MaxTenuringThreshold=1".to_string());
+    } else {
+        // Fallback/SerialGC for lower memory allocations
+        args.push("-XX:+UseSerialGC".to_string());
+    }
+
+    // 3. Modern Java (9+) module accessibility rules to prevent reflective access crashes in Forge/Fabric
+    if java_major_version >= 9 {
+        args.push("--add-opens=java.base/java.io=ALL-UNNAMED".to_string());
+        args.push("--add-opens=java.base/java.lang=ALL-UNNAMED".to_string());
+        args.push("--add-opens=java.base/java.lang.reflect=ALL-UNNAMED".to_string());
+        args.push("--add-opens=java.base/java.util=ALL-UNNAMED".to_string());
+        args.push("--add-opens=java.base/java.util.concurrent=ALL-UNNAMED".to_string());
+    }
+
+    // 4. Performance & Rendering optimizations
+    args.push("-Dsun.java2d.opengl=true".to_string());
+    args.push("-Dsun.java2d.noddraw=true".to_string());
+
+    args
 }

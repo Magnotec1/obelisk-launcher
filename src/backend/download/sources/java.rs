@@ -166,13 +166,24 @@ pub fn download_and_extract_with_progress<F>(
 
     progress_callback(JavaDownloadProgress::Extracting);
     
-    let output = match Command::new("tar")
-        .arg("-xzf")
-        .arg(&download_path)
-        .arg("-C")
-        .arg(target_dir)
-        .output()
-    {
+    let is_zip = filename.ends_with(".zip");
+    let output = if is_zip {
+        Command::new("unzip")
+            .arg("-q")
+            .arg(&download_path)
+            .arg("-d")
+            .arg(target_dir)
+            .output()
+    } else {
+        Command::new("tar")
+            .arg("-xf")
+            .arg(&download_path)
+            .arg("-C")
+            .arg(target_dir)
+            .output()
+    };
+
+    let output = match output {
         Ok(o) => o,
         Err(e) => {
             progress_callback(JavaDownloadProgress::Error(e.to_string()));

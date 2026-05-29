@@ -22,3 +22,10 @@ using the same format as Prism Launcher, MultiMC, and PolyMC.
 - Modrinth Integration: Allows mod download/installation/version selection from inside the launcher, via [Modrinth](https://modrinth.com/).
 - Java Management: Manage java versions and install new ones easily.
 - Sharing: Easily share instances either via code or file with your friends!
+
+## Installation and Requirements
+
+Obelisk Launcher requires system packages for GTK4 and Libadwaita to run natively on your desktop. It can also be built and run as a sandboxed Flatpak package.
+
+For detailed instructions on installing development libraries, configuring dependencies, and building or installing as a Flatpak, see the [Installation Guide](INSTALL.md).
+

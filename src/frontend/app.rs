@@ -2965,6 +2965,133 @@ impl SimpleComponent for AppModel {
                     thread::spawn(move || {
                         let start_time_chrono = Utc::now();
                         let start_time = std::time::Instant::now();
+                        let mut options = options;
+                        let max_mem = options.max_memory;
+                        let min_mem = options.min_memory;
+
+                        // Check if running within a Flatpak sandbox
+                        let is_flatpak = std::path::Path::new("/.flatpak-info").exists() || std::env::var("FLATPAK_ID").is_ok();
+                        if is_flatpak {
+                            let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                instance_path.clone(),
+                                "ℹ️  Flatpak sandbox environment detected. Sandboxed isolation is active.\n".to_string(),
+                            ));
+                        }
+
+                        // --- 1. Pre-flight health and Java version checks ---
+                        let mc_version = instance.minecraft_version.as_deref().unwrap_or("1.21.8");
+                        let required_ver = crate::backend::runtime::java::get_required_java_version(mc_version);
+                        let mut selected_probed = crate::backend::runtime::java::probe_java(&options.java_path);
+
+                        let mut java_ok = false;
+                        let mut compatibility_msg = String::new();
+
+                        if let Some(ref j) = selected_probed {
+                            if let Some(actual_ver) = crate::backend::runtime::java::get_java_major_version(&j.version) {
+                                if actual_ver == required_ver {
+                                    java_ok = true;
+                                    compatibility_msg = format!("Java {} (compatible)", actual_ver);
+                                } else {
+                                    compatibility_msg = format!("Java {} (recommended: Java {})", actual_ver, required_ver);
+                                }
+                            } else {
+                                compatibility_msg = "Unknown version".to_string();
+                            }
+                        } else {
+                            compatibility_msg = "Invalid or missing executable".to_string();
+                        }
+
+                        // Try to auto-switch if not fully compatible/working
+                        if !java_ok {
+                            let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                instance_path.clone(),
+                                format!(
+                                    "Checking Java compatibility... Selected path: {:?} ({})\n",
+                                    options.java_path, compatibility_msg
+                                ),
+                            ));
+
+                            let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                instance_path.clone(),
+                                format!("Scanning system for a fully compatible Java {} runtime...\n", required_ver),
+                            ));
+
+                            // Find all system Java installations
+                            let system_javas = crate::backend::runtime::java::find_java_versions(None);
+                            let mut found_compatible = None;
+
+                            // 1st priority: Find exact match for required Java version
+                            for sj in &system_javas {
+                                if let Some(ver) = crate::backend::runtime::java::get_java_major_version(&sj.version) {
+                                    if ver == required_ver {
+                                        found_compatible = Some(sj.clone());
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // 2nd priority: If required version is 8 but we didn't find any Java 8, or if we need a working JVM
+                            if found_compatible.is_none() && selected_probed.is_none() {
+                                // If the selected Java path doesn't work at all, fall back to ANY working Java
+                                if let Some(any_working) = system_javas.first() {
+                                    found_compatible = Some(any_working.clone());
+                                }
+                            }
+
+                            if let Some(ref comp_java) = found_compatible {
+                                let comp_ver = crate::backend::runtime::java::get_java_major_version(&comp_java.version).unwrap_or(0);
+                                let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                    instance_path.clone(),
+                                    format!(
+                                        "⚡ Auto-selector: Automatically switched launch to compatible system Java:\n  -> Path: {:?}\n  -> Version: Java {}\n",
+                                        comp_java.path, comp_ver
+                                    ),
+                                ));
+                                options.java_path = comp_java.path.clone();
+                                selected_probed = Some(comp_java.clone());
+                            } else {
+                                if selected_probed.is_none() {
+                                    // Complete showstopper: selected Java doesn't work and we found NO working Java on the system
+                                    let mut flatpak_tip = String::new();
+                                    if is_flatpak {
+                                        flatpak_tip = "\n💡 FLATPAK SANDBOX TIP:\n\
+                                                       Your host system's Java installations (in /usr/lib/jvm) are isolated and NOT visible in Flatpak.\n\
+                                                       Please click the 'Install Java' button in Settings or Java Selector to download\n\
+                                                       and install the required Java runtime directly inside the sandbox in one click!\n".to_string();
+                                    }
+                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                        instance_path.clone(),
+                                        format!(
+                                            "❌ ERROR: No working Java installation was found on your system!\n\
+                                             Please install Java (e.g. OpenJDK) or select a valid Java path in global settings.{}\n",
+                                            flatpak_tip
+                                        ),
+                                    ));
+                                    let _ = sender_clone.send(AppMsg::ProcessFinished(
+                                        instance_path.clone(),
+                                        0,
+                                        start_time_chrono,
+                                        Utc::now(),
+                                    ));
+                                    return;
+                                } else {
+                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                        instance_path.clone(),
+                                        format!(
+                                            "⚠️ WARNING: No compatible Java {} was found on your system.\n\
+                                             Attempting launch with configured Java ({:?}) anyway, but it may fail or crash!\n",
+                                            required_ver, options.java_path
+                                        ),
+                                    ));
+                                }
+                            }
+                        } else {
+                            let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                instance_path.clone(),
+                                format!("Java check passed: {:?} (Java {})\n", options.java_path, required_ver),
+                            ));
+                        }
+
                         match launch_instance(&instance, options) {
                             Ok(child) => {
                                 // Store process handle for killing
@@ -2981,9 +3108,26 @@ impl SimpleComponent for AppModel {
                                     *guard = Some(child);
                                 }
 
-                                let mut reader = BufReader::new(stdout);
-                                let mut err_reader = BufReader::new(stderr);
+                                // Spawn a concurrent thread to read stderr in real time
+                                let sender_clone_err = sender_clone.clone();
+                                let instance_path_err = instance_path.clone();
+                                let stderr_thread = std::thread::spawn(move || {
+                                    let mut err_reader = BufReader::new(stderr);
+                                    let mut err_line = String::new();
+                                    while let Ok(n) = err_reader.read_line(&mut err_line) {
+                                        if n == 0 {
+                                            break;
+                                        }
+                                        let _ = sender_clone_err.send(AppMsg::ConsoleLog(
+                                            instance_path_err.clone(),
+                                            format!("ERROR: {}", err_line),
+                                        ));
+                                        err_line.clear();
+                                    }
+                                });
 
+                                // Read stdout in the main thread
+                                let mut reader = BufReader::new(stdout);
                                 let mut line = String::new();
                                 while let Ok(n) = reader.read_line(&mut line) {
                                     if n == 0 {
@@ -2996,27 +3140,104 @@ impl SimpleComponent for AppModel {
                                     line.clear();
                                 }
 
-                                let mut err_line = String::new();
-                                while let Ok(n) = err_reader.read_line(&mut err_line) {
-                                    if n == 0 {
-                                        break;
+                                // Wait for stderr reader to finish
+                                let _ = stderr_thread.join();
+
+                                // Wait for the child to exit and get its exit status
+                                // Take the child out of the game_process guard so we can wait on it and own it
+                                let exit_status = {
+                                    let mut guard = game_process.lock().unwrap();
+                                    if let Some(mut c) = guard.take() {
+                                        c.wait()
+                                    } else {
+                                        Err(std::io::Error::new(std::io::ErrorKind::Other, "Process was killed or already finished"))
                                     }
-                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
-                                        instance_path.clone(),
-                                        format!("ERROR: {}", err_line),
-                                    ));
-                                    err_line.clear();
+                                };
+
+                                let duration = start_time.elapsed().as_secs();
+
+                                // --- 2. Instant Crash Diagnosis ---
+                                let mut exited_with_error = false;
+                                let mut exit_status_msg = "\nProcess finished.\n".to_string();
+
+                                match exit_status {
+                                    Ok(status) => {
+                                        if status.success() {
+                                            exit_status_msg = "\nProcess finished successfully.\n".to_string();
+                                        } else {
+                                            exited_with_error = true;
+                                            if let Some(code) = status.code() {
+                                                exit_status_msg = format!("\nProcess finished with exit code: {}\n", code);
+                                            } else {
+                                                exit_status_msg = "\nProcess terminated by signal.\n".to_string();
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        exited_with_error = true;
+                                        exit_status_msg = format!("\nProcess finished with error: {}\n", e);
+                                    }
                                 }
 
                                 let _ = sender_clone.send(AppMsg::ConsoleLog(
                                     instance_path.clone(),
-                                    "\nProcess finished.\n".to_string(),
+                                    exit_status_msg,
                                 ));
-                                {
-                                    let mut guard = game_process.lock().unwrap();
-                                    *guard = None;
+
+                                if exited_with_error && duration < 5 {
+                                    let actual_ver_str = selected_probed
+                                        .as_ref()
+                                        .map(|j| format!("Java {} ({})", crate::backend::runtime::java::get_java_major_version(&j.version).unwrap_or(0), j.version))
+                                        .unwrap_or_else(|| "Unknown".to_string());
+
+                                    let mut flatpak_tip = String::new();
+                                    if is_flatpak {
+                                        flatpak_tip = "\n\n📦 FLATPAK SANDBOX DETECTED:\n\
+                                                       Your host system's Java installations are isolated and not visible inside Flatpak.\n\
+                                                       -> Recommendation: Open Settings -> Java -> Install Java, and download a compatible\n\
+                                                          runtime directly inside the sandbox in one click!".to_string();
+                                    }
+
+                                    let diagnosis = format!(
+                                        "\n\
+                                        =================================================================\n\
+                                        ⚠️  OBELISK INSTANT CRASH DETECTED\n\
+                                        =================================================================\n\
+                                        The game terminated immediately (within {} seconds) with a failure status.\n\
+                                        This usually indicates incompatible Java, wrong JVM flags, or low memory.\n\n\
+                                        🔍 Diagnosis & Environment Checklist:\n\
+                                        1. Java Version Compatibility:\n\
+                                           - Configured Java: {}\n\
+                                           - Required Minecraft Java: Java {}\n\
+                                           {}\n\n\
+                                        2. Memory Allocation:\n\
+                                           - Configured Max Heap (-Xmx): {} MB\n\
+                                           - Configured Min Heap (-Xms): {} MB\n\
+                                           (Make sure these are within your system's physical RAM capacity)\n\n\
+                                        💡 Suggested Solutions:\n\
+                                           - Check the error logs above for ClassFormatError or VM Option errors.\n\
+                                           - Change the Java path in Instance -> Settings or Global Settings.\n\
+                                           - Adjust max/min memory limits in Launcher settings.{}\n\
+                                        =================================================================\n",
+                                        duration,
+                                        actual_ver_str,
+                                        required_ver,
+                                        if selected_probed.is_some() && crate::backend::runtime::java::get_java_major_version(&selected_probed.as_ref().unwrap().version).unwrap_or(0) == required_ver {
+                                            "✅ Java version matches requirements."
+                                        } else {
+                                            "❌ Java version is incompatible! Please install or select the recommended Java version."
+                                        },
+                                        max_mem,
+                                        min_mem,
+                                        flatpak_tip
+                                    );
+
+                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                        instance_path.clone(),
+                                        diagnosis,
+                                    ));
                                 }
-                                let duration = start_time.elapsed().as_secs();
+
                                 let _ = sender_clone.send(AppMsg::ProcessFinished(
                                     instance_path.clone(),
                                     duration,

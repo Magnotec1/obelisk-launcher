@@ -91,7 +91,7 @@ fn which_java() -> Option<PathBuf> {
         })
 }
 
-fn probe_java(path: &Path) -> Option<JavaInstance> {
+pub fn probe_java(path: &Path) -> Option<JavaInstance> {
     // Try to get version using -version
     // Note: java -version outputs to STDERR
     let output = Command::new(path).arg("-version").output().ok()?;
@@ -127,4 +127,46 @@ fn probe_java(path: &Path) -> Option<JavaInstance> {
         version,
         source: JavaSource::System, // Default, will be overridden
     })
+}
+
+/// Parse a Java version string and extract the major version as an integer.
+/// E.g. "1.8.0_421" -> 8, "17.0.12" -> 17, "21.0.3" -> 21.
+pub fn get_java_major_version(version_str: &str) -> Option<u32> {
+    let parts: Vec<&str> = version_str.split('.').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let first = parts[0];
+    if first == "1" {
+        if parts.len() > 1 {
+            let second = parts[1];
+            let clean: String = second.chars().take_while(|c| c.is_ascii_digit()).collect();
+            clean.parse::<u32>().ok()
+        } else {
+            None
+        }
+    } else {
+        let clean: String = first.chars().take_while(|c| c.is_ascii_digit()).collect();
+        clean.parse::<u32>().ok()
+    }
+}
+
+/// Returns the required Java major version based on the Minecraft version.
+pub fn get_required_java_version(mc_version: &str) -> u32 {
+    let parts: Vec<&str> = mc_version.split('.').collect();
+    if parts.len() >= 2 && parts[0] == "1" {
+        if let Ok(minor) = parts[1].parse::<u32>() {
+            if minor >= 21 {
+                return 21;
+            } else if minor >= 18 {
+                return 17;
+            } else if minor == 17 {
+                return 16;
+            } else {
+                return 8;
+            }
+        }
+    }
+    // Default to Java 21 for modern/unknown versions
+    21
 }

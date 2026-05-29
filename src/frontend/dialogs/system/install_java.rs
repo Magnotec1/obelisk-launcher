@@ -61,6 +61,7 @@ pub struct InstallJavaDialog {
     visible: bool,
     installing: bool,
     finished: bool,
+    has_error: bool,
     status: String,
     target_dir: PathBuf,
     selected_package: Option<JavaPackage>,
@@ -143,7 +144,7 @@ impl SimpleComponent for InstallJavaDialog {
                     gtk::Button {
                         set_label: "Install",
                         #[watch]
-                        set_visible: !model.finished,
+                        set_visible: !model.finished && !model.has_error,
                         #[watch]
                         set_sensitive: model.selected_package.is_some(),
                         set_css_classes: &["suggested-action", "pill"],
@@ -313,12 +314,40 @@ impl SimpleComponent for InstallJavaDialog {
                             set_css_classes: &["dim-label"],
                         },
                     },
+                    add_named[Some("error")] = &gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 16,
+                        set_halign: gtk::Align::Center,
+                        set_valign: gtk::Align::Center,
+                        set_vexpand: true,
+
+                        gtk::Image {
+                            set_icon_name: Some("window-close-symbolic"),
+                            set_pixel_size: 64,
+                            set_css_classes: &["destructive"],
+                        },
+
+                        gtk::Label {
+                            set_label: "Installation Failed",
+                            set_css_classes: &["title-2", "error"],
+                        },
+
+                        gtk::Label {
+                            #[watch]
+                            set_label: &model.status,
+                            set_css_classes: &["dim-label"],
+                            set_wrap: true,
+                            set_max_width_chars: 40,
+                            set_justify: gtk::Justification::Center,
+                        },
+                    },
                     #[watch]
-                    set_visible_child_name: match (model.loading_versions, model.installing, model.finished) {
-                        (true, _, _) => "loading",
-                        (_, true, _) => "installing",
-                        (_, _, true) => "success",
-                        (false, false, false) => "select",
+                    set_visible_child_name: match (model.loading_versions, model.installing, model.finished, model.has_error) {
+                        (true, _, _, _) => "loading",
+                        (_, true, _, _) => "installing",
+                        (_, _, true, _) => "success",
+                        (_, _, _, true) => "error",
+                        (false, false, false, false) => "select",
                     },
                 },
                 
@@ -344,6 +373,7 @@ impl SimpleComponent for InstallJavaDialog {
             visible: false,
             installing: false,
             finished: false,
+            has_error: false,
             status: String::new(),
             target_dir: init,
             selected_package: None,
@@ -373,6 +403,7 @@ impl SimpleComponent for InstallJavaDialog {
                 self.visible = true;
                 self.installing = false;
                 self.finished = false;
+                self.has_error = false;
                 self.status.clear();
                 self.progress = -1.0;
 
@@ -423,6 +454,7 @@ impl SimpleComponent for InstallJavaDialog {
             InstallJavaInput::Install => {
                 if let Some(package) = &self.selected_package {
                     self.installing = true;
+                    self.has_error = false;
                     self.progress = -1.0;
                     self.status = format!("Starting {} installation...", package.java_version);
 
@@ -470,7 +502,8 @@ impl SimpleComponent for InstallJavaDialog {
                     }
                     JavaDownloadProgress::Error(e) => {
                         self.installing = false;
-                        self.status = format!("Installation failed: {}", e);
+                        self.has_error = true;
+                        self.status = format!("{}", e);
                         self.cancel_flag = None;
                     }
                 }
