@@ -102,28 +102,3 @@ The resulting `com.magnotec.obelisk.flatpak` file can be shared and installed on
 ```bash
 flatpak install com.magnotec.obelisk.flatpak
 ```
-
----
-
-## Automated Builds via GitHub Actions
-
-This repository includes a GitHub Actions workflow to automate the Flatpak building process and simplify distribution.
-
-### Development Artifacts
-
-On every push or pull request to the `main` branch, GitHub Actions will compile the launcher as a Flatpak and upload the `.flatpak` bundle as a build artifact. You can download this file from the Actions run summary page for testing.
-
-### Creating a Release
-
-To create a stable release for distribution:
-1. Tag your commit with a version tag starting with `v` (for example, `v0.1.0`):
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-2. The GitHub Actions workflow will automatically build the Flatpak bundle, create a new GitHub Release, and upload the `com.magnotec.obelisk.flatpak` bundle directly to the Release assets.
-3. Users can download the `.flatpak` file directly from the Releases page of the repository and install it using:
-   ```bash
-   flatpak install com.magnotec.obelisk.flatpak
-   ```
-
