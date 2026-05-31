@@ -456,7 +456,9 @@ impl SimpleComponent for ModLoaderDialog {
                 }
             }
             ModLoaderDialogInput::ConfirmInstall => {
-                if let (Some(loader), Some(version)) = (&self.selected_loader, &self.selected_version) {
+                if let (Some(loader), Some(version)) =
+                    (&self.selected_loader, &self.selected_version)
+                {
                     sender
                         .output(ModLoaderDialogOutput::InstallModLoader(
                             loader.clone(),
@@ -501,14 +503,22 @@ impl ModLoaderDialog {
         let filtered: Vec<&LoaderVersion> = if search.is_empty() {
             versions.iter().collect()
         } else {
-            versions.iter().filter(|v| v.version.to_lowercase().contains(&search)).collect()
+            versions
+                .iter()
+                .filter(|v| v.version.to_lowercase().contains(&search))
+                .collect()
         };
 
         for (i, v) in filtered.iter().take(100).enumerate() {
             let suffix = if v.stable { "Stable" } else { "Beta" };
             let is_selected = self.selected_version.as_ref() == Some(&v.version);
             let is_newest = i == 0;
-            guard.push_back((v.version.clone(), suffix.to_string(), is_selected, is_newest));
+            guard.push_back((
+                v.version.clone(),
+                suffix.to_string(),
+                is_selected,
+                is_newest,
+            ));
         }
     }
 
@@ -527,10 +537,16 @@ impl ModLoaderDialog {
             return false;
         }
         match &self.selected_loader {
-            Some(ModLoader::Fabric) => self.fabric_versions.as_ref().map_or(false, |v| v.is_empty()),
+            Some(ModLoader::Fabric) => self
+                .fabric_versions
+                .as_ref()
+                .map_or(false, |v| v.is_empty()),
             Some(ModLoader::Quilt) => self.quilt_versions.as_ref().map_or(false, |v| v.is_empty()),
             Some(ModLoader::Forge) => self.forge_versions.as_ref().map_or(false, |v| v.is_empty()),
-            Some(ModLoader::NeoForge) => self.neoforge_versions.as_ref().map_or(false, |v| v.is_empty()),
+            Some(ModLoader::NeoForge) => self
+                .neoforge_versions
+                .as_ref()
+                .map_or(false, |v| v.is_empty()),
             _ => false,
         }
     }

@@ -1,10 +1,12 @@
-use serde::{Deserialize, Serialize};
-use crate::backend::instance::manager::{Instance, ModLoader, create_instance, CreateInstanceOptions};
 use crate::backend::download::sources::modrinth;
-use std::path::Path;
-use sha2::{Sha512, Digest};
+use crate::backend::instance::manager::{
+    create_instance, CreateInstanceOptions, Instance, ModLoader,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha512};
 use std::io::{Read, Write};
-use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
+use std::path::Path;
+use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SharedMod {
@@ -25,38 +27,44 @@ pub struct SharedInstance {
 impl SharedInstance {
     pub fn to_code(&self) -> Result<String, String> {
         let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        
+
         use flate2::write::ZlibEncoder;
         use flate2::Compression;
         use std::io::Write;
-        
+
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
-        encoder.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+        encoder
+            .write_all(json.as_bytes())
+            .map_err(|e| e.to_string())?;
         let compressed = encoder.finish().map_err(|e| e.to_string())?;
-        
-        use base64::{Engine as _, engine::general_purpose};
+
+        use base64::{engine::general_purpose, Engine as _};
         Ok(general_purpose::URL_SAFE_NO_PAD.encode(compressed))
     }
 
     pub fn from_code(code: &str) -> Result<Self, String> {
         let code = code.trim();
-        use base64::{Engine as _, engine::general_purpose};
-        let decoded = general_purpose::URL_SAFE_NO_PAD.decode(code).map_err(|e| e.to_string())?;
-        
+        use base64::{engine::general_purpose, Engine as _};
+        let decoded = general_purpose::URL_SAFE_NO_PAD
+            .decode(code)
+            .map_err(|e| e.to_string())?;
+
         use flate2::read::ZlibDecoder;
         let mut decoder = ZlibDecoder::new(&decoded[..]);
         let mut json = String::new();
-        decoder.read_to_string(&mut json).map_err(|e| e.to_string())?;
-        
+        decoder
+            .read_to_string(&mut json)
+            .map_err(|e| e.to_string())?;
+
         serde_json::from_str(&json).map_err(|e| e.to_string())
     }
 }
 
 pub fn export_instance(instance: &Instance) -> Result<SharedInstance, String> {
     let (mod_loader, loader_version) = instance.get_loader_info();
-    
+
     let mut shared_mods = Vec::new();
-    
+
     // Collecting mods might take time, but we just do it sequentially for now
     for m in &instance.mods {
         let mod_path = instance.minecraft_dir.join("mods").join(&m.filename);
@@ -64,11 +72,13 @@ pub fn export_instance(instance: &Instance) -> Result<SharedInstance, String> {
             let mut hasher = Sha512::new();
             let mut buffer = [0; 8192];
             while let Ok(n) = file.read(&mut buffer) {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 hasher.update(&buffer[..n]);
             }
             let hash = hex::encode(hasher.finalize());
-            
+
             if let Ok(version) = modrinth::get_version_by_hash(&hash, "sha512") {
                 shared_mods.push(SharedMod {
                     project_id: version.project_id,
@@ -78,7 +88,7 @@ pub fn export_instance(instance: &Instance) -> Result<SharedInstance, String> {
             }
         }
     }
-    
+
     Ok(SharedInstance {
         name: instance.name.clone(),
         minecraft_version: instance.minecraft_version.clone().unwrap_or_default(),
@@ -101,19 +111,24 @@ pub fn import_shared_instance(
         mod_loader: shared.mod_loader.clone(),
         loader_version: shared.loader_version,
     };
-    
+
     let instance_dir = create_instance(instances_path, options)?;
     let mods_dir = if instance_dir.join(".minecraft").is_dir() {
         instance_dir.join(".minecraft").join("mods")
     } else {
         instance_dir.join("minecraft").join("mods")
     };
-    
+
     // 2. Download mods from Modrinth
     let total_mods = shared.mods.len();
     let mut failed_mods = Vec::new();
     for (i, sm) in shared.mods.into_iter().enumerate() {
-        progress(format!("Downloading mod {} of {} ({})...", i + 1, total_mods, sm.name));
+        progress(format!(
+            "Downloading mod {} of {} ({})...",
+            i + 1,
+            total_mods,
+            sm.name
+        ));
         // We use the version_id directly if possible
         if let Err(e) = modrinth::install_mod_with_dependencies(
             &sm.project_id,
@@ -127,11 +142,14 @@ pub fn import_shared_instance(
             failed_mods.push(sm.name);
         }
     }
-    
+
     if !failed_mods.is_empty() {
-        return Err(format!("Failed to install some mods: {}", failed_mods.join(", ")));
+        return Err(format!(
+            "Failed to install some mods: {}",
+            failed_mods.join(", ")
+        ));
     }
-    
+
     Ok(())
 }
 
@@ -157,7 +175,9 @@ pub fn export_instance_to_zip(
     for entry in WalkDir::new(instance_path) {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        let name = path.strip_prefix(instance_path).map_err(|e| e.to_string())?;
+        let name = path
+            .strip_prefix(instance_path)
+            .map_err(|e| e.to_string())?;
 
         current_file += 1;
         if current_file % 10 == 0 || current_file == total_files {
@@ -174,10 +194,12 @@ pub fn export_instance_to_zip(
             if name.as_os_str().is_empty() {
                 continue;
             }
-            zip.add_directory(name.to_string_lossy(), options).map_err(|e| e.to_string())?;
+            zip.add_directory(name.to_string_lossy(), options)
+                .map_err(|e| e.to_string())?;
         } else {
             // Skip large files or irrelevant ones if needed
-            zip.start_file(name.to_string_lossy(), options).map_err(|e| e.to_string())?;
+            zip.start_file(name.to_string_lossy(), options)
+                .map_err(|e| e.to_string())?;
             let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
             let mut buffer = Vec::new();
             f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
@@ -199,8 +221,11 @@ pub fn import_instance_from_zip(
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
 
     // Determine the base folder name
-    let zip_stem = zip_path.file_stem().and_then(|s| s.to_str()).unwrap_or("Imported Instance");
-    
+    let zip_stem = zip_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported Instance");
+
     // Check if the zip has a single top-level directory
     let mut common_prefix = None;
     let mut has_files_at_root = false;
@@ -208,7 +233,7 @@ pub fn import_instance_from_zip(
     for i in 0..archive.len() {
         let file = archive.by_index(i).map_err(|e| e.to_string())?;
         let name = file.name();
-        
+
         if let Some(first_slash) = name.find('/') {
             let prefix = &name[..first_slash];
             match common_prefix {
@@ -225,12 +250,25 @@ pub fn import_instance_from_zip(
         }
     }
 
-    let prefix_to_strip = if !has_files_at_root { common_prefix } else { None };
+    let prefix_to_strip = if !has_files_at_root {
+        common_prefix
+    } else {
+        None
+    };
 
     // Sanitize folder name
-    let folder_name = zip_stem.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect::<String>();
+    let folder_name = zip_stem
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
     let mut target_dir = instances_root.join(&folder_name);
-    
+
     // Handle collisions
     if target_dir.exists() {
         let mut i = 1;
@@ -246,7 +284,7 @@ pub fn import_instance_from_zip(
     for i in 0..total_files {
         let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
         let name = file.name().to_string();
-        
+
         let p = (i + 1) as f64 / total_files as f64;
         if i % 10 == 0 || i + 1 == total_files {
             progress(p, format!("Extracting: {}", name));

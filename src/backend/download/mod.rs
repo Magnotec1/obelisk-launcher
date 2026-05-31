@@ -1,3 +1,3 @@
 pub mod assets;
-pub mod sources;
 pub mod manager;
+pub mod sources;

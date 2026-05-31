@@ -34,14 +34,20 @@ fn loader_css_class(loader: &str) -> &'static str {
 fn build_version_badge(version: &str) -> gtk::Label {
     gtk::Label::builder()
         .label(version)
-        .css_classes(vec!["overview-badge".to_string(), "overview-version-badge".to_string()])
+        .css_classes(vec![
+            "overview-badge".to_string(),
+            "overview-version-badge".to_string(),
+        ])
         .build()
 }
 
 fn build_loader_badge(loader: &str) -> gtk::Label {
     gtk::Label::builder()
         .label(loader)
-        .css_classes(vec!["overview-badge".to_string(), loader_css_class(loader).to_string()])
+        .css_classes(vec![
+            "overview-badge".to_string(),
+            loader_css_class(loader).to_string(),
+        ])
         .build()
 }
 
@@ -408,9 +414,13 @@ impl SimpleComponent for OverviewGrid {
                         let gname = self.groups.sorted_group_names()[idx as usize].to_string();
                         sender.input(OverviewInput::SwitchToGroup(gname));
                     } else {
-                        let mut ungrouped: Vec<(usize, &Instance)> = self.instances.iter().enumerate()
+                        let mut ungrouped: Vec<(usize, &Instance)> = self
+                            .instances
+                            .iter()
+                            .enumerate()
                             .filter(|(_, inst)| {
-                                let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                                let folder =
+                                    inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                                 self.groups.get_instance_group(folder).is_none()
                             })
                             .collect();
@@ -423,9 +433,13 @@ impl SimpleComponent for OverviewGrid {
                     }
                 } else if let GridView::Group(ref gname) = self.current_view {
                     let info = &self.groups.groups[gname];
-                    let mut members: Vec<(usize, &Instance)> = self.instances.iter().enumerate()
+                    let mut members: Vec<(usize, &Instance)> = self
+                        .instances
+                        .iter()
+                        .enumerate()
                         .filter(|(_, inst)| {
-                            let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            let folder =
+                                inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                             info.instances.contains(folder)
                         })
                         .collect();
@@ -440,7 +454,9 @@ impl SimpleComponent for OverviewGrid {
                 if self.layout_mode == LayoutMode::Grid && narrow {
                     self.layout_mode = LayoutMode::List;
                     self.rebuild_grid(&sender);
-                    sender.output(OverviewOutput::LayoutModeChanged(LayoutMode::List)).ok();
+                    sender
+                        .output(OverviewOutput::LayoutModeChanged(LayoutMode::List))
+                        .ok();
                 }
             }
             OverviewInput::SetLayoutMode(mode) => {
@@ -473,7 +489,8 @@ impl OverviewGrid {
                 list.sort_by(|a, b| {
                     let a_time = a.1.last_launched.unwrap_or(0);
                     let b_time = b.1.last_launched.unwrap_or(0);
-                    b_time.cmp(&a_time)
+                    b_time
+                        .cmp(&a_time)
                         .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
                 });
             }
@@ -481,7 +498,8 @@ impl OverviewGrid {
                 list.sort_by(|a, b| {
                     let a_play = a.1.total_time_played;
                     let b_play = b.1.total_time_played;
-                    b_play.cmp(&a_play)
+                    b_play
+                        .cmp(&a_play)
                         .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
                 });
             }
@@ -496,7 +514,7 @@ impl OverviewGrid {
         match &self.current_view.clone() {
             GridView::Root => {
                 self.nav_stack.set_visible_child_name("root");
-                
+
                 while let Some(child) = self.root_flow_box.first_child() {
                     self.root_flow_box.remove(&child);
                 }
@@ -510,7 +528,9 @@ impl OverviewGrid {
                     self.group_flow_box.remove(&child);
                 }
                 self.build_group_view(gname, &self.group_flow_box, _sender);
-                _sender.output(OverviewOutput::FolderChanged(Some(gname.clone()))).ok();
+                _sender
+                    .output(OverviewOutput::FolderChanged(Some(gname.clone())))
+                    .ok();
             }
         }
     }
@@ -523,13 +543,16 @@ impl OverviewGrid {
             flow_box.append(&card);
         }
 
-        let mut ungrouped_instances: Vec<(usize, &Instance)> = self.instances.iter().enumerate()
+        let mut ungrouped_instances: Vec<(usize, &Instance)> = self
+            .instances
+            .iter()
+            .enumerate()
             .filter(|(_, inst)| {
                 let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 self.groups.get_instance_group(folder).is_none()
             })
             .collect();
-        
+
         self.sort_instances(&mut ungrouped_instances);
 
         for (flat_idx, inst) in ungrouped_instances {
@@ -538,7 +561,12 @@ impl OverviewGrid {
         }
     }
 
-    fn build_group_view(&self, gname: &str, flow_box: &gtk::FlowBox, _sender: &ComponentSender<Self>) {
+    fn build_group_view(
+        &self,
+        gname: &str,
+        flow_box: &gtk::FlowBox,
+        _sender: &ComponentSender<Self>,
+    ) {
         let info = match self.groups.groups.get(gname) {
             Some(i) => i,
             None => return,
@@ -553,7 +581,7 @@ impl OverviewGrid {
                 info.instances.contains(folder)
             })
             .collect();
-        
+
         self.sort_instances(&mut group_instances);
 
         for (flat_idx, inst) in group_instances {
@@ -633,7 +661,7 @@ impl OverviewGrid {
             .orientation(gtk::Orientation::Vertical)
             .spacing(12)
             .build();
-            
+
         let icon_box = gtk::Box::builder()
             .halign(gtk::Align::Center)
             .margin_top(20)
@@ -658,7 +686,7 @@ impl OverviewGrid {
             .halign(gtk::Align::Center)
             .build();
         info_area.append(&title);
-        
+
         let sub = gtk::Label::builder()
             .label(&format!("{} instances", count))
             .css_classes(vec!["overview-card-subtitle"])
@@ -839,24 +867,62 @@ impl OverviewGrid {
         child
     }
 
-    fn attach_instance_context_menu(&self, widget: &impl IsA<gtk::Widget>, menu_btn: Option<&gtk::MenuButton>, flat_idx: usize, inst: &Instance, sender: &ComponentSender<Self>) {
-        let folder_name = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    fn attach_instance_context_menu(
+        &self,
+        widget: &impl IsA<gtk::Widget>,
+        menu_btn: Option<&gtk::MenuButton>,
+        flat_idx: usize,
+        inst: &Instance,
+        sender: &ComponentSender<Self>,
+    ) {
+        let folder_name = inst
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
         let s_clone = sender.clone();
-        
-        let parent_widget = if menu_btn.is_some() { None } else { Some(widget.upcast_ref::<gtk::Widget>()) };
-        let popover = helpers::create_instance_popover(flat_idx, inst, self.groups.get_instance_group(&folder_name).is_some(), move |out| {
-            match out {
-                ContextMenuOutput::SelectInstance(idx) => s_clone.output(OverviewOutput::SelectInstance(idx)).ok(),
-                ContextMenuOutput::RenameInstance(idx) => s_clone.output(OverviewOutput::RenameInstance(idx)).ok(),
-                ContextMenuOutput::DeleteInstance(idx) => s_clone.output(OverviewOutput::DeleteInstance(idx)).ok(),
-                ContextMenuOutput::MoveToGroupRequest(idx) => s_clone.output(OverviewOutput::MoveToGroupRequest(idx)).ok(),
-                ContextMenuOutput::RemoveFromGroup(idx) => s_clone.output(OverviewOutput::RemoveFromGroup(idx)).ok(),
-                ContextMenuOutput::ChangeIconFromFile(idx) => s_clone.output(OverviewOutput::ChangeIconFromFile(idx)).ok(),
-                ContextMenuOutput::ApplyDefaultIcon(idx) => s_clone.output(OverviewOutput::ApplyDefaultIcon(idx)).ok(),
-                ContextMenuOutput::ShareInstance(idx) => s_clone.output(OverviewOutput::ShareInstance(idx)).ok(),
-                _ => None,
-            };
-        }, parent_widget);
+
+        let parent_widget = if menu_btn.is_some() {
+            None
+        } else {
+            Some(widget.upcast_ref::<gtk::Widget>())
+        };
+        let popover = helpers::create_instance_popover(
+            flat_idx,
+            inst,
+            self.groups.get_instance_group(&folder_name).is_some(),
+            move |out| {
+                match out {
+                    ContextMenuOutput::SelectInstance(idx) => {
+                        s_clone.output(OverviewOutput::SelectInstance(idx)).ok()
+                    }
+                    ContextMenuOutput::RenameInstance(idx) => {
+                        s_clone.output(OverviewOutput::RenameInstance(idx)).ok()
+                    }
+                    ContextMenuOutput::DeleteInstance(idx) => {
+                        s_clone.output(OverviewOutput::DeleteInstance(idx)).ok()
+                    }
+                    ContextMenuOutput::MoveToGroupRequest(idx) => {
+                        s_clone.output(OverviewOutput::MoveToGroupRequest(idx)).ok()
+                    }
+                    ContextMenuOutput::RemoveFromGroup(idx) => {
+                        s_clone.output(OverviewOutput::RemoveFromGroup(idx)).ok()
+                    }
+                    ContextMenuOutput::ChangeIconFromFile(idx) => {
+                        s_clone.output(OverviewOutput::ChangeIconFromFile(idx)).ok()
+                    }
+                    ContextMenuOutput::ApplyDefaultIcon(idx) => {
+                        s_clone.output(OverviewOutput::ApplyDefaultIcon(idx)).ok()
+                    }
+                    ContextMenuOutput::ShareInstance(idx) => {
+                        s_clone.output(OverviewOutput::ShareInstance(idx)).ok()
+                    }
+                    _ => None,
+                };
+            },
+            parent_widget,
+        );
 
         if let Some(mb) = menu_btn {
             mb.set_popover(Some(&popover));
@@ -880,17 +946,24 @@ impl OverviewGrid {
             let mb_clone = menu_btn.cloned();
             click_gesture.connect_pressed(move |gesture, _, x, y| {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                
+
                 if let Some(mb) = &mb_clone {
-                    if let Some(pt) = w_ref3.compute_point(mb, &gtk::graphene::Point::new(x as f32, y as f32)) {
-                        pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(pt.x() as i32, pt.y() as i32, 1, 1)));
+                    if let Some(pt) =
+                        w_ref3.compute_point(mb, &gtk::graphene::Point::new(x as f32, y as f32))
+                    {
+                        pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+                            pt.x() as i32,
+                            pt.y() as i32,
+                            1,
+                            1,
+                        )));
                     } else {
                         pop.set_pointing_to(None);
                     }
                 } else {
                     pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 }
-                
+
                 pop.popup();
             });
         }
@@ -898,17 +971,35 @@ impl OverviewGrid {
         self.popovers.borrow_mut().push(popover);
     }
 
-    fn attach_group_context_menu(&self, widget: &impl IsA<gtk::Widget>, menu_btn: Option<&gtk::MenuButton>, group_name: String, sender: &ComponentSender<Self>) {
+    fn attach_group_context_menu(
+        &self,
+        widget: &impl IsA<gtk::Widget>,
+        menu_btn: Option<&gtk::MenuButton>,
+        group_name: String,
+        sender: &ComponentSender<Self>,
+    ) {
         let s_clone = sender.clone();
-        
-        let parent_widget = if menu_btn.is_some() { None } else { Some(widget.upcast_ref::<gtk::Widget>()) };
-        let popover = helpers::create_group_popover(group_name, move |out| {
-            match out {
-                ContextMenuOutput::RenameGroup(name) => s_clone.output(OverviewOutput::RenameGroup(name)).ok(),
-                ContextMenuOutput::DeleteGroup(name) => s_clone.output(OverviewOutput::DeleteGroup(name)).ok(),
-                _ => None,
-            };
-        }, parent_widget);
+
+        let parent_widget = if menu_btn.is_some() {
+            None
+        } else {
+            Some(widget.upcast_ref::<gtk::Widget>())
+        };
+        let popover = helpers::create_group_popover(
+            group_name,
+            move |out| {
+                match out {
+                    ContextMenuOutput::RenameGroup(name) => {
+                        s_clone.output(OverviewOutput::RenameGroup(name)).ok()
+                    }
+                    ContextMenuOutput::DeleteGroup(name) => {
+                        s_clone.output(OverviewOutput::DeleteGroup(name)).ok()
+                    }
+                    _ => None,
+                };
+            },
+            parent_widget,
+        );
 
         if let Some(mb) = menu_btn {
             mb.set_popover(Some(&popover));
@@ -932,17 +1023,24 @@ impl OverviewGrid {
             let mb_clone = menu_btn.cloned();
             click_gesture.connect_pressed(move |gesture, _, x, y| {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                
+
                 if let Some(mb) = &mb_clone {
-                    if let Some(pt) = w_ref3.compute_point(mb, &gtk::graphene::Point::new(x as f32, y as f32)) {
-                        pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(pt.x() as i32, pt.y() as i32, 1, 1)));
+                    if let Some(pt) =
+                        w_ref3.compute_point(mb, &gtk::graphene::Point::new(x as f32, y as f32))
+                    {
+                        pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+                            pt.x() as i32,
+                            pt.y() as i32,
+                            1,
+                            1,
+                        )));
                     } else {
                         pop.set_pointing_to(None);
                     }
                 } else {
                     pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 }
-                
+
                 pop.popup();
             });
         }
@@ -958,16 +1056,24 @@ impl OverviewGrid {
         if icon_path.exists() {
             let mut cache = self.texture_cache.borrow_mut();
             if let Some(texture) = cache.get(&icon_path) {
-                return gtk::Image::builder().paintable(texture).pixel_size(size).build();
+                return gtk::Image::builder()
+                    .paintable(texture)
+                    .pixel_size(size)
+                    .build();
             }
 
             if let Ok(texture) = gtk::gdk::Texture::from_filename(&icon_path) {
                 cache.insert(icon_path, texture.clone());
-                return gtk::Image::builder().paintable(&texture).pixel_size(size).build();
+                return gtk::Image::builder()
+                    .paintable(&texture)
+                    .pixel_size(size)
+                    .build();
             }
         }
 
-        gtk::Image::builder().icon_name("application-x-executable-symbolic").pixel_size(size).build()
+        gtk::Image::builder()
+            .icon_name("application-x-executable-symbolic")
+            .pixel_size(size)
+            .build()
     }
 }
-

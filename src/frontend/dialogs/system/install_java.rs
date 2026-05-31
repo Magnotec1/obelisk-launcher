@@ -3,8 +3,8 @@ use adw::prelude::*;
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct VersionRow {
@@ -218,7 +218,7 @@ impl SimpleComponent for InstallJavaDialog {
                                 set_vexpand: true,
 
                                 #[local_ref]
-                                _version_list_box -> gtk::ListBox {   
+                                _version_list_box -> gtk::ListBox {
                                 },
                             },
 
@@ -308,7 +308,7 @@ impl SimpleComponent for InstallJavaDialog {
                         gtk::Label {
                             #[watch]
                             set_label: &format!(
-                                "{} has been successfully installed.", 
+                                "{} has been successfully installed.",
                                 model.selected_package.as_ref().map(|p| format!("{} {}", p.distribution, p.java_version)).unwrap_or_default()
                             ),
                             set_css_classes: &["dim-label"],
@@ -350,7 +350,7 @@ impl SimpleComponent for InstallJavaDialog {
                         (false, false, false, false) => "select",
                     },
                 },
-                
+
             }
         }
     }
@@ -393,11 +393,7 @@ impl SimpleComponent for InstallJavaDialog {
         ComponentParts { model, widgets }
     }
 
-    fn update(
-        &mut self, 
-        msg: Self::Input, 
-        sender: ComponentSender<Self>
-    ) {
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
             InstallJavaInput::Open => {
                 self.visible = true;
@@ -444,11 +440,17 @@ impl SimpleComponent for InstallJavaDialog {
             }
             InstallJavaInput::SelectPackage(id) => {
                 for i in 0..self.version_factory.len() {
-                    let is_selected = self.version_factory.get(i).map(|r| r.package.id == id).unwrap_or(false);
+                    let is_selected = self
+                        .version_factory
+                        .get(i)
+                        .map(|r| r.package.id == id)
+                        .unwrap_or(false);
                     if is_selected {
-                        self.selected_package = self.version_factory.get(i).map(|r| r.package.clone());
+                        self.selected_package =
+                            self.version_factory.get(i).map(|r| r.package.clone());
                     }
-                    self.version_factory.send(i, VersionRowInput::SetSelected(is_selected));
+                    self.version_factory
+                        .send(i, VersionRowInput::SetSelected(is_selected));
                 }
             }
             InstallJavaInput::Install => {
@@ -464,11 +466,16 @@ impl SimpleComponent for InstallJavaDialog {
                     let sender_clone = sender.input_sender().clone();
                     let target_dir = self.target_dir.clone();
                     let package_id = package.id.clone();
-                    
+
                     std::thread::spawn(move || {
-                        crate::backend::download::sources::java::download_and_extract_with_progress(&package_id, &target_dir, cancel_flag, move |progress| {
-                            let _ = sender_clone.send(InstallJavaInput::Progress(progress));
-                        });
+                        crate::backend::download::sources::java::download_and_extract_with_progress(
+                            &package_id,
+                            &target_dir,
+                            cancel_flag,
+                            move |progress| {
+                                let _ = sender_clone.send(InstallJavaInput::Progress(progress));
+                            },
+                        );
                     });
                 }
             }
@@ -484,7 +491,11 @@ impl SimpleComponent for InstallJavaDialog {
                 use crate::backend::download::sources::java::JavaDownloadProgress;
                 match progress {
                     JavaDownloadProgress::Downloading { current, total } => {
-                        self.progress = if total > 0 { current as f32 / total as f32 } else { 0.0 };
+                        self.progress = if total > 0 {
+                            current as f32 / total as f32
+                        } else {
+                            0.0
+                        };
                         self.status = format!("Downloading... ({:.1}%)", self.progress * 100.0);
                     }
                     JavaDownloadProgress::Extracting => {
@@ -509,23 +520,25 @@ impl SimpleComponent for InstallJavaDialog {
                 }
             }
         }
-}
+    }
 }
 
 impl InstallJavaDialog {
     fn apply_filters(&mut self) {
         let mut guard = self.version_factory.guard();
-        
+
         // Collect filtered packages
-        let filtered: Vec<JavaPackage> = self.all_packages.iter()
+        let filtered: Vec<JavaPackage> = self
+            .all_packages
+            .iter()
             .filter(|package| {
                 if !self.search_query.is_empty() {
-                    let search_text = format!("java {} {} {} jdk jre", 
-                        package.major_version, 
-                        package.distribution, 
-                        package.java_version
-                    ).to_lowercase();
-                    
+                    let search_text = format!(
+                        "java {} {} {} jdk jre",
+                        package.major_version, package.distribution, package.java_version
+                    )
+                    .to_lowercase();
+
                     // Split query into words and ensure all words match
                     for word in self.search_query.split_whitespace() {
                         if !search_text.contains(word) {
@@ -533,13 +546,17 @@ impl InstallJavaDialog {
                         }
                     }
                 }
-                
+
                 if let Some(distro) = &self.filter_distro {
-                    if !package.distribution.to_lowercase().contains(&distro.to_lowercase()) {
+                    if !package
+                        .distribution
+                        .to_lowercase()
+                        .contains(&distro.to_lowercase())
+                    {
                         return false;
                     }
                 }
-                
+
                 true
             })
             .cloned()
@@ -554,7 +571,9 @@ impl InstallJavaDialog {
                     break;
                 }
             }
-            if identical { return; }
+            if identical {
+                return;
+            }
         }
 
         guard.clear();
@@ -563,4 +582,3 @@ impl InstallJavaDialog {
         }
     }
 }
-

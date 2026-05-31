@@ -31,7 +31,19 @@ modules:
       - install -Dm755 target/release/obelisk -t /app/bin/
       - install -Dm644 flatpak/com.magnotec.obelisk.desktop -t /app/share/applications/
       - install -Dm644 flatpak/com.magnotec.obelisk.metainfo.xml -t /app/share/metainfo/
-      - install -Dm644 data/com.magnotec.obelisk.png -t /app/share/icons/hicolor/512x512/apps/
+      - install -Dm644 data/com.magnotec.obelisk.svg -t /app/share/icons/hicolor/scalable/apps/
+      - mkdir -p /app/bin
+      - |
+        echo '#!/bin/sh
+        if [ "$1" = "-q" ] || [ -z "$1" ]; then
+          echo "Screen 0: minimum 320 x 200, current 1920 x 1080, maximum 16384 x 16384"
+          echo "default connected primary 1920x1080+0+0 0mm x 0mm"
+          echo "   1920x1080     60.00* "
+          echo "   1280x720      60.00  "
+          echo "   1024x768      60.00  "
+          echo "   800x600       60.00  "
+        fi' > /app/bin/xrandr
+      - chmod +x /app/bin/xrandr
     sources:
       - type: dir
         path: ..

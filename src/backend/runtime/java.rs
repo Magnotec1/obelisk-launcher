@@ -16,6 +16,32 @@ pub struct JavaInstance {
     pub source: JavaSource,
 }
 
+fn scan_flatpak_dir(base: &Path, versions: &mut Vec<JavaInstance>) {
+    if !base.exists() {
+        return;
+    }
+    for entry in walkdir::WalkDir::new(base)
+        .max_depth(9)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            if path.file_name().map_or(false, |name| name == "java") {
+                if path.parent().map_or(false, |parent| parent.file_name().map_or(false, |p_name| p_name == "bin")) {
+                    if let Some(mut instance) = probe_java(path) {
+                        instance.source = JavaSource::System;
+                        if !versions.iter().any(|v| v.path == instance.path) {
+                            versions.push(instance);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn find_java_versions(launcher_java_dir: Option<&Path>) -> Vec<JavaInstance> {
     let mut versions = Vec::new();
 
@@ -65,7 +91,20 @@ pub fn find_java_versions(launcher_java_dir: Option<&Path>) -> Vec<JavaInstance>
         }
     }
 
-    // 3. Check "java" in PATH
+    // 3. Scan Flatpak OpenJDK extensions inside the sandbox & host Flatpak runtimes
+    scan_flatpak_dir(Path::new("/usr/lib/sdk"), &mut versions);
+    scan_flatpak_dir(Path::new("/var/lib/flatpak/runtime"), &mut versions);
+    if let Ok(entries) = fs::read_dir("/home") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let user_flatpak = path.join(".local/share/flatpak/runtime");
+                scan_flatpak_dir(&user_flatpak, &mut versions);
+            }
+        }
+    }
+
+    // 4. Check "java" in PATH
     if let Some(path_java) = which_java() {
         if !versions.iter().any(|v| v.path == path_java) {
             if let Some(mut instance) = probe_java(&path_java) {
@@ -153,24 +192,87 @@ pub fn get_java_major_version(version_str: &str) -> Option<u32> {
         let clean: String = first.chars().take_while(|c| c.is_ascii_digit()).collect();
         clean.parse::<u32>().ok()
     }
-}
-
-/// Returns the required Java major version based on the Minecraft version.
+}/// Returns the required Java major version based on the Minecraft version.
 pub fn get_required_java_version(mc_version: &str) -> u32 {
     let parts: Vec<&str> = mc_version.split('.').collect();
-    if parts.len() >= 2 && parts[0] == "1" {
-        if let Ok(minor) = parts[1].parse::<u32>() {
-            if minor >= 21 {
-                return 21;
-            } else if minor >= 18 {
-                return 17;
-            } else if minor == 17 {
-                return 16;
-            } else {
-                return 8;
+    if !parts.is_empty() {
+        let first = parts[0];
+        if first == "1" {
+            if parts.len() >= 2 {
+                if let Ok(minor) = parts[1].parse::<u32>() {
+                    if minor >= 26 {
+                        return 25;
+                    }
+                    if minor == 20 {
+                        // Minecraft 1.20.5+ requires Java 21
+                        if parts.len() >= 3 {
+                            if let Some(patch_str) = parts.get(2) {
+                                let clean_patch: String = patch_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                                if let Ok(patch) = clean_patch.parse::<u32>() {
+                                    if patch >= 5 {
+                                        return 21;
+                                    }
+                                }
+                            }
+                        }
+                        return 17;
+                    }
+                    if minor >= 21 {
+                        return 21;
+                    } else if minor >= 18 {
+                        return 17;
+                    } else if minor == 17 {
+                        return 16;
+                    } else {
+                        return 8;
+                    }
+                }
+            }
+        } else {
+            // Check for year-based versions (e.g. 26.1) or snapshots (e.g. 26w02a)
+            let leading_digits: String = first.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(year_ver) = leading_digits.parse::<u32>() {
+                if year_ver >= 26 {
+                    return 25;
+                } else if year_ver >= 24 {
+                    return 21;
+                } else if year_ver >= 18 {
+                    return 17;
+                } else if year_ver == 17 {
+                    return 16;
+                } else {
+                    return 8;
+                }
             }
         }
     }
-    // Default to Java 21 for modern/unknown versions
-    21
+    // Default to Java 25 for modern/unknown versions
+    25
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_required_java_version() {
+        assert_eq!(get_required_java_version("1.8.9"), 8);
+        assert_eq!(get_required_java_version("1.12.2"), 8);
+        assert_eq!(get_required_java_version("1.16.5"), 8);
+        assert_eq!(get_required_java_version("1.17.1"), 16);
+        assert_eq!(get_required_java_version("1.18.2"), 17);
+        assert_eq!(get_required_java_version("1.20.1"), 17);
+        assert_eq!(get_required_java_version("1.20.4"), 17);
+        assert_eq!(get_required_java_version("1.20.5"), 21);
+        assert_eq!(get_required_java_version("1.20.6"), 21);
+        assert_eq!(get_required_java_version("1.21"), 21);
+        assert_eq!(get_required_java_version("1.21.4"), 21);
+        assert_eq!(get_required_java_version("1.25"), 21);
+        assert_eq!(get_required_java_version("1.26"), 25);
+        assert_eq!(get_required_java_version("1.27"), 25);
+        assert_eq!(get_required_java_version("26.1"), 25);
+        assert_eq!(get_required_java_version("26.1-snapshot-1"), 25);
+        assert_eq!(get_required_java_version("24w14a"), 21);
+        assert_eq!(get_required_java_version("26w02a"), 25);
+    }
 }

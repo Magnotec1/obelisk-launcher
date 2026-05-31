@@ -148,10 +148,7 @@ impl Component for InstanceEditorTab {
                                     .map(|p| format!("Custom: {}", p.to_string_lossy()))
                                     .unwrap_or_default()
                             } else {
-                                format!("Default ({})",
-                                    model.config.java_path.as_ref()
-                                        .map(|p| p.to_string_lossy().to_string())
-                                        .unwrap_or_else(|| "java".to_string()))
+                                "Automatic".to_string()
                             }
                         },
                         set_subtitle_lines: 1,
@@ -163,7 +160,7 @@ impl Component for InstanceEditorTab {
 
                             gtk::Button {
                                 set_icon_name: "view-refresh-symbolic",
-                                set_tooltip_text: Some("Reset to Default"),
+                                set_tooltip_text: Some("Reset to Automatic"),
                                 set_css_classes: &["flat", "circular"],
                                 #[watch]
                                 set_visible: model.instance.as_ref().and_then(|inst| inst.java_path.as_ref()).is_some(),

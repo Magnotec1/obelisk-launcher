@@ -1,5 +1,5 @@
-pub mod tabs;
 pub mod helpers;
+pub mod tabs;
 
 pub use tabs::console::{ConsoleInput, ConsoleOutput, InstanceConsole};
 pub use tabs::editor::{EditorTabInput, EditorTabOutput, InstanceEditorTab};

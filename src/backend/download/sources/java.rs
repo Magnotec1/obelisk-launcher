@@ -3,8 +3,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct JavaPackage {
@@ -55,16 +55,16 @@ pub fn get_available_packages() -> Result<Vec<JavaPackage>, String> {
         "https://api.foojay.io/disco/v3.0/packages?operating_system=linux&libc_type={}&architecture={}&package_type=jdk&release_status=ga&latest=available",
         libc_type, arch
     );
-    
-    let response = reqwest::blocking::get(url)
-        .map_err(|e| format!("Failed to fetch versions: {}", e))?;
-    
+
+    let response =
+        reqwest::blocking::get(url).map_err(|e| format!("Failed to fetch versions: {}", e))?;
+
     let info: DiscoResponse = response
         .json()
         .map_err(|e| format!("Failed to parse response: {}", e))?;
-    
+
     let mut packages = info.result;
-    
+
     let mut seen = std::collections::HashSet::new();
     packages.retain(|p| {
         let key = (p.distribution.clone(), p.major_version);
@@ -77,10 +77,11 @@ pub fn get_available_packages() -> Result<Vec<JavaPackage>, String> {
     });
 
     packages.sort_by(|a, b| {
-        b.major_version.cmp(&a.major_version)
+        b.major_version
+            .cmp(&a.major_version)
             .then_with(|| a.distribution.cmp(&b.distribution))
     });
-    
+
     Ok(packages)
 }
 
@@ -92,17 +93,23 @@ pub fn download_and_extract_with_progress<F>(
 ) where
     F: Fn(JavaDownloadProgress) + Send + 'static,
 {
-    let redirect_url = format!("https://api.foojay.io/disco/v3.0/ids/{}/redirect", package_id);
-    
+    let redirect_url = format!(
+        "https://api.foojay.io/disco/v3.0/ids/{}/redirect",
+        package_id
+    );
+
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
-        
+
     let response = match client.get(&redirect_url).send() {
         Ok(r) => r,
         Err(e) => {
-            progress_callback(JavaDownloadProgress::Error(format!("Failed to get download link: {}", e)));
+            progress_callback(JavaDownloadProgress::Error(format!(
+                "Failed to get download link: {}",
+                e
+            )));
             return;
         }
     };
@@ -110,12 +117,17 @@ pub fn download_and_extract_with_progress<F>(
     let download_url = match response.headers().get("location") {
         Some(loc) => loc.to_str().unwrap_or_default().to_string(),
         None => {
-            progress_callback(JavaDownloadProgress::Error("No download redirect found".into()));
+            progress_callback(JavaDownloadProgress::Error(
+                "No download redirect found".into(),
+            ));
             return;
         }
     };
 
-    let filename = download_url.split('/').last().unwrap_or("java_runtime.tar.gz");
+    let filename = download_url
+        .split('/')
+        .last()
+        .unwrap_or("java_runtime.tar.gz");
 
     if let Err(e) = fs::create_dir_all(target_dir) {
         progress_callback(JavaDownloadProgress::Error(e.to_string()));
@@ -177,7 +189,7 @@ pub fn download_and_extract_with_progress<F>(
     });
 
     progress_callback(JavaDownloadProgress::Extracting);
-    
+
     let is_zip = filename.ends_with(".zip");
     let output = if is_zip {
         Command::new("unzip")

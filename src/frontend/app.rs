@@ -1,24 +1,21 @@
 #![allow(unused_assignments)]
 use crate::backend::auth::account::{
-    add_account, create_offline_account, get_active_account,
-    remove_account, switch_account,
+    add_account, create_offline_account, get_active_account, remove_account, switch_account,
 };
 use crate::backend::auth::microsoft::{self as auth, Account};
 use crate::backend::download::manager::DownloadMsg;
 use crate::backend::instance::launcher::{check_instance_assets, launch_instance, LaunchOptions};
 use crate::backend::instance::manager::{
     add_instance_item, delete_instance, is_loader_component, remove_component,
-    remove_instance_item, remove_mod_loader, rename_instance, scan_instances,
-    scan_single_instance, set_component_version, set_instance_java,
-    set_mod_loader_with_version, Instance, ModLoader,
+    remove_instance_item, remove_mod_loader, rename_instance, scan_instances, scan_single_instance,
+    set_component_version, set_instance_java, set_mod_loader_with_version, Instance, ModLoader,
 };
-use crate::backend::playtime::{PlaytimeManager, PlaySession};
-use chrono::Utc;
+use crate::backend::playtime::{PlaySession, PlaytimeManager};
 use crate::backend::runtime::versions::{find_version_by_id, MinecraftVersion, RawVersion};
 use crate::config::Config;
 use crate::frontend::dialogs::external::download::{
-    DownloadDialog, DownloadDialogInput, DownloadDialogOutput, DownloadStatusBar, DownloadStatusBarInput,
-    DownloadStatusBarOutput, DownloadState,
+    DownloadDialog, DownloadDialogInput, DownloadDialogOutput, DownloadState, DownloadStatusBar,
+    DownloadStatusBarInput, DownloadStatusBarOutput,
 };
 use crate::frontend::dialogs::external::modrinth::{BrowserInput, BrowserOutput, ModrinthBrowser};
 use crate::frontend::dialogs::instance::add::{
@@ -27,36 +24,43 @@ use crate::frontend::dialogs::instance::add::{
 use crate::frontend::dialogs::instance::components::{
     ComponentEditorDialog, ComponentEditorInput, ComponentEditorOutput,
 };
-use crate::frontend::dialogs::instance::mod_loader::{
-    ModLoaderDialog, ModLoaderDialogInput, ModLoaderDialogOutput,
-};
 use crate::frontend::dialogs::instance::editor::{
     EditorInput, EditorItem, EditorOutput, EditorType, InstanceEditorDialog,
 };
+use crate::frontend::dialogs::instance::mod_loader::{
+    ModLoaderDialog, ModLoaderDialogInput, ModLoaderDialogOutput,
+};
+use chrono::Utc;
 
+use crate::backend::instance::groups::InstanceGroups;
+use crate::backend::instance::sharing::{
+    export_instance, export_instance_to_zip, import_instance_from_zip, import_shared_instance,
+    SharedInstance,
+};
+use crate::config::{PreferredViewType, SortBy};
 use crate::frontend::dialogs::instance::sharing::{
-    ImportDialog, ImportInput, ImportOutput, InstanceSharerDialog, SharerInput, SharerOutput,
-    ImportStep,
+    ImportDialog, ImportInput, ImportOutput, ImportStep, InstanceSharerDialog, SharerInput,
+    SharerOutput,
 };
 use crate::frontend::dialogs::system::java::{
     JavaSelectorDialog, JavaSelectorInput, JavaSelectorOutput,
 };
 use crate::frontend::dialogs::system::setup::{SetupDialog, SetupInput, SetupOutput};
 use crate::frontend::dialogs::system::shortcuts::ShortcutsDialog;
-use crate::backend::instance::groups::InstanceGroups;
-use crate::backend::instance::sharing::{export_instance, import_shared_instance, SharedInstance, export_instance_to_zip, import_instance_from_zip};
-pub use crate::frontend::views::instance::tabs::console::{LogLevel, LogLine};
-use crate::config::{SortBy, PreferredViewType};
 use crate::frontend::views::account::{AccountInput, AccountView};
+use crate::frontend::views::assets::{AssetInput, AssetManagerView, AssetOutput};
+pub use crate::frontend::views::instance::tabs::console::{LogLevel, LogLine};
+use crate::frontend::views::instance::{
+    ConsoleInput, ConsoleOutput, EditorTabInput, EditorTabOutput, InstanceConsole,
+    InstanceEditorTab, InstanceSettingsTab, InstanceSummary, SettingsTabInput, SettingsTabOutput,
+    SummaryInput, SummaryOutput,
+};
 use crate::frontend::views::library::{LayoutMode, OverviewGrid, OverviewInput, OverviewOutput};
 use crate::frontend::views::playtime::{PlaytimeInput, PlaytimeView};
-use crate::frontend::views::assets::{AssetInput, AssetOutput, AssetManagerView};
-use crate::frontend::views::settings::{SettingsInput, SettingsOutput, SettingsDialog};
-use crate::frontend::views::sidebar::{SidebarInput, SidebarList, SidebarOutput, SidebarPage};
-use crate::frontend::views::instance::{
-    ConsoleInput, ConsoleOutput, EditorTabInput, EditorTabOutput,
-    InstanceConsole, InstanceEditorTab, InstanceSettingsTab, InstanceSummary,
-    SummaryInput, SummaryOutput, SettingsTabInput, SettingsTabOutput,
+use crate::frontend::views::settings::{SettingsDialog, SettingsInput, SettingsOutput};
+use crate::frontend::views::sidebar::{
+    InstanceSidebar, InstanceSidebarInput, InstanceSidebarOutput, SidebarInput, SidebarList,
+    SidebarOutput, SidebarPage,
 };
 use adw::prelude::*;
 use gtk::glib;
@@ -67,8 +71,6 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
-
-
 
 pub struct AppModel {
     config: Config,
@@ -90,6 +92,7 @@ pub struct AppModel {
 
     // Sidebar + overview
     sidebar: Controller<SidebarList>,
+    instance_sidebar: Controller<InstanceSidebar>,
     overview_grid: Controller<OverviewGrid>,
     active_sidebar_page: SidebarPage,
 
@@ -131,6 +134,7 @@ pub struct AppModel {
     sharing_loading: bool,
     import_loading: bool,
     verifying_loading: bool,
+    active_asset_subpage: Option<String>,
 }
 
 #[derive(Debug)]
@@ -142,6 +146,7 @@ pub enum AppMsg {
     OpenAssetManager,
     RefreshAssets,
     AssetsReady(crate::backend::download::assets::AssetScanResult),
+    AssetSubpageChanged(Option<String>),
     OpenPlaytime,
     RefreshPlaytime,
     PlaytimeDataReady(PlaytimeManager, Vec<(String, String, u64)>), // manager, (id, name, seconds)
@@ -219,14 +224,14 @@ pub enum AppMsg {
     LoginDeviceCode(String, String),
     LoginResult(Result<Account, String>),
     Logout,
-    SwitchAccount(String),       // UUID
-    RemoveAccount(String),       // UUID
-    AddOfflineAccount(String),   // Username
-    VerifyAccount(String),       // UUID — now handled in AccountView, kept for compat
+    SwitchAccount(String),               // UUID
+    RemoveAccount(String),               // UUID
+    AddOfflineAccount(String),           // Username
+    VerifyAccount(String),               // UUID — now handled in AccountView, kept for compat
     VerifyAccountResult(String, String), // UUID, status message
-    RefreshAccount(String),      // UUID — now handled in AccountView, kept for compat
+    RefreshAccount(String),              // UUID — now handled in AccountView, kept for compat
     RefreshAccountResult(Result<Account, String>),
-    RefreshAccountsAll(Config),  // Full config with all refreshed accounts
+    RefreshAccountsAll(Config), // Full config with all refreshed accounts
     RefreshAccountsRequest,
     ShowAddOfflineDialog,
     OpenAccountSettings,
@@ -239,7 +244,12 @@ pub enum AppMsg {
     ClearConsole(PathBuf),
     ClearActiveConsole,
     SetConsoleFilter(LogLevel),
-    ProcessFinished(PathBuf, u64, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+    ProcessFinished(
+        PathBuf,
+        u64,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+    ),
     SwitchTab(String),
 
     // Performance Tweaks
@@ -347,7 +357,9 @@ impl AppModel {
             SummaryOutput::Verify => sender.input(AppMsg::VerifyInstance),
             SummaryOutput::Kill => sender.input(AppMsg::KillInstance),
             SummaryOutput::OpenFolder => sender.input(AppMsg::OpenInstanceFolder),
-            SummaryOutput::SwitchToConsole => sender.input(AppMsg::SwitchTab("console".to_string())),
+            SummaryOutput::SwitchToConsole => {
+                sender.input(AppMsg::SwitchTab("console".to_string()))
+            }
             SummaryOutput::Share => {
                 if let Some(idx) = self.selected_instance {
                     sender.input(AppMsg::ShareInstance(idx));
@@ -375,7 +387,9 @@ impl AppModel {
 
     fn handle_settings_output(&mut self, output: SettingsTabOutput, sender: ComponentSender<Self>) {
         match output {
-            SettingsTabOutput::SetFeralGameMode(e) => sender.input(AppMsg::SetInstanceFeralGameMode(e)),
+            SettingsTabOutput::SetFeralGameMode(e) => {
+                sender.input(AppMsg::SetInstanceFeralGameMode(e))
+            }
             SettingsTabOutput::SetDiscreteGpu(e) => sender.input(AppMsg::SetInstanceDiscreteGpu(e)),
             SettingsTabOutput::SetZinkVulkan(e) => sender.input(AppMsg::SetInstanceZinkVulkan(e)),
             SettingsTabOutput::SetUseWayland(e) => sender.input(AppMsg::SetInstanceUseWayland(e)),
@@ -408,677 +422,682 @@ impl SimpleComponent for AppModel {
     type Output = ();
 
     view! {
-            adw::Window {
-                set_title: Some("Obelisk Launcher"),
-                set_default_width: 900,
-                set_default_height: 600,
-                set_width_request: 450,
-                set_height_request: 400,
+        adw::Window {
+            set_title: Some("Obelisk Launcher"),
+            set_default_width: 900,
+            set_default_height: 600,
+            set_width_request: 450,
+            set_height_request: 400,
 
-                #[wrap(Some)]
-                #[name = "toast_overlay"]
-                set_content = &adw::ToastOverlay {
-                    #[name = "main_content_box"]
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
+            #[wrap(Some)]
+            #[name = "toast_overlay"]
+            set_content = &adw::ToastOverlay {
+                #[name = "main_content_box"]
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_vexpand: true,
+
+                    adw::StatusPage {
+                        #[watch]
+                        set_visible: model.config.instances_path.is_none(),
+                        set_title: "Workspace Setup Required",
+                        set_description: Some("To start building, managing, and playing Minecraft instances, let's complete a brief setup walkthrough to configure your workspace directory, player account, and Java runtimes."),
+                        set_icon_name: Some("applications-system-symbolic"),
                         set_vexpand: true,
 
-                        adw::StatusPage {
-                            #[watch]
-                            set_visible: model.config.instances_path.is_none(),
-                            set_title: "Workspace Setup Required",
-                            set_description: Some("To start building, managing, and playing Minecraft instances, let's complete a brief setup walkthrough to configure your workspace directory, player account, and Java runtimes."),
-                            set_icon_name: Some("applications-system-symbolic"),
-                            set_vexpand: true,
+                        gtk::Button {
+                            set_label: "Start Setup Walkthrough",
+                            set_halign: gtk::Align::Center,
+                            set_css_classes: &["suggested-action", "pill"],
+                            set_tooltip_text: Some("Open the launcher initial configuration walkthrough"),
+                            connect_clicked => AppMsg::OpenSetup,
+                        }
+                    },
 
-                            gtk::Button {
-                                set_label: "Start Setup Walkthrough",
-                                set_halign: gtk::Align::Center,
-                                set_css_classes: &["suggested-action", "pill"],
-                                set_tooltip_text: Some("Open the launcher initial configuration walkthrough"),
-                                connect_clicked => AppMsg::OpenSetup,
-                            }
-                        },
+                    // ── Main layout: responsive overlay split view ───────
+                    #[name = "split_view"]
+                    adw::OverlaySplitView {
+                        #[watch]
+                        set_visible: model.config.instances_path.is_some(),
+                        set_vexpand: true,
+                        set_sidebar_width_fraction: 0.25,
+                        set_min_sidebar_width: 180.0,
+                        set_max_sidebar_width: 280.0,
 
-                        // ── Main layout: responsive overlay split view ───────
-                        #[name = "split_view"]
-                        adw::OverlaySplitView {
-                            #[watch]
-                            set_visible: model.config.instances_path.is_some(),
-                            set_vexpand: true,
-                            set_sidebar_width_fraction: 0.25,
-                            set_min_sidebar_width: 180.0,
-                            set_max_sidebar_width: 280.0,
-
-                            // ── Sidebar ──────────────────────────────────────
+                        // ── Sidebar ──────────────────────────────────────
+                        #[wrap(Some)]
+                        set_sidebar = &adw::NavigationPage {
+                            set_title: "Obelisk",
                             #[wrap(Some)]
-                            set_sidebar = &adw::NavigationPage {
-                                set_title: "Obelisk",
-                                #[wrap(Some)]
-                                set_child = &adw::ToolbarView {
-                                    add_top_bar = &adw::HeaderBar {
+                            set_child = &adw::ToolbarView {
+                                add_top_bar = &adw::HeaderBar {
+                                    #[wrap(Some)]
+                                    set_title_widget = &adw::WindowTitle {
+                                        set_title: "Obelisk",
+                                    },
+                                    set_show_end_title_buttons: false,
+
+                                     #[name = "close_sidebar_btn"]
+                                     pack_start = &gtk::Button {
+                                         set_icon_name: "go-previous-symbolic",
+                                         set_tooltip_text: Some("Close sidebar"),
+                                         set_has_frame: false,
+                                         connect_clicked => AppMsg::ToggleSidebar,
+                                     },
+
+                                    pack_end = &gtk::MenuButton {
+                                        set_icon_name: "open-menu-symbolic",
+                                        set_tooltip_text: Some("Options"),
                                         #[wrap(Some)]
-                                        set_title_widget = &adw::WindowTitle {
-                                            set_title: "Obelisk",
-                                        },
-                                        set_show_end_title_buttons: false,
-
-                                         #[name = "close_sidebar_btn"]
-                                         pack_start = &gtk::Button {
-                                             set_icon_name: "go-previous-symbolic",
-                                             set_tooltip_text: Some("Close sidebar"),
-                                             set_has_frame: false,
-                                             connect_clicked => AppMsg::ToggleSidebar,
-                                         },
-
-                                        pack_end = &gtk::MenuButton {
-                                            set_icon_name: "open-menu-symbolic",
-                                            set_tooltip_text: Some("Options"),
+                                        set_popover: main_popover = &gtk::Popover {
+                                            set_autohide: true,
+                                            set_has_arrow: true,
                                             #[wrap(Some)]
-                                            set_popover: main_popover = &gtk::Popover {
-                                                set_autohide: true,
-                                                set_has_arrow: true,
-                                                #[wrap(Some)]
-                                                set_child = &gtk::Box {
-                                                    set_orientation: gtk::Orientation::Vertical,
-                                                    set_css_classes: &["menu-box"],
-                                                    set_width_request: 200,
-
-                                                    gtk::Button {
-                                                        set_has_frame: false,
-                                                        set_css_classes: &["flat", "menu-btn"],
-                                                        #[wrap(Some)]
-                                                        set_child = &gtk::Box {
-                                                            set_orientation: gtk::Orientation::Horizontal,
-                                                            set_spacing: 12,
-                                                            gtk::Label {
-                                                                set_label: "Setup Walkthrough",
-                                                                set_hexpand: true,
-                                                                set_halign: gtk::Align::Start,
-                                                            },
-                                                        },
-                                                        connect_clicked[sender, main_popover] => move |_| {
-                                                            main_popover.popdown();
-                                                            sender.input(AppMsg::OpenSetup);
-                                                        },
-                                                    },
-
-                                                    gtk::Separator {
-                                                        set_margin_top: 4,
-                                                        set_margin_bottom: 4,
-                                                    },
-
-                                                    gtk::Button {
-                                                        set_has_frame: false,
-                                                        set_css_classes: &["flat", "menu-btn"],
-                                                        #[wrap(Some)]
-                                                        set_child = &gtk::Box {
-                                                            set_orientation: gtk::Orientation::Horizontal,
-                                                            set_spacing: 12,
-                                                            gtk::Label {
-                                                                set_label: "Preferences",
-                                                                set_hexpand: true,
-                                                                set_halign: gtk::Align::Start,
-                                                            },
-                                                            gtk::Label {
-                                                                set_label: "Ctrl+,",
-                                                                set_css_classes: &["dim-label"],
-                                                            },
-                                                        },
-                                                        connect_clicked[sender, main_popover] => move |_| {
-                                                            main_popover.popdown();
-                                                            sender.input(AppMsg::OpenSettings);
-                                                        },
-                                                    },
-
-                                                    gtk::Separator {
-                                                        set_margin_top: 4,
-                                                        set_margin_bottom: 4,
-                                                    }, 
-
-                                                    gtk::Button {
-                                                        set_has_frame: false,
-                                                        set_css_classes: &["flat", "menu-btn"],
-                                                        #[wrap(Some)]
-                                                        set_child = &gtk::Box {
-                                                            set_orientation: gtk::Orientation::Horizontal,
-                                                            set_spacing: 12,
-                                                            gtk::Label {
-                                                                set_label: "Shortcuts",
-                                                                set_hexpand: true,
-                                                                set_halign: gtk::Align::Start,
-                                                            },
-                                                            gtk::Label {
-                                                                set_label: "Ctrl+?",
-                                                                set_css_classes: &["dim-label"],
-                                                            },
-                                                        },
-                                                        connect_clicked[sender, main_popover] => move |_| {
-                                                            main_popover.popdown();
-                                                            sender.input(AppMsg::OpenShortcuts);
-                                                        },
-                                                    },
-
-                                                    gtk::Button {
-                                                        set_has_frame: false,
-                                                        set_css_classes: &["flat", "menu-btn"],
-                                                        #[wrap(Some)]
-                                                        set_child = &gtk::Box {
-                                                            set_orientation: gtk::Orientation::Horizontal,
-                                                            set_spacing: 12,
-                                                            gtk::Label {
-                                                                set_label: "About",
-                                                                set_hexpand: true,
-                                                                set_halign: gtk::Align::Start,
-                                                            },
-                                                        },
-                                                        connect_clicked[sender, main_popover] => move |_| {
-                                                            main_popover.popdown();
-                                                            sender.input(AppMsg::OpenAbout);
-                                                        },
-                                                    },
-                                                }
-                                            }
-                                        },
-                                        pack_start = model.download_status_bar.widget(),
-                                    },
-
-                                    // Sidebar content
-                                    #[wrap(Some)]
-                                    set_content = model.sidebar.widget(),
-                                }
-                            },
-
-                            // ── Content pane ─────────────────────────────────
-                            #[wrap(Some)]
-                            set_content = &adw::NavigationPage {
-                                set_title: "Details",
-                                #[wrap(Some)]
-                                set_child = &adw::ToolbarView {
-                                    add_top_bar = &adw::HeaderBar {
-                                        // Sidebar toggle (only shown when sidebar is collapsed)
-                                        pack_start = &gtk::Button {
-                                            set_icon_name: "sidebar-show-symbolic",
-                                            set_tooltip_text: Some("Show Sidebar"),
-                                            connect_clicked[sender] => move |_| {
-                                                sender.input(AppMsg::ToggleSidebar);
-                                            },
-                                        },
-
-                                        pack_start = &gtk::Button {
-                                            set_icon_name: "go-previous-symbolic",
-                                            #[watch]
-                                            set_tooltip_text: Some(if model.active_sidebar_page == SidebarPage::InstanceDetails { "Back to library" } else { "Back to all instances" }),
-                                            set_has_frame: false,
-                                            #[watch]
-                                            set_visible: (model.active_sidebar_page == SidebarPage::Library && model.current_folder.is_some())
-                                                || model.active_sidebar_page == SidebarPage::InstanceDetails,
-                                            connect_clicked[sender] => move |_| {
-                                                sender.input(AppMsg::GoBack);
-                                            },
-                                        },
-
-                                        #[wrap(Some)]
-                                        #[name = "title_widget"]
-                                        set_title_widget = &gtk::Stack {
-                                            add_named[Some("library")] = &adw::WindowTitle {
-                                                set_title: "Library",
-                                                #[watch]
-                                                set_subtitle: model.current_folder.as_deref().unwrap_or(""),
-                                            },
-                                            add_named[Some("accounts")] = &adw::WindowTitle {
-                                                set_title: "Accounts",
-                                            },
-                                            add_named[Some("playtime")] = &adw::WindowTitle {
-                                                set_title: "Playtime",
-                                            },
-                                            add_named[Some("assets")] = &adw::WindowTitle {
-                                                set_title: "Assets",
-                                            },
-                                            add_named[Some("details")] = &adw::WindowTitle {
-                                                #[watch]
-                                                set_title: model.selected_instance
-                                                    .and_then(|i| model.instances.get(i))
-                                                    .map(|inst| inst.name.as_str())
-                                                    .unwrap_or("Instance Details"),
-                                                #[watch]
-                                                set_subtitle: model.selected_instance
-                                                    .and_then(|i| model.instances.get(i))
-                                                    .and_then(|inst| inst.minecraft_version.as_deref())
-                                                    .unwrap_or(""),
-                                            },
-                                            // Must come after add_named so children exist on first render
-                                            #[watch]
-                                            set_visible_child_name: match model.active_sidebar_page {
-                                                SidebarPage::Library => "library",
-                                                SidebarPage::Accounts => "accounts",
-                                                SidebarPage::Playtime => "playtime",
-                                                SidebarPage::Assets => "assets",
-                                                SidebarPage::InstanceDetails => "details",
-                                            },
-                                        },
-
-                                        pack_end = &gtk::Stack {
-                                            set_hhomogeneous: false,
-                                            set_vhomogeneous: false,
-
-                                            add_named[Some("library")] = &gtk::Box {
-                                                set_orientation: gtk::Orientation::Horizontal,
-                                                set_spacing: 4,
-
-                                                gtk::MenuButton {
-                                                    set_icon_name: "list-add-symbolic",
-                                                    set_tooltip_text: Some("Add"),
-                                                    set_css_classes: &["flat"],
-                                                    #[wrap(Some)]
-                                                    set_popover: add_popover = &gtk::Popover {
-                                                        set_autohide: true,
-                                                        set_has_arrow: true,
-                                                        #[wrap(Some)]
-                                                        set_child = &gtk::Box {
-                                                            set_orientation: gtk::Orientation::Vertical,
-                                                            set_css_classes: &["menu-box"],
-                                                            set_width_request: 200,
-
-                                                            gtk::Button {
-                                                                set_has_frame: false,
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                #[wrap(Some)]
-                                                                set_child = &gtk::Box {
-                                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                                    set_spacing: 12,
-                                                                    gtk::Label {
-                                                                        set_label: "Create Instance",
-                                                                        set_hexpand: true,
-                                                                        set_halign: gtk::Align::Start,
-                                                                    },
-                                                                },
-                                                                connect_clicked[sender, add_popover] => move |_| {
-                                                                    add_popover.popdown();
-                                                                    sender.input(AppMsg::AddInstance);
-                                                                },
-                                                            },
-
-                                                            gtk::Button {
-                                                                set_has_frame: false,
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                #[wrap(Some)]
-                                                                set_child = &gtk::Box {
-                                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                                    set_spacing: 12,
-                                                                    gtk::Label {
-                                                                        set_label: "Create Group",
-                                                                        set_hexpand: true,
-                                                                        set_halign: gtk::Align::Start,
-                                                                    },
-                                                                },
-                                                                connect_clicked[sender, add_popover] => move |_| {
-                                                                    add_popover.popdown();
-                                                                    sender.input(AppMsg::CreateGroupRequest);
-                                                                },
-                                                            },
-
-                                                            gtk::Separator {
-                                                                set_css_classes: &["menu-separator"],
-                                                            },
-
-                                                            gtk::Button {
-                                                                set_has_frame: false,
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                #[wrap(Some)]
-                                                                set_child = &gtk::Box {
-                                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                                    set_spacing: 12,
-                                                                    gtk::Label {
-                                                                        set_label: "Import Instance",
-                                                                        set_hexpand: true,
-                                                                        set_halign: gtk::Align::Start,
-                                                                    },
-                                                                },
-                                                                connect_clicked[sender, add_popover] => move |_| {
-                                                                    add_popover.popdown();
-                                                                    sender.input(AppMsg::ImportRequest);
-                                                                },
-                                                            },
-                                                        }
-                                                    }
-                                                },
-
-                                                adw::SplitButton {
-                                                    #[watch]
-                                                    set_icon_name: if model.overview_layout == LayoutMode::Grid { "view-list-symbolic" } else { "view-grid-symbolic" },
-                                                    #[watch]
-                                                    set_tooltip_text: Some(if model.overview_layout == LayoutMode::Grid { "List View" } else { "Grid View" }),
-                                                    connect_clicked => AppMsg::ToggleOverviewLayout,
-                                                    #[wrap(Some)]
-                                                    set_popover: sort_popover = &gtk::Popover {
-                                                        set_autohide: true,
-                                                        set_has_arrow: true,
-                                                        #[wrap(Some)]
-                                                        set_child = &gtk::Box {
-                                                            set_orientation: gtk::Orientation::Vertical,
-                                                            set_css_classes: &["menu-box"],
-                                                            set_width_request: 180,
-
-                                                            gtk::Button {
-                                                                set_has_frame: false,
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                #[wrap(Some)]
-                                                                set_child = &gtk::Box {
-                                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                                    set_spacing: 12,
-                                                                    gtk::Image {
-                                                                        set_icon_name: Some("object-select-symbolic"),
-                                                                        #[watch]
-                                                                        set_visible: model.config.sort_by == SortBy::Alphabetical,
-                                                                    },
-                                                                    gtk::Box {
-                                                                        set_width_request: 16,
-                                                                        #[watch]
-                                                                        set_visible: model.config.sort_by != SortBy::Alphabetical,
-                                                                    },
-                                                                    gtk::Label {
-                                                                        set_label: "Alphabetical",
-                                                                        set_hexpand: true,
-                                                                        set_halign: gtk::Align::Start,
-                                                                    },
-                                                                },
-                                                                connect_clicked[sender, sort_popover] => move |_| {
-                                                                    sort_popover.popdown();
-                                                                    sender.input(AppMsg::SetOverviewSortBy(SortBy::Alphabetical));
-                                                                }
-                                                            },
-
-                                                            gtk::Button {
-                                                                set_has_frame: false,
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                #[wrap(Some)]
-                                                                set_child = &gtk::Box {
-                                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                                    set_spacing: 12,
-                                                                    gtk::Image {
-                                                                        set_icon_name: Some("object-select-symbolic"),
-                                                                        #[watch]
-                                                                        set_visible: model.config.sort_by == SortBy::LastPlayed,
-                                                                    },
-                                                                    gtk::Box {
-                                                                        set_width_request: 16,
-                                                                        #[watch]
-                                                                        set_visible: model.config.sort_by != SortBy::LastPlayed,
-                                                                    },
-                                                                    gtk::Label {
-                                                                        set_label: "Last Played",
-                                                                        set_hexpand: true,
-                                                                        set_halign: gtk::Align::Start,
-                                                                    },
-                                                                },
-                                                                connect_clicked[sender, sort_popover] => move |_| {
-                                                                    sort_popover.popdown();
-                                                                    sender.input(AppMsg::SetOverviewSortBy(SortBy::LastPlayed));
-                                                                }
-                                                            },
-
-                                                            gtk::Button {
-                                                                set_has_frame: false,
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                #[wrap(Some)]
-                                                                set_child = &gtk::Box {
-                                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                                    set_spacing: 12,
-                                                                    gtk::Image {
-                                                                        set_icon_name: Some("object-select-symbolic"),
-                                                                        #[watch]
-                                                                        set_visible: model.config.sort_by == SortBy::Playtime,
-                                                                    },
-                                                                    gtk::Box {
-                                                                        set_width_request: 16,
-                                                                        #[watch]
-                                                                        set_visible: model.config.sort_by != SortBy::Playtime,
-                                                                    },
-                                                                    gtk::Label {
-                                                                        set_label: "Playtime",
-                                                                        set_hexpand: true,
-                                                                        set_halign: gtk::Align::Start,
-                                                                    },
-                                                                },
-                                                                connect_clicked[sender, sort_popover] => move |_| {
-                                                                    sort_popover.popdown();
-                                                                    sender.input(AppMsg::SetOverviewSortBy(SortBy::Playtime));
-                                                                }
-                                                            },
-                                                        }
-                                                    }
-                                                },
-
-                                                gtk::Button {
-                                                    set_icon_name: "view-refresh-symbolic",
-                                                    set_tooltip_text: Some("Refresh Instances"),
-                                                    set_css_classes: &["flat"],
-                                                    #[watch]
-                                                    set_sensitive: !model.loading_instances,
-                                                    connect_clicked => AppMsg::RefreshInstances,
-                                                },
-                                            },
-
-                                            add_named[Some("accounts")] = &gtk::Box {
-                                                set_orientation: gtk::Orientation::Horizontal,
-                                                set_spacing: 4,
-
-                                                gtk::MenuButton {
-                                                    set_icon_name: "list-add-symbolic",
-                                                    set_tooltip_text: Some("Add Account"),
-                                                    set_css_classes: &["flat"],
-                                                    #[wrap(Some)]
-                                                    set_popover: add_account_popover = &gtk::Popover {
-                                                        gtk::Box {
-                                                            set_orientation: gtk::Orientation::Vertical,
-                                                            set_css_classes: &["menu-box"],
-
-                                                            gtk::Button {
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                gtk::Box {
-                                                                    set_spacing: 12,
-                                                                    gtk::Image::from_icon_name("web-browser-symbolic"),
-                                                                    gtk::Label::new(Some("Microsoft Account")),
-                                                                },
-                                                                connect_clicked[sender, add_account_popover] => move |_| {
-                                                                    add_account_popover.popdown();
-                                                                    sender.input(AppMsg::LoginStart);
-                                                                }
-                                                            },
-
-                                                            gtk::Button {
-                                                                set_css_classes: &["flat", "menu-btn"],
-                                                                gtk::Box {
-                                                                    set_spacing: 12,
-                                                                    gtk::Image::from_icon_name("network-offline-symbolic"),
-                                                                    gtk::Label::new(Some("Offline Account")),
-                                                                },
-                                                                connect_clicked[sender, add_account_popover] => move |_| {
-                                                                    add_account_popover.popdown();
-                                                                    sender.input(AppMsg::ShowAddOfflineDialog);
-                                                                }
-                                                            },
-                                                        }
-                                                    }
-                                                },
-
-                                                gtk::Button {
-                                                    set_icon_name: "view-refresh-symbolic",
-                                                    set_tooltip_text: Some("Refresh Accounts"),
-                                                    set_css_classes: &["flat"],
-                                                    connect_clicked => AppMsg::RefreshAccountsRequest,
-                                                },
-                                            },
-
-                                            add_named[Some("playtime")] = &gtk::Box {
-                                                set_orientation: gtk::Orientation::Horizontal,
-                                                set_spacing: 4,
-
-                                                gtk::Button {
-                                                    set_icon_name: "view-refresh-symbolic",
-                                                    set_tooltip_text: Some("Refresh Playtime"),
-                                                    set_css_classes: &["flat"],
-                                                    connect_clicked => AppMsg::RefreshPlaytime,
-                                                },
-                                            },
-                                            
-                                            add_named[Some("assets")] = &gtk::Box {
-                                                set_orientation: gtk::Orientation::Horizontal,
-                                                set_spacing: 4,
-
-                                                gtk::Button {
-                                                    set_icon_name: "view-refresh-symbolic",
-                                                    set_tooltip_text: Some("Refresh Assets"),
-                                                    set_css_classes: &["flat"],
-                                                    connect_clicked => AppMsg::RefreshAssets,
-                                                },
-                                            },
-
-                                            add_named[Some("empty")] = &gtk::Box {},
-
-                                            // Must come after add_named so children exist on first render
-                                            #[watch]
-                                            set_visible_child_name: match model.active_sidebar_page {
-                                                SidebarPage::Library => "library",
-                                                SidebarPage::Accounts => "accounts",
-                                                SidebarPage::Playtime => "playtime",
-                                                SidebarPage::Assets => "assets",
-                                                _ => "empty",
-                                            },
-                                        },
-                                    },
-
-                                    #[wrap(Some)]
-                                    set_content = &gtk::Box {
-                                        set_orientation: gtk::Orientation::Vertical,
-                                        set_vexpand: true,
-
-                                        adw::Banner {
-                                            set_title: "Warning! Both 'minecraft' and '.minecraft' folders exist.",
-                                            set_button_label: Some("Open Instance Folder"),
-                                            set_use_markup: false,
-                                            #[watch]
-                                            set_revealed: model.has_selected_mismatch(),
-                                            connect_button_clicked => AppMsg::OpenInstanceFolder,
-                                        },
-
-                                        gtk::Stack {
-                                            set_vexpand: true,
-
-                                            add_named[Some("library")] = model.overview_grid.widget(),
-
-                                            add_named[Some("accounts")] = model.account_view.widget(),
-
-                                            add_named[Some("playtime")] = model.playtime_view.widget(),
-
-                                            add_named[Some("assets")] = model.asset_view.widget(),
-
-                                            add_named[Some("instance")] = &gtk::Box {
+                                            set_child = &gtk::Box {
                                                 set_orientation: gtk::Orientation::Vertical,
-                                                set_vexpand: true,
+                                                set_css_classes: &["menu-box"],
+                                                set_width_request: 200,
 
-                                                // Welcome page (no instance selected)
-                                                gtk::Box {
-                                                    set_orientation: gtk::Orientation::Vertical,
-                                                    set_valign: gtk::Align::Center,
-                                                    set_halign: gtk::Align::Center,
-                                                    set_spacing: 24,
-                                                    set_vexpand: true,
-                                                    #[watch]
-                                                    set_visible: model.selected_instance.is_none(),
-
-
-                                                },
-
-                                                // Toolbar for instance tabs
-                                                gtk::Box {
-                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                    set_css_classes: &["toolbar"],
-                                                    #[watch]
-                                                    set_visible: model.selected_instance.is_some(),
-                                                    set_halign: gtk::Align::Fill,
-
-                                                    adw::ViewSwitcher {
-                                                        set_stack: Some(&detail_stack),
-                                                        #[watch]
-                                                        set_policy: if model.is_narrow { adw::ViewSwitcherPolicy::Narrow } else { adw::ViewSwitcherPolicy::Wide },
-                                                        set_hexpand: true,
-                                                        set_halign: gtk::Align::Center,
-                                                    }
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Label {
+                                                            set_label: "Setup Walkthrough",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
+                                                    },
+                                                    connect_clicked[sender, main_popover] => move |_| {
+                                                        main_popover.popdown();
+                                                        sender.input(AppMsg::OpenSetup);
+                                                    },
                                                 },
 
                                                 gtk::Separator {
-                                                    set_orientation: gtk::Orientation::Horizontal,
-                                                    #[watch]
-                                                    set_visible: model.selected_instance.is_some(),
+                                                    set_margin_top: 4,
+                                                    set_margin_bottom: 4,
                                                 },
 
-                                                // Instance detail tabs
-                                                #[name = "detail_stack"]
-                                                adw::ViewStack {
-                                                    #[watch]
-                                                    set_visible: model.selected_instance.is_some(),
-                                                    set_vexpand: true,
-                                                    connect_visible_child_name_notify[sender] => move |stack| {
-                                                        if let Some(name) = stack.visible_child_name() {
-                                                            sender.input(AppMsg::SwitchTab(name.to_string()));
-                                                        }
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Label {
+                                                            set_label: "Preferences",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
+                                                        gtk::Label {
+                                                            set_label: "Ctrl+,",
+                                                            set_css_classes: &["dim-label"],
+                                                        },
                                                     },
-
-                                                    #[name = "summary_tab"]
-                                                    add_titled_with_icon[Some("summary"), "Summary", "go-home-symbolic"] = &adw::Bin {
-                                                        set_tooltip_text: Some("View instance summary and details"),
-                                                        #[wrap(Some)]
-                                                        set_child = model.instance_summary.widget(),
+                                                    connect_clicked[sender, main_popover] => move |_| {
+                                                        main_popover.popdown();
+                                                        sender.input(AppMsg::OpenSettings);
                                                     },
+                                                },
 
-                                                    #[name = "editor_tab"]
-                                                    add_titled_with_icon[Some("editor"), "Editor", "document-edit-symbolic"] = &adw::Bin {
-                                                        set_tooltip_text: Some("Edit instance files and configuration"),
-                                                        #[wrap(Some)]
-                                                        set_child = model.instance_editor_tab.widget(),
+                                                gtk::Separator {
+                                                    set_margin_top: 4,
+                                                    set_margin_bottom: 4,
+                                                },
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Label {
+                                                            set_label: "Shortcuts",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
+                                                        gtk::Label {
+                                                            set_label: "Ctrl+?",
+                                                            set_css_classes: &["dim-label"],
+                                                        },
                                                     },
-
-                                                    #[name = "settings_tab"]
-                                                    add_titled_with_icon[Some("settings"), "Settings", "emblem-system-symbolic"] = &adw::Bin {
-                                                        set_tooltip_text: Some("Configure instance settings"),
-                                                        #[wrap(Some)]
-                                                        set_child = model.instance_settings_tab.widget(),
+                                                    connect_clicked[sender, main_popover] => move |_| {
+                                                        main_popover.popdown();
+                                                        sender.input(AppMsg::OpenShortcuts);
                                                     },
+                                                },
 
-                                                    #[name = "console_tab"]
-                                                    add_titled_with_icon[Some("console"), "Console", "utilities-terminal-symbolic"] = &adw::Bin {
-                                                        set_tooltip_text: Some("View instance console logs and output"),
-                                                        #[wrap(Some)]
-                                                        set_child = model.instance_console.widget(),
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Label {
+                                                            set_label: "About",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
                                                     },
+                                                    connect_clicked[sender, main_popover] => move |_| {
+                                                        main_popover.popdown();
+                                                        sender.input(AppMsg::OpenAbout);
+                                                    },
+                                                },
+                                            }
+                                        }
+                                    },
+                                    pack_start = model.download_status_bar.widget(),
+                                },
 
-                                                    // Must come after add_titled_with_icon so children exist on first render
-                                                    #[watch]
-                                                    set_visible_child_name: if model.active_tab.is_empty() { "summary" } else { &model.active_tab },
+                                // Sidebar content
+                                #[wrap(Some)]
+                                set_content = &gtk::Stack {
+                                    set_transition_type: gtk::StackTransitionType::SlideLeftRight,
+
+                                    add_named[Some("global")] = model.sidebar.widget(),
+
+                                    add_named[Some("instance")] = model.instance_sidebar.widget(),
+
+                                    #[watch]
+                                    set_visible_child_name: if model.selected_instance.is_some() {
+                                        "instance"
+                                    } else {
+                                        "global"
+                                    },
+                                },
+                            }
+                        },
+
+                        // ── Content pane ─────────────────────────────────
+                        #[wrap(Some)]
+                        set_content = &adw::NavigationPage {
+                            set_title: "Details",
+                            #[wrap(Some)]
+                            set_child = &adw::ToolbarView {
+                                add_top_bar = &adw::HeaderBar {
+                                    // Sidebar toggle (only shown when sidebar is collapsed)
+                                    pack_start = &gtk::Button {
+                                        set_icon_name: "sidebar-show-symbolic",
+                                        set_tooltip_text: Some("Show Sidebar"),
+                                        connect_clicked[sender] => move |_| {
+                                            sender.input(AppMsg::ToggleSidebar);
+                                        },
+                                    },
+
+                                    pack_start = &gtk::Button {
+                                         set_icon_name: "go-previous-symbolic",
+                                         #[watch]
+                                         set_tooltip_text: Some(if model.active_sidebar_page == SidebarPage::InstanceDetails {
+                                             "Back to library"
+                                         } else if model.active_sidebar_page == SidebarPage::Assets {
+                                             "Back to categories"
+                                         } else {
+                                             "Back to all instances"
+                                         }),
+                                         set_has_frame: false,
+                                         #[watch]
+                                         set_visible: (model.active_sidebar_page == SidebarPage::Library && model.current_folder.is_some())
+                                             || model.active_sidebar_page == SidebarPage::InstanceDetails
+                                             || (model.active_sidebar_page == SidebarPage::Assets && model.active_asset_subpage.is_some()),
+                                         connect_clicked[sender] => move |_| {
+                                             sender.input(AppMsg::GoBack);
+                                         },
+                                     },
+
+                                    #[wrap(Some)]
+                                    #[name = "title_widget"]
+                                    set_title_widget = &gtk::Stack {
+                                        add_named[Some("library")] = &adw::WindowTitle {
+                                            set_title: "Library",
+                                            #[watch]
+                                            set_subtitle: model.current_folder.as_deref().unwrap_or(""),
+                                        },
+                                        add_named[Some("accounts")] = &adw::WindowTitle {
+                                            set_title: "Accounts",
+                                        },
+                                        add_named[Some("playtime")] = &adw::WindowTitle {
+                                            set_title: "Playtime",
+                                        },
+                                        add_named[Some("assets")] = &adw::WindowTitle {
+                                            set_title: "Assets",
+                                            #[watch]
+                                            set_subtitle: model.active_asset_subpage.as_deref().unwrap_or(""),
+                                        },
+                                        add_named[Some("details")] = &adw::WindowTitle {
+                                            #[watch]
+                                            set_title: model.selected_instance
+                                                .and_then(|i| model.instances.get(i))
+                                                .map(|inst| inst.name.as_str())
+                                                .unwrap_or("Instance Details"),
+                                            #[watch]
+                                            set_subtitle: match model.active_tab.as_str() {
+                                                "summary" => "Summary",
+                                                "editor" => "Editor",
+                                                "settings" => "Settings",
+                                                "console" => "Console",
+                                                _ => "Summary",
+                                            },
+                                        },
+                                        // Must come after add_named so children exist on first render
+                                        #[watch]
+                                        set_visible_child_name: match model.active_sidebar_page {
+                                            SidebarPage::Library => "library",
+                                            SidebarPage::Accounts => "accounts",
+                                            SidebarPage::Playtime => "playtime",
+                                            SidebarPage::Assets => "assets",
+                                            SidebarPage::InstanceDetails => "details",
+                                        },
+                                    },
+
+                                    pack_end = &gtk::Stack {
+                                        set_hhomogeneous: false,
+                                        set_vhomogeneous: false,
+
+                                        add_named[Some("library")] = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 4,
+
+                                            gtk::MenuButton {
+                                                set_icon_name: "list-add-symbolic",
+                                                set_tooltip_text: Some("Add"),
+                                                set_css_classes: &["flat"],
+                                                #[wrap(Some)]
+                                                set_popover: add_popover = &gtk::Popover {
+                                                    set_autohide: true,
+                                                    set_has_arrow: true,
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Vertical,
+                                                        set_css_classes: &["menu-box"],
+                                                        set_width_request: 200,
+
+                                                        gtk::Button {
+                                                            set_has_frame: false,
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            #[wrap(Some)]
+                                                            set_child = &gtk::Box {
+                                                                set_orientation: gtk::Orientation::Horizontal,
+                                                                set_spacing: 12,
+                                                                gtk::Label {
+                                                                    set_label: "Create Instance",
+                                                                    set_hexpand: true,
+                                                                    set_halign: gtk::Align::Start,
+                                                                },
+                                                            },
+                                                            connect_clicked[sender, add_popover] => move |_| {
+                                                                add_popover.popdown();
+                                                                sender.input(AppMsg::AddInstance);
+                                                            },
+                                                        },
+
+                                                        gtk::Button {
+                                                            set_has_frame: false,
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            #[wrap(Some)]
+                                                            set_child = &gtk::Box {
+                                                                set_orientation: gtk::Orientation::Horizontal,
+                                                                set_spacing: 12,
+                                                                gtk::Label {
+                                                                    set_label: "Create Group",
+                                                                    set_hexpand: true,
+                                                                    set_halign: gtk::Align::Start,
+                                                                },
+                                                            },
+                                                            connect_clicked[sender, add_popover] => move |_| {
+                                                                add_popover.popdown();
+                                                                sender.input(AppMsg::CreateGroupRequest);
+                                                            },
+                                                        },
+
+                                                        gtk::Separator {
+                                                            set_css_classes: &["menu-separator"],
+                                                        },
+
+                                                        gtk::Button {
+                                                            set_has_frame: false,
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            #[wrap(Some)]
+                                                            set_child = &gtk::Box {
+                                                                set_orientation: gtk::Orientation::Horizontal,
+                                                                set_spacing: 12,
+                                                                gtk::Label {
+                                                                    set_label: "Import Instance",
+                                                                    set_hexpand: true,
+                                                                    set_halign: gtk::Align::Start,
+                                                                },
+                                                            },
+                                                            connect_clicked[sender, add_popover] => move |_| {
+                                                                add_popover.popdown();
+                                                                sender.input(AppMsg::ImportRequest);
+                                                            },
+                                                        },
+                                                    }
                                                 }
                                             },
 
-                                            // Must come after add_named so children exist on first render
-                                            #[watch]
-                                            set_visible_child_name: match model.active_sidebar_page {
-                                                SidebarPage::Library => "library",
-                                                SidebarPage::Accounts => "accounts",
-                                                SidebarPage::Playtime => "playtime",
-                                                SidebarPage::Assets => "assets",
-                                                SidebarPage::InstanceDetails => "instance",
+                                            adw::SplitButton {
+                                                #[watch]
+                                                set_icon_name: if model.overview_layout == LayoutMode::Grid { "view-list-symbolic" } else { "view-grid-symbolic" },
+                                                #[watch]
+                                                set_tooltip_text: Some(if model.overview_layout == LayoutMode::Grid { "List View" } else { "Grid View" }),
+                                                connect_clicked => AppMsg::ToggleOverviewLayout,
+                                                #[wrap(Some)]
+                                                set_popover: sort_popover = &gtk::Popover {
+                                                    set_autohide: true,
+                                                    set_has_arrow: true,
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Vertical,
+                                                        set_css_classes: &["menu-box"],
+                                                        set_width_request: 180,
+
+                                                        gtk::Button {
+                                                            set_has_frame: false,
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            #[wrap(Some)]
+                                                            set_child = &gtk::Box {
+                                                                set_orientation: gtk::Orientation::Horizontal,
+                                                                set_spacing: 12,
+                                                                gtk::Image {
+                                                                    set_icon_name: Some("object-select-symbolic"),
+                                                                    #[watch]
+                                                                    set_visible: model.config.sort_by == SortBy::Alphabetical,
+                                                                },
+                                                                gtk::Box {
+                                                                    set_width_request: 16,
+                                                                    #[watch]
+                                                                    set_visible: model.config.sort_by != SortBy::Alphabetical,
+                                                                },
+                                                                gtk::Label {
+                                                                    set_label: "Alphabetical",
+                                                                    set_hexpand: true,
+                                                                    set_halign: gtk::Align::Start,
+                                                                },
+                                                            },
+                                                            connect_clicked[sender, sort_popover] => move |_| {
+                                                                sort_popover.popdown();
+                                                                sender.input(AppMsg::SetOverviewSortBy(SortBy::Alphabetical));
+                                                            }
+                                                        },
+
+                                                        gtk::Button {
+                                                            set_has_frame: false,
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            #[wrap(Some)]
+                                                            set_child = &gtk::Box {
+                                                                set_orientation: gtk::Orientation::Horizontal,
+                                                                set_spacing: 12,
+                                                                gtk::Image {
+                                                                    set_icon_name: Some("object-select-symbolic"),
+                                                                    #[watch]
+                                                                    set_visible: model.config.sort_by == SortBy::LastPlayed,
+                                                                },
+                                                                gtk::Box {
+                                                                    set_width_request: 16,
+                                                                    #[watch]
+                                                                    set_visible: model.config.sort_by != SortBy::LastPlayed,
+                                                                },
+                                                                gtk::Label {
+                                                                    set_label: "Last Played",
+                                                                    set_hexpand: true,
+                                                                    set_halign: gtk::Align::Start,
+                                                                },
+                                                            },
+                                                            connect_clicked[sender, sort_popover] => move |_| {
+                                                                sort_popover.popdown();
+                                                                sender.input(AppMsg::SetOverviewSortBy(SortBy::LastPlayed));
+                                                            }
+                                                        },
+
+                                                        gtk::Button {
+                                                            set_has_frame: false,
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            #[wrap(Some)]
+                                                            set_child = &gtk::Box {
+                                                                set_orientation: gtk::Orientation::Horizontal,
+                                                                set_spacing: 12,
+                                                                gtk::Image {
+                                                                    set_icon_name: Some("object-select-symbolic"),
+                                                                    #[watch]
+                                                                    set_visible: model.config.sort_by == SortBy::Playtime,
+                                                                },
+                                                                gtk::Box {
+                                                                    set_width_request: 16,
+                                                                    #[watch]
+                                                                    set_visible: model.config.sort_by != SortBy::Playtime,
+                                                                },
+                                                                gtk::Label {
+                                                                    set_label: "Playtime",
+                                                                    set_hexpand: true,
+                                                                    set_halign: gtk::Align::Start,
+                                                                },
+                                                            },
+                                                            connect_clicked[sender, sort_popover] => move |_| {
+                                                                sort_popover.popdown();
+                                                                sender.input(AppMsg::SetOverviewSortBy(SortBy::Playtime));
+                                                            }
+                                                        },
+                                                    }
+                                                }
                                             },
-                                        }
+
+                                            gtk::Button {
+                                                set_icon_name: "view-refresh-symbolic",
+                                                set_tooltip_text: Some("Refresh Instances"),
+                                                set_css_classes: &["flat"],
+                                                #[watch]
+                                                set_sensitive: !model.loading_instances,
+                                                connect_clicked => AppMsg::RefreshInstances,
+                                            },
+                                        },
+
+                                        add_named[Some("accounts")] = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 4,
+
+                                            gtk::MenuButton {
+                                                set_icon_name: "list-add-symbolic",
+                                                set_tooltip_text: Some("Add Account"),
+                                                set_css_classes: &["flat"],
+                                                #[wrap(Some)]
+                                                set_popover: add_account_popover = &gtk::Popover {
+                                                    gtk::Box {
+                                                        set_orientation: gtk::Orientation::Vertical,
+                                                        set_css_classes: &["menu-box"],
+
+                                                        gtk::Button {
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            gtk::Box {
+                                                                set_spacing: 12,
+                                                                gtk::Image::from_icon_name("web-browser-symbolic"),
+                                                                gtk::Label::new(Some("Microsoft Account")),
+                                                            },
+                                                            connect_clicked[sender, add_account_popover] => move |_| {
+                                                                add_account_popover.popdown();
+                                                                sender.input(AppMsg::LoginStart);
+                                                            }
+                                                        },
+
+                                                        gtk::Button {
+                                                            set_css_classes: &["flat", "menu-btn"],
+                                                            gtk::Box {
+                                                                set_spacing: 12,
+                                                                gtk::Image::from_icon_name("network-offline-symbolic"),
+                                                                gtk::Label::new(Some("Offline Account")),
+                                                            },
+                                                            connect_clicked[sender, add_account_popover] => move |_| {
+                                                                add_account_popover.popdown();
+                                                                sender.input(AppMsg::ShowAddOfflineDialog);
+                                                            }
+                                                        },
+                                                    }
+                                                }
+                                            },
+
+                                            gtk::Button {
+                                                set_icon_name: "view-refresh-symbolic",
+                                                set_tooltip_text: Some("Refresh Accounts"),
+                                                set_css_classes: &["flat"],
+                                                connect_clicked => AppMsg::RefreshAccountsRequest,
+                                            },
+                                        },
+
+                                        add_named[Some("playtime")] = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 4,
+
+                                            gtk::Button {
+                                                set_icon_name: "view-refresh-symbolic",
+                                                set_tooltip_text: Some("Refresh Playtime"),
+                                                set_css_classes: &["flat"],
+                                                connect_clicked => AppMsg::RefreshPlaytime,
+                                            },
+                                        },
+
+                                        add_named[Some("assets")] = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 4,
+
+                                            gtk::Button {
+                                                set_icon_name: "view-refresh-symbolic",
+                                                set_tooltip_text: Some("Refresh Assets"),
+                                                set_css_classes: &["flat"],
+                                                connect_clicked => AppMsg::RefreshAssets,
+                                            },
+                                        },
+
+                                        add_named[Some("empty")] = &gtk::Box {},
+
+                                        // Must come after add_named so children exist on first render
+                                        #[watch]
+                                        set_visible_child_name: match model.active_sidebar_page {
+                                            SidebarPage::Library => "library",
+                                            SidebarPage::Accounts => "accounts",
+                                            SidebarPage::Playtime => "playtime",
+                                            SidebarPage::Assets => "assets",
+                                            _ => "empty",
+                                        },
                                     },
-                                }
-                            },
-                        }
+                                },
+
+                                #[wrap(Some)]
+                                set_content = &gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_vexpand: true,
+
+                                adw::Banner {
+                                        set_title: "Warning! Both 'minecraft' and '.minecraft' folders exist.",
+                                        set_button_label: Some("Open Instance Folder"),
+                                        set_use_markup: false,
+                                        #[watch]
+                                        set_revealed: model.has_selected_mismatch(),
+                                        connect_button_clicked => AppMsg::OpenInstanceFolder,
+                                    },
+
+                                    gtk::Stack {
+                                        set_vexpand: true,
+                                        set_transition_type: gtk::StackTransitionType::Crossfade,
+                                        set_transition_duration: 250,
+
+                                        add_named[Some("library")] = model.overview_grid.widget(),
+
+                                        add_named[Some("accounts")] = model.account_view.widget(),
+
+                                        add_named[Some("playtime")] = model.playtime_view.widget(),
+
+                                        add_named[Some("assets")] = model.asset_view.widget(),
+
+                                        add_named[Some("instance")] = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Vertical,
+                                            set_vexpand: true,
+
+                                            // Welcome page (no instance selected)
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_valign: gtk::Align::Center,
+                                                set_halign: gtk::Align::Center,
+                                                set_spacing: 24,
+                                                set_vexpand: true,
+                                                #[watch]
+                                                set_visible: model.selected_instance.is_none(),
+
+
+                                            },
+
+
+
+                                            // Instance detail tabs
+                                            #[name = "detail_stack"]
+                                            adw::ViewStack {
+                                                #[watch]
+                                                set_visible: model.selected_instance.is_some(),
+                                                set_vexpand: true,
+                                                connect_visible_child_name_notify[sender] => move |stack| {
+                                                    if let Some(name) = stack.visible_child_name() {
+                                                        sender.input(AppMsg::SwitchTab(name.to_string()));
+                                                    }
+                                                },
+
+                                                #[name = "summary_tab"]
+                                                add_titled_with_icon[Some("summary"), "Summary", "go-home-symbolic"] = &adw::Bin {
+                                                    set_tooltip_text: Some("View instance summary and details"),
+                                                    #[wrap(Some)]
+                                                    set_child = model.instance_summary.widget(),
+                                                },
+
+                                                #[name = "editor_tab"]
+                                                add_titled_with_icon[Some("editor"), "Editor", "document-edit-symbolic"] = &adw::Bin {
+                                                    set_tooltip_text: Some("Edit instance files and configuration"),
+                                                    #[wrap(Some)]
+                                                    set_child = model.instance_editor_tab.widget(),
+                                                },
+
+                                                #[name = "settings_tab"]
+                                                add_titled_with_icon[Some("settings"), "Settings", "emblem-system-symbolic"] = &adw::Bin {
+                                                    set_tooltip_text: Some("Configure instance settings"),
+                                                    #[wrap(Some)]
+                                                    set_child = model.instance_settings_tab.widget(),
+                                                },
+
+                                                #[name = "console_tab"]
+                                                add_titled_with_icon[Some("console"), "Console", "utilities-terminal-symbolic"] = &adw::Bin {
+                                                    set_tooltip_text: Some("View instance console logs and output"),
+                                                    #[wrap(Some)]
+                                                    set_child = model.instance_console.widget(),
+                                                },
+
+                                                // Must come after add_titled_with_icon so children exist on first render
+                                                #[watch]
+                                                set_visible_child_name: if model.active_tab.is_empty() { "summary" } else { &model.active_tab },
+                                            }
+                                        },
+
+                                        // Must come after add_named so children exist on first render
+                                        #[watch]
+                                        set_visible_child_name: match model.active_sidebar_page {
+                                            SidebarPage::Library => "library",
+                                            SidebarPage::Accounts => "accounts",
+                                            SidebarPage::Playtime => "playtime",
+                                            SidebarPage::Assets => "assets",
+                                            SidebarPage::InstanceDetails => "instance",
+                                        },
+                                    }
+                                },
+                            }
+                        },
                     }
                 }
             }
         }
-
+    }
 
     fn init(
         config: Self::Init,
@@ -1093,30 +1112,33 @@ impl SimpleComponent for AppModel {
             },
         );
 
-        let setup_dialog = SetupDialog::builder().launch(config.clone()).forward(
-            sender.input_sender(),
-            |msg| match msg {
-                SetupOutput::StartMicrosoftLogin => AppMsg::LoginStart,
-                SetupOutput::ConfigUpdated(new_config) => AppMsg::ConfigUpdated(new_config),
-            },
-        );
+        let setup_dialog =
+            SetupDialog::builder()
+                .launch(config.clone())
+                .forward(sender.input_sender(), |msg| match msg {
+                    SetupOutput::StartMicrosoftLogin => AppMsg::LoginStart,
+                    SetupOutput::ConfigUpdated(new_config) => AppMsg::ConfigUpdated(new_config),
+                });
 
         let add_instance_dialog = AddInstanceDialog::builder()
             .launch(config.instances_path.clone())
             .forward(sender.input_sender(), |msg| match msg {
-                AddInstanceOutput::InstanceCreated(version, path) => AppMsg::InstanceCreated(version, path),
+                AddInstanceOutput::InstanceCreated(version, path) => {
+                    AppMsg::InstanceCreated(version, path)
+                }
             });
 
         let instance_editor = InstanceEditorDialog::builder()
             .launch(())
             .forward(sender.input_sender(), AppMsg::EditorOutput);
 
-        let download_dialog = DownloadDialog::builder()
-            .launch(())
-            .forward(sender.input_sender(), |out| match out {
-                DownloadDialogOutput::RemoveJob(id) => AppMsg::RemoveJob(id),
-                DownloadDialogOutput::ClearFinishedJobs => AppMsg::ClearFinishedJobs,
-            });
+        let download_dialog =
+            DownloadDialog::builder()
+                .launch(())
+                .forward(sender.input_sender(), |out| match out {
+                    DownloadDialogOutput::RemoveJob(id) => AppMsg::RemoveJob(id),
+                    DownloadDialogOutput::ClearFinishedJobs => AppMsg::ClearFinishedJobs,
+                });
 
         let java_selector = JavaSelectorDialog::builder()
             .launch(Some(config.minecraft_data_path.join("java")))
@@ -1124,12 +1146,13 @@ impl SimpleComponent for AppModel {
                 JavaSelectorOutput::Selected(path) => AppMsg::SetInstanceJava(path),
             });
 
-        let playtime_view = PlaytimeView::builder()
-            .launch(())
-            .forward(sender.input_sender(), |output| match output {
+        let playtime_view = PlaytimeView::builder().launch(()).forward(
+            sender.input_sender(),
+            |output| match output {
                 AppMsg::RefreshPlaytime => AppMsg::RefreshPlaytime,
                 _ => AppMsg::RefreshPlaytime, // Fallback
-            });
+            },
+        );
 
         let shortcuts_dialog = ShortcutsDialog::builder()
             .launch(())
@@ -1143,27 +1166,29 @@ impl SimpleComponent for AppModel {
             .launch(())
             .forward(sender.input_sender(), |out| AppMsg::ModLoaderOutput(out));
 
-        let asset_view = AssetManagerView::builder()
-            .launch(())
-            .forward(sender.input_sender(), |output| match output {
-                AssetOutput::RefreshRequest => AppMsg::RefreshAssets,
-            });
+        let asset_view =
+            AssetManagerView::builder()
+                .launch(())
+                .forward(sender.input_sender(), |output| match output {
+                    AssetOutput::RefreshRequest => AppMsg::RefreshAssets,
+                    AssetOutput::SubpageChanged(subtitle) => AppMsg::AssetSubpageChanged(subtitle),
+                });
 
+        let sharer_dialog =
+            InstanceSharerDialog::builder()
+                .launch(())
+                .forward(sender.input_sender(), |out| match out {
+                    SharerOutput::Generate(idx) => AppMsg::GenerateShareCode(idx),
+                    SharerOutput::ExportZip(idx, path) => AppMsg::ExportZip(idx, path),
+                });
 
-
-        let sharer_dialog = InstanceSharerDialog::builder()
-            .launch(())
-            .forward(sender.input_sender(), |out| match out {
-                SharerOutput::Generate(idx) => AppMsg::GenerateShareCode(idx),
-                SharerOutput::ExportZip(idx, path) => AppMsg::ExportZip(idx, path),
-            });
-
-        let import_dialog = ImportDialog::builder()
-            .launch(())
-            .forward(sender.input_sender(), |out| match out {
-                ImportOutput::Import(code) => AppMsg::ConfirmImportFromCode(code),
-                ImportOutput::ImportZip(path) => AppMsg::ImportZip(path),
-            });
+        let import_dialog =
+            ImportDialog::builder()
+                .launch(())
+                .forward(sender.input_sender(), |out| match out {
+                    ImportOutput::Import(code) => AppMsg::ConfirmImportFromCode(code),
+                    ImportOutput::ImportZip(path) => AppMsg::ImportZip(path),
+                });
 
         // Load instances and groups asynchronously
         let instances: Vec<Instance> = Vec::new();
@@ -1191,6 +1216,13 @@ impl SimpleComponent for AppModel {
         let sidebar = SidebarList::builder()
             .launch(())
             .forward(sender.input_sender(), AppMsg::SidebarEvent);
+
+        let instance_sidebar =
+            InstanceSidebar::builder()
+                .launch(())
+                .forward(sender.input_sender(), |output| match output {
+                    InstanceSidebarOutput::SwitchTab(tab) => AppMsg::SwitchTab(tab),
+                });
 
         let overview_grid = OverviewGrid::builder()
             .launch((
@@ -1220,6 +1252,7 @@ impl SimpleComponent for AppModel {
             playtime_view,
             shortcuts_dialog,
             sidebar,
+            instance_sidebar,
             overview_grid,
             asset_view,
             settings_dialog,
@@ -1253,7 +1286,7 @@ impl SimpleComponent for AppModel {
                     DownloadStatusBarOutput::Dismiss => AppMsg::DismissDownloadStatus,
                 },
             ),
-            
+
             window: root.clone(),
             split_view: adw::OverlaySplitView::new(),
             loading_instances: true,
@@ -1279,6 +1312,7 @@ impl SimpleComponent for AppModel {
             sharing_loading: false,
             import_loading: false,
             verifying_loading: false,
+            active_asset_subpage: None,
         };
 
         let widgets = view_output!();
@@ -1286,7 +1320,9 @@ impl SimpleComponent for AppModel {
         // Store reference to the real OverlaySplitView widget
         model.split_view = widgets.split_view.clone();
 
-        widgets.split_view.bind_property("collapsed", &widgets.close_sidebar_btn, "visible")
+        widgets
+            .split_view
+            .bind_property("collapsed", &widgets.close_sidebar_btn, "visible")
             .sync_create()
             .build();
 
@@ -1324,26 +1360,33 @@ impl SimpleComponent for AppModel {
         // Ctrl+,: Settings
         shortcut_controller.add_shortcut(gtk::Shortcut::new(
             gtk::ShortcutTrigger::parse_string("<Control>comma"),
-            Some(gtk::CallbackAction::new(glib::clone!(#[strong] sender, move |_, _| {
-                sender.input(AppMsg::OpenSettings);
-                glib::Propagation::Stop
-            }))),
+            Some(gtk::CallbackAction::new(glib::clone!(
+                #[strong]
+                sender,
+                move |_, _| {
+                    sender.input(AppMsg::OpenSettings);
+                    glib::Propagation::Stop
+                }
+            ))),
         ));
 
         // Ctrl+?: Keyboard Shortcuts
         shortcut_controller.add_shortcut(gtk::Shortcut::new(
             gtk::ShortcutTrigger::parse_string("<Control>question"),
-            Some(gtk::CallbackAction::new(glib::clone!(#[strong] sender, move |_, _| {
-                sender.input(AppMsg::OpenShortcuts);
-                glib::Propagation::Stop
-            }))),
+            Some(gtk::CallbackAction::new(glib::clone!(
+                #[strong]
+                sender,
+                move |_, _| {
+                    sender.input(AppMsg::OpenShortcuts);
+                    glib::Propagation::Stop
+                }
+            ))),
         ));
 
         root.add_controller(shortcut_controller);
 
         // Set initial stack page
         widgets.detail_stack.set_visible_child_name("summary");
-
 
         model.toast_overlay = widgets
             .main_content_box
@@ -1358,10 +1401,10 @@ impl SimpleComponent for AppModel {
         // renew all tokens in the background so the UI never briefly shows
         // "Expired" on first load.
         {
-            use crate::backend::auth::microsoft::AccountType;
             use crate::backend::auth::account::{
-                verify_account_status, AccountStatus, refresh_all_accounts,
+                refresh_all_accounts, verify_account_status, AccountStatus,
             };
+            use crate::backend::auth::microsoft::AccountType;
             let needs_refresh = config.accounts.iter().any(|a| {
                 a.account_type == AccountType::Microsoft
                     && !a.refresh_token.is_empty()
@@ -1397,7 +1440,7 @@ impl SimpleComponent for AppModel {
                 SidebarOutput::Navigate(page) => {
                     self.active_sidebar_page = page;
                     self.sidebar.emit(SidebarInput::SetSelected(page));
-                    
+
                     match page {
                         SidebarPage::Library => self.selected_instance = None,
                         SidebarPage::Assets => _sender.input(AppMsg::RefreshAssets),
@@ -1408,14 +1451,30 @@ impl SimpleComponent for AppModel {
             },
             AppMsg::OverviewEvent(out) => match out {
                 OverviewOutput::SelectInstance(idx) => _sender.input(AppMsg::SelectInstance(idx)),
-                OverviewOutput::RenameInstance(idx) => _sender.input(AppMsg::RenameInstanceRequest(idx)),
-                OverviewOutput::DeleteInstance(idx) => _sender.input(AppMsg::DeleteInstanceRequest(idx)),
-                OverviewOutput::MoveToGroupRequest(idx) => _sender.input(AppMsg::MoveToGroupRequest(idx)),
-                OverviewOutput::RemoveFromGroup(idx) => _sender.input(AppMsg::RemoveInstanceFromGroup(idx)),
-                OverviewOutput::RenameGroup(name) => _sender.input(AppMsg::RenameGroupRequest(name)),
-                OverviewOutput::DeleteGroup(name) => _sender.input(AppMsg::DeleteGroupRequest(name)),
-                OverviewOutput::ChangeIconFromFile(idx) => _sender.input(AppMsg::ChangeInstanceIconFromFile(idx)),
-                OverviewOutput::ApplyDefaultIcon(idx) => _sender.input(AppMsg::ApplyDefaultIcon(idx)),
+                OverviewOutput::RenameInstance(idx) => {
+                    _sender.input(AppMsg::RenameInstanceRequest(idx))
+                }
+                OverviewOutput::DeleteInstance(idx) => {
+                    _sender.input(AppMsg::DeleteInstanceRequest(idx))
+                }
+                OverviewOutput::MoveToGroupRequest(idx) => {
+                    _sender.input(AppMsg::MoveToGroupRequest(idx))
+                }
+                OverviewOutput::RemoveFromGroup(idx) => {
+                    _sender.input(AppMsg::RemoveInstanceFromGroup(idx))
+                }
+                OverviewOutput::RenameGroup(name) => {
+                    _sender.input(AppMsg::RenameGroupRequest(name))
+                }
+                OverviewOutput::DeleteGroup(name) => {
+                    _sender.input(AppMsg::DeleteGroupRequest(name))
+                }
+                OverviewOutput::ChangeIconFromFile(idx) => {
+                    _sender.input(AppMsg::ChangeInstanceIconFromFile(idx))
+                }
+                OverviewOutput::ApplyDefaultIcon(idx) => {
+                    _sender.input(AppMsg::ApplyDefaultIcon(idx))
+                }
                 OverviewOutput::ShareInstance(idx) => _sender.input(AppMsg::ShareInstance(idx)),
                 OverviewOutput::LayoutModeChanged(mode) => self.overview_layout = mode,
                 OverviewOutput::AddInstance => _sender.input(AppMsg::AddInstance),
@@ -1432,12 +1491,15 @@ impl SimpleComponent for AppModel {
                     _sender.input(AppMsg::ShowOverview);
                 } else if self.active_sidebar_page == SidebarPage::Library {
                     _sender.input(AppMsg::OverviewBack);
+                } else if self.active_sidebar_page == SidebarPage::Assets {
+                    self.asset_view.emit(AssetInput::ShowCategoriesPage);
                 }
             }
             AppMsg::ShowOverview => {
                 self.active_sidebar_page = SidebarPage::Library;
                 self.selected_instance = None;
-                self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::Library));
+                self.sidebar
+                    .emit(SidebarInput::SetSelected(SidebarPage::Library));
             }
             AppMsg::SetNarrow(narrow) => {
                 self.is_narrow = narrow;
@@ -1500,7 +1562,12 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::MoveInstanceToGroup(idx, group) => {
                 if let Some(inst) = self.instances.get(idx) {
-                    let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                    let folder = inst
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
                     if let Some(path) = &self.config.instances_path {
                         self.groups.set_instance_group(&folder, &group);
                         let _ = self.groups.save(path);
@@ -1510,7 +1577,12 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::RemoveInstanceFromGroup(idx) => {
                 if let Some(inst) = self.instances.get(idx) {
-                    let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                    let folder = inst
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
                     if let Some(path) = &self.config.instances_path {
                         self.groups.remove_instance_from_groups(&folder);
                         let _ = self.groups.save(path);
@@ -1541,7 +1613,9 @@ impl SimpleComponent for AppModel {
                     move |response| {
                         if response == "rename" {
                             let new_name = entry.text().to_string();
-                            sender_clone.send(AppMsg::ConfirmRenameGroup(old.clone(), new_name)).ok();
+                            sender_clone
+                                .send(AppMsg::ConfirmRenameGroup(old.clone(), new_name))
+                                .ok();
                         }
                     },
                 );
@@ -1559,7 +1633,10 @@ impl SimpleComponent for AppModel {
             AppMsg::DeleteGroupRequest(name) => {
                 let dialog = adw::AlertDialog::builder()
                     .heading("Delete Group?")
-                    .body(format!("Delete group '{}'? Instances will become ungrouped.", name))
+                    .body(format!(
+                        "Delete group '{}'? Instances will become ungrouped.",
+                        name
+                    ))
                     .close_response("cancel")
                     .default_response("cancel")
                     .build();
@@ -1573,7 +1650,8 @@ impl SimpleComponent for AppModel {
                     None::<&gtk::gio::Cancellable>,
                     move |response| {
                         if response == "delete" {
-                            let _ = sender_clone.send(AppMsg::ConfirmDeleteGroup(name_clone.clone()));
+                            let _ =
+                                sender_clone.send(AppMsg::ConfirmDeleteGroup(name_clone.clone()));
                         }
                     },
                 );
@@ -1586,17 +1664,21 @@ impl SimpleComponent for AppModel {
                 self.rebuild_overview();
             }
             AppMsg::OpenSettings => {
-                self.settings_dialog.emit(SettingsInput::UpdateConfig(self.config.clone()));
+                self.settings_dialog
+                    .emit(SettingsInput::UpdateConfig(self.config.clone()));
                 self.settings_dialog.widget().present(Some(&self.window));
             }
             AppMsg::OpenSetup => {
-                self.setup_dialog.emit(SetupInput::UpdateConfig(self.config.clone()));
+                self.setup_dialog
+                    .emit(SetupInput::UpdateConfig(self.config.clone()));
                 self.setup_dialog.emit(SetupInput::Open);
                 self.setup_dialog.widget().present(Some(&self.window));
             }
             AppMsg::OpenAccountSettings => {
-                self.settings_dialog.emit(SettingsInput::UpdateConfig(self.config.clone()));
-                self.settings_dialog.emit(SettingsInput::SetPage("accounts".to_string()));
+                self.settings_dialog
+                    .emit(SettingsInput::UpdateConfig(self.config.clone()));
+                self.settings_dialog
+                    .emit(SettingsInput::SetPage("accounts".to_string()));
                 self.settings_dialog.widget().present(Some(&self.window));
             }
             AppMsg::ShowAddOfflineDialog => {
@@ -1611,9 +1693,7 @@ impl SimpleComponent for AppModel {
                 dialog.add_response("add", "Add Account");
                 dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
 
-                let entry = adw::EntryRow::builder()
-                    .title("Username")
-                    .build();
+                let entry = adw::EntryRow::builder().title("Username").build();
 
                 let clamp = adw::Clamp::new();
                 clamp.set_maximum_size(400);
@@ -1630,15 +1710,19 @@ impl SimpleComponent for AppModel {
 
                 let sender_clone = _sender.input_sender().clone();
                 let entry_clone = entry.clone();
-                dialog.choose(self.account_view.widget(), None::<&gtk::gio::Cancellable>, move |response| {
-                    if response == "add" {
-                        let username = entry_clone.text().to_string();
-                        let username = username.trim().to_string();
-                        if !username.is_empty() {
-                            let _ = sender_clone.send(AppMsg::AddOfflineAccount(username));
+                dialog.choose(
+                    self.account_view.widget(),
+                    None::<&gtk::gio::Cancellable>,
+                    move |response| {
+                        if response == "add" {
+                            let username = entry_clone.text().to_string();
+                            let username = username.trim().to_string();
+                            if !username.is_empty() {
+                                let _ = sender_clone.send(AppMsg::AddOfflineAccount(username));
+                            }
                         }
-                    }
-                });
+                    },
+                );
             }
             AppMsg::OpenAbout => {
                 let about = adw::AboutDialog::builder()
@@ -1661,7 +1745,8 @@ impl SimpleComponent for AppModel {
                 self.loading_instances = true;
                 self.overview_grid.emit(OverviewInput::SetLoading(true));
                 self.active_sidebar_page = SidebarPage::Library;
-                self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::Library));
+                self.sidebar
+                    .emit(SidebarInput::SetSelected(SidebarPage::Library));
                 if let Some(path) = &self.config.instances_path {
                     let path_clone = path.clone();
                     let sender_clone = _sender.input_sender().clone();
@@ -1673,7 +1758,9 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::OpenAssetManager => {
                 self.active_sidebar_page = SidebarPage::Assets;
-                self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::Assets));
+                self.sidebar
+                    .emit(SidebarInput::SetSelected(SidebarPage::Assets));
+                self.active_asset_subpage = None;
                 _sender.input(AppMsg::RefreshAssets);
             }
             AppMsg::RefreshAssets => {
@@ -1681,10 +1768,14 @@ impl SimpleComponent for AppModel {
                 let shared_path = self.config.shared_data_path.clone();
                 let instances_path = self.config.instances_path.clone();
                 self.asset_view.emit(AssetInput::Loading(true));
-                
+
                 let sender_clone = _sender.input_sender().clone();
                 thread::spawn(move || {
-                    let result = crate::backend::download::assets::scan_assets(&data_path, shared_path.as_deref(), instances_path.as_deref());
+                    let result = crate::backend::download::assets::scan_assets(
+                        &data_path,
+                        shared_path.as_deref(),
+                        instances_path.as_deref(),
+                    );
                     let _ = sender_clone.send(AppMsg::AssetsReady(result));
                 });
             }
@@ -1696,26 +1787,34 @@ impl SimpleComponent for AppModel {
                     self.config.instances_path.clone(),
                 ));
             }
+            AppMsg::AssetSubpageChanged(subtitle) => {
+                self.active_asset_subpage = subtitle;
+            }
             AppMsg::OpenPlaytime => {
                 self.active_sidebar_page = SidebarPage::Playtime;
-                self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::Playtime));
+                self.sidebar
+                    .emit(SidebarInput::SetSelected(SidebarPage::Playtime));
                 _sender.input(AppMsg::RefreshPlaytime);
             }
             AppMsg::RefreshPlaytime => {
                 let sender_clone = _sender.input_sender().clone();
                 let instances = self.instances.clone();
-                
+
                 thread::spawn(move || {
                     let manager = crate::backend::playtime::PlaytimeManager::load();
                     let mut instance_data = Vec::new();
                     let mut seen_ids = std::collections::HashSet::new();
-                    
+
                     for inst in &instances {
                         seen_ids.insert(inst.id.clone());
-                        let playtime = manager.instance_playtime.get(&inst.id).cloned().unwrap_or(0);
+                        let playtime = manager
+                            .instance_playtime
+                            .get(&inst.id)
+                            .cloned()
+                            .unwrap_or(0);
                         instance_data.push((inst.id.clone(), inst.name.clone(), playtime));
                     }
-                    
+
                     // Include instances from history that are no longer on disk
                     for (id, playtime) in &manager.instance_playtime {
                         if !seen_ids.contains(id) {
@@ -1723,13 +1822,14 @@ impl SimpleComponent for AppModel {
                             instance_data.push((id.clone(), id.clone(), *playtime));
                         }
                     }
-                    
+
                     let _ = sender_clone.send(AppMsg::PlaytimeDataReady(manager, instance_data));
                 });
             }
             AppMsg::PlaytimeDataReady(manager, data) => {
                 self.playtime_manager = manager.clone();
-                self.playtime_view.emit(PlaytimeInput::UpdateData(manager, data));
+                self.playtime_view
+                    .emit(PlaytimeInput::UpdateData(manager, data));
             }
             AppMsg::ConfigUpdated(new_config) => {
                 self.config = new_config.clone();
@@ -1788,7 +1888,8 @@ impl SimpleComponent for AppModel {
                     } else {
                         self.selected_instance = None;
                         self.active_sidebar_page = SidebarPage::Library;
-                        self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::Library));
+                        self.sidebar
+                            .emit(SidebarInput::SetSelected(SidebarPage::Library));
                     }
                 } else {
                     self.selected_instance = None;
@@ -1801,7 +1902,8 @@ impl SimpleComponent for AppModel {
                         .emit(SummaryInput::Update(inst.clone(), running));
                     self.instance_editor_tab
                         .emit(EditorTabInput::Update(inst.clone(), self.config.clone()));
-                    self.instance_settings_tab.emit(SettingsTabInput::Update(inst.clone(), self.config.clone()));
+                    self.instance_settings_tab
+                        .emit(SettingsTabInput::Update(inst.clone(), self.config.clone()));
                     self.instance_console.emit(ConsoleInput::Update(
                         self.get_active_console_buffer(),
                         running,
@@ -1843,56 +1945,114 @@ impl SimpleComponent for AppModel {
 
                             if let Some(active_type) = &self.active_editor_type {
                                 let items = match active_type {
-                                    EditorType::Mods => updated_inst.mods.iter().map(|m| EditorItem { id: m.filename.clone(), name: m.name.clone(), version: m.version.clone(), filename: m.filename.clone(), description: m.description.clone(), homepage: m.homepage.clone(), sources: None, icon_path: m.icon_path.clone(), is_checked: false, size: None, seed: None, last_played: None, enabled: m.enabled }).collect(),
-                                    EditorType::Components => updated_inst.components.iter().map(|c| EditorItem { id: c.uid.clone(), name: c.name.clone(), version: c.version.clone(), filename: c.uid.clone(), description: None, homepage: None, sources: None, icon_path: None, is_checked: false, size: None, seed: None, last_played: None, enabled: true }).collect(),
-                                    EditorType::ResourcePacks => updated_inst.resource_packs.iter().map(|rp| EditorItem {
-                                        id: rp.filename.clone(),
-                                        name: rp.name.clone(),
-                                        version: rp.format.map(|f| format!("Format {}", f)).unwrap_or_default(),
-                                        filename: rp.filename.clone(),
-                                        description: rp.description.clone(),
-                                        homepage: None,
-                                        sources: None,
-                                        icon_path: rp.icon_path.clone(),
-                                        is_checked: false,
-                                        size: Some(crate::frontend::utils::format_size(rp.size)),
-                                        seed: None,
-                                        last_played: None,
-                                        enabled: true
-                                    }).collect(),
-                                    EditorType::ShaderPacks => updated_inst.shader_packs.iter().map(|sp| EditorItem {
-                                        id: sp.filename.clone(),
-                                        name: sp.name.clone(),
-                                        version: String::new(),
-                                        filename: sp.filename.clone(),
-                                        description: sp.description.clone(),
-                                        homepage: None,
-                                        sources: None,
-                                        icon_path: sp.icon_path.clone(),
-                                        is_checked: false,
-                                        size: Some(crate::frontend::utils::format_size(sp.size)),
-                                        seed: None,
-                                        last_played: None,
-                                        enabled: true
-                                    }).collect(),
-                                    EditorType::Worlds => updated_inst.worlds.iter().map(|w| {
-                                        let size_str = crate::frontend::utils::format_size(w.file_size);
-                                        EditorItem {
-                                            id: w.folder_name.clone(),
-                                            name: w.name.clone(),
-                                            version: w.mc_version.clone().unwrap_or_default(),
-                                            filename: w.folder_name.clone(),
+                                    EditorType::Mods => updated_inst
+                                        .mods
+                                        .iter()
+                                        .map(|m| EditorItem {
+                                            id: m.filename.clone(),
+                                            name: m.name.clone(),
+                                            version: m.version.clone(),
+                                            filename: m.filename.clone(),
+                                            description: m.description.clone(),
+                                            homepage: m.homepage.clone(),
+                                            sources: None,
+                                            icon_path: m.icon_path.clone(),
+                                            is_checked: false,
+                                            size: None,
+                                            seed: None,
+                                            last_played: None,
+                                            enabled: m.enabled,
+                                        })
+                                        .collect(),
+                                    EditorType::Components => updated_inst
+                                        .components
+                                        .iter()
+                                        .map(|c| EditorItem {
+                                            id: c.uid.clone(),
+                                            name: c.name.clone(),
+                                            version: c.version.clone(),
+                                            filename: c.uid.clone(),
                                             description: None,
                                             homepage: None,
                                             sources: None,
                                             icon_path: None,
                                             is_checked: false,
-                                            size: Some(size_str),
-                                            seed: w.seed.map(|s| s.to_string()),
-                                            last_played: w.last_played.map(crate::frontend::utils::format_timestamp),
+                                            size: None,
+                                            seed: None,
+                                            last_played: None,
                                             enabled: true,
-                                        }
-                                    }).collect(),
+                                        })
+                                        .collect(),
+                                    EditorType::ResourcePacks => updated_inst
+                                        .resource_packs
+                                        .iter()
+                                        .map(|rp| EditorItem {
+                                            id: rp.filename.clone(),
+                                            name: rp.name.clone(),
+                                            version: rp
+                                                .format
+                                                .map(|f| format!("Format {}", f))
+                                                .unwrap_or_default(),
+                                            filename: rp.filename.clone(),
+                                            description: rp.description.clone(),
+                                            homepage: None,
+                                            sources: None,
+                                            icon_path: rp.icon_path.clone(),
+                                            is_checked: false,
+                                            size: Some(crate::frontend::utils::format_size(
+                                                rp.size,
+                                            )),
+                                            seed: None,
+                                            last_played: None,
+                                            enabled: true,
+                                        })
+                                        .collect(),
+                                    EditorType::ShaderPacks => updated_inst
+                                        .shader_packs
+                                        .iter()
+                                        .map(|sp| EditorItem {
+                                            id: sp.filename.clone(),
+                                            name: sp.name.clone(),
+                                            version: String::new(),
+                                            filename: sp.filename.clone(),
+                                            description: sp.description.clone(),
+                                            homepage: None,
+                                            sources: None,
+                                            icon_path: sp.icon_path.clone(),
+                                            is_checked: false,
+                                            size: Some(crate::frontend::utils::format_size(
+                                                sp.size,
+                                            )),
+                                            seed: None,
+                                            last_played: None,
+                                            enabled: true,
+                                        })
+                                        .collect(),
+                                    EditorType::Worlds => updated_inst
+                                        .worlds
+                                        .iter()
+                                        .map(|w| {
+                                            let size_str =
+                                                crate::frontend::utils::format_size(w.file_size);
+                                            EditorItem {
+                                                id: w.folder_name.clone(),
+                                                name: w.name.clone(),
+                                                version: w.mc_version.clone().unwrap_or_default(),
+                                                filename: w.folder_name.clone(),
+                                                description: None,
+                                                homepage: None,
+                                                sources: None,
+                                                icon_path: None,
+                                                is_checked: false,
+                                                size: Some(size_str),
+                                                seed: w.seed.map(|s| s.to_string()),
+                                                last_played: w
+                                                    .last_played
+                                                    .map(crate::frontend::utils::format_timestamp),
+                                                enabled: true,
+                                            }
+                                        })
+                                        .collect(),
                                 };
                                 self.instance_editor.emit(EditorInput::UpdateItems(items));
                             }
@@ -1924,14 +2084,20 @@ impl SimpleComponent for AppModel {
             AppMsg::SelectInstance(index) => {
                 self.selected_instance = Some(index);
                 self.active_sidebar_page = SidebarPage::InstanceDetails;
-                self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::InstanceDetails));
+                self.sidebar
+                    .emit(SidebarInput::SetSelected(SidebarPage::InstanceDetails));
+                self.active_tab = "summary".to_string();
+                self.instance_sidebar
+                    .emit(InstanceSidebarInput::SetActiveTab("summary".to_string()));
                 let inst_opt = self.instances.get(index).cloned();
                 let running = self.is_active_instance_running();
 
                 self.instance_summary
                     .emit(SummaryInput::Update(inst_opt.clone(), running));
-                self.instance_summary.emit(SummaryInput::SetSharingLoading(self.sharing_loading));
-                self.instance_summary.emit(SummaryInput::SetVerifyingLoading(self.verifying_loading));
+                self.instance_summary
+                    .emit(SummaryInput::SetSharingLoading(self.sharing_loading));
+                self.instance_summary
+                    .emit(SummaryInput::SetVerifyingLoading(self.verifying_loading));
                 self.instance_editor_tab.emit(EditorTabInput::Update(
                     inst_opt.clone(),
                     self.config.clone(),
@@ -1951,7 +2117,9 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::AddInstance => {
                 self.add_instance_dialog.emit(AddInstanceInput::Open);
-                self.add_instance_dialog.widget().present(Some(&self.window));
+                self.add_instance_dialog
+                    .widget()
+                    .present(Some(&self.window));
             }
             AppMsg::ShareInstance(idx) => {
                 self.sharer_dialog.emit(SharerInput::Open(idx));
@@ -1969,14 +2137,22 @@ impl SimpleComponent for AppModel {
                                 if let Ok(code) = shared.to_code() {
                                     let _ = sender_clone.send(AppMsg::DisplayShareCode(code));
                                 } else {
-                                    let _ = sender_clone.send(AppMsg::DownloadError("Failed to encode instance".to_string()));
+                                    let _ = sender_clone.send(AppMsg::DownloadError(
+                                        "Failed to encode instance".to_string(),
+                                    ));
                                 }
                             }
                             Err(e) => {
-                                let _ = sender_clone.send(AppMsg::DownloadError(format!("Export failed: {}", e)));
+                                let _ = sender_clone
+                                    .send(AppMsg::DownloadError(format!("Export failed: {}", e)));
                             }
                         }
-                        let _ = sender_clone.send(AppMsg::SetSharingLoading(false, String::new(), String::new(), false));
+                        let _ = sender_clone.send(AppMsg::SetSharingLoading(
+                            false,
+                            String::new(),
+                            String::new(),
+                            false,
+                        ));
                     });
                 }
             }
@@ -1992,16 +2168,24 @@ impl SimpleComponent for AppModel {
                         }) {
                             Ok(_) => {}
                             Err(e) => {
-                                let _ = sender_clone.send(AppMsg::DownloadError(format!("Zip export failed: {}", e)));
+                                let _ = sender_clone.send(AppMsg::DownloadError(format!(
+                                    "Zip export failed: {}",
+                                    e
+                                )));
                             }
                         }
-                        let _ = sender_clone.send(AppMsg::SetSharingLoading(false, String::new(), String::new(), false));
+                        let _ = sender_clone.send(AppMsg::SetSharingLoading(
+                            false,
+                            String::new(),
+                            String::new(),
+                            false,
+                        ));
                     });
                 }
             }
             AppMsg::DisplayShareCode(code) => {
                 self.sharer_dialog.emit(SharerInput::Close);
-                
+
                 let entry = gtk::Entry::builder()
                     .text(&code)
                     .editable(false)
@@ -2025,7 +2209,8 @@ impl SimpleComponent for AppModel {
                 let code_clone = code.clone();
                 dialog.choose(&self.window, None::<&gtk::gio::Cancellable>, move |resp| {
                     if resp == "copy" {
-                        let display = gtk::gdk::Display::default().expect("Could not get default display");
+                        let display =
+                            gtk::gdk::Display::default().expect("Could not get default display");
                         let clipboard = display.clipboard();
                         clipboard.set_text(&code_clone);
                     }
@@ -2039,7 +2224,17 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::ConfirmImportFromCode(code) => {
                 if let Ok(shared) = SharedInstance::from_code(&code) {
-                    let folder_name = shared.name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect::<String>();
+                    let folder_name = shared
+                        .name
+                        .chars()
+                        .map(|c| {
+                            if c.is_alphanumeric() || c == '-' || c == '_' {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect::<String>();
                     if let Some(instances_path) = self.config.instances_path.clone() {
                         let instance_dir = instances_path.join(&folder_name);
                         if instance_dir.exists() {
@@ -2049,7 +2244,7 @@ impl SimpleComponent for AppModel {
                                 .halign(gtk::Align::Center)
                                 .width_request(300)
                                 .build();
-                                
+
                             let dialog = adw::AlertDialog::builder()
                                 .heading("Instance Already Exists")
                                 .body(format!("A folder for '{}' already exists at your instances path. Please provide a new name for this import.", shared.name))
@@ -2059,22 +2254,33 @@ impl SimpleComponent for AppModel {
                                 .build();
                             dialog.add_response("cancel", "Cancel");
                             dialog.add_response("import", "Import with New Name");
-                            dialog.set_response_appearance("import", adw::ResponseAppearance::Suggested);
-                            
+                            dialog.set_response_appearance(
+                                "import",
+                                adw::ResponseAppearance::Suggested,
+                            );
+
                             let sender_clone = _sender.input_sender().clone();
                             let code_clone = code.clone();
-                            dialog.choose(self.import_dialog.widget(), None::<&gtk::gio::Cancellable>, move |resp| {
-                                if resp == "import" {
-                                    let new_name = entry.text().to_string();
-                                    if !new_name.is_empty() {
-                                        let _ = sender_clone.send(AppMsg::PerformImport(code_clone, Some(new_name)));
+                            dialog.choose(
+                                self.import_dialog.widget(),
+                                None::<&gtk::gio::Cancellable>,
+                                move |resp| {
+                                    if resp == "import" {
+                                        let new_name = entry.text().to_string();
+                                        if !new_name.is_empty() {
+                                            let _ = sender_clone.send(AppMsg::PerformImport(
+                                                code_clone,
+                                                Some(new_name),
+                                            ));
+                                        } else {
+                                            let _ =
+                                                sender_clone.send(AppMsg::SetImportLoading(false));
+                                        }
                                     } else {
                                         let _ = sender_clone.send(AppMsg::SetImportLoading(false));
                                     }
-                                } else {
-                                    let _ = sender_clone.send(AppMsg::SetImportLoading(false));
-                                }
-                            });
+                                },
+                            );
                             return;
                         }
                     }
@@ -2099,7 +2305,10 @@ impl SimpleComponent for AppModel {
                                     let _ = sender_clone.send(AppMsg::SetImportLoading(false));
                                 }
                                 Err(e) => {
-                                    let _ = sender_clone.send(AppMsg::DownloadError(format!("Import failed: {}", e)));
+                                    let _ = sender_clone.send(AppMsg::DownloadError(format!(
+                                        "Import failed: {}",
+                                        e
+                                    )));
                                     let _ = sender_clone.send(AppMsg::SetImportLoading(false));
                                 }
                             }
@@ -2110,7 +2319,8 @@ impl SimpleComponent for AppModel {
                     }
                 } else {
                     self.import_loading = false;
-                    self.toast_overlay.add_toast(adw::Toast::new("Invalid sharing code"));
+                    self.toast_overlay
+                        .add_toast(adw::Toast::new("Invalid sharing code"));
                     self.import_dialog.emit(ImportInput::Close);
                 }
             }
@@ -2118,18 +2328,26 @@ impl SimpleComponent for AppModel {
                 if let Some(instances_path) = self.config.instances_path.clone() {
                     let sender_clone = _sender.input_sender().clone();
                     self.import_loading = true;
-                    self.import_dialog.emit(ImportInput::SetStep(ImportStep::Progress));
+                    self.import_dialog
+                        .emit(ImportInput::SetStep(ImportStep::Progress));
                     std::thread::spawn(move || {
                         let s_clone = sender_clone.clone();
                         match import_instance_from_zip(&path, &instances_path, move |p, s| {
-                            let _ = s_clone.send(AppMsg::UpdateImportStatus(format!("{:.0}% - {}", p * 100.0, s)));
+                            let _ = s_clone.send(AppMsg::UpdateImportStatus(format!(
+                                "{:.0}% - {}",
+                                p * 100.0,
+                                s
+                            )));
                         }) {
                             Ok(_) => {
                                 let _ = sender_clone.send(AppMsg::RefreshInstances);
                                 let _ = sender_clone.send(AppMsg::SetImportLoading(false));
                             }
                             Err(e) => {
-                                let _ = sender_clone.send(AppMsg::DownloadError(format!("Zip import failed: {}", e)));
+                                let _ = sender_clone.send(AppMsg::DownloadError(format!(
+                                    "Zip import failed: {}",
+                                    e
+                                )));
                                 let _ = sender_clone.send(AppMsg::SetImportLoading(false));
                             }
                         }
@@ -2138,15 +2356,26 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::SetSharingLoading(loading, title, subtitle, show_progress) => {
                 self.sharing_loading = loading;
-                self.instance_summary.emit(SummaryInput::SetSharingLoading(loading));
-                self.sharer_dialog.emit(SharerInput::SetLoading(loading, title, subtitle, show_progress));
+                self.instance_summary
+                    .emit(SummaryInput::SetSharingLoading(loading));
+                self.sharer_dialog.emit(SharerInput::SetLoading(
+                    loading,
+                    title,
+                    subtitle,
+                    show_progress,
+                ));
                 if !loading {
                     self.sharer_dialog.emit(SharerInput::Close);
                 }
             }
             AppMsg::UpdateSharingProgress(p, s) => {
                 self.sharer_dialog.emit(SharerInput::SetProgress(p));
-                self.sharer_dialog.emit(SharerInput::SetLoading(true, "Exporting Zip".to_string(), s, true));
+                self.sharer_dialog.emit(SharerInput::SetLoading(
+                    true,
+                    "Exporting Zip".to_string(),
+                    s,
+                    true,
+                ));
             }
             AppMsg::SetImportLoading(loading) => {
                 self.import_loading = loading;
@@ -2157,7 +2386,8 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::SetVerifyingLoading(loading) => {
                 self.verifying_loading = loading;
-                self.instance_summary.emit(SummaryInput::SetVerifyingLoading(loading));
+                self.instance_summary
+                    .emit(SummaryInput::SetVerifyingLoading(loading));
             }
             AppMsg::UpdateImportStatus(status) => {
                 self.import_dialog.emit(ImportInput::AddLog(status));
@@ -2232,7 +2462,10 @@ impl SimpleComponent for AppModel {
                         .map(|rp| EditorItem {
                             id: rp.filename.clone(),
                             name: rp.name.clone(),
-                            version: rp.format.map(|f| format!("Format {}", f)).unwrap_or_default(),
+                            version: rp
+                                .format
+                                .map(|f| format!("Format {}", f))
+                                .unwrap_or_default(),
                             filename: rp.filename.clone(),
                             description: rp.description.clone(),
                             homepage: None,
@@ -2303,7 +2536,9 @@ impl SimpleComponent for AppModel {
                                 is_checked: false,
                                 size: Some(size_str),
                                 seed: w.seed.map(|s| s.to_string()),
-                                last_played: w.last_played.map(crate::frontend::utils::format_timestamp),
+                                last_played: w
+                                    .last_played
+                                    .map(crate::frontend::utils::format_timestamp),
                                 enabled: true,
                             }
                         })
@@ -2366,8 +2601,18 @@ impl SimpleComponent for AppModel {
                                 let mut changed = false;
                                 if let Some(existing) = self.instances.get_mut(index) {
                                     for filename in filenames {
-                                        if let Ok(new_filename) = crate::backend::instance::manager::toggle_mod_enabled(&existing.path, &filename, enable) {
-                                            if let Some(m) = existing.mods.iter_mut().find(|m| m.filename == filename) {
+                                        if let Ok(new_filename) =
+                                            crate::backend::instance::manager::toggle_mod_enabled(
+                                                &existing.path,
+                                                &filename,
+                                                enable,
+                                            )
+                                        {
+                                            if let Some(m) = existing
+                                                .mods
+                                                .iter_mut()
+                                                .find(|m| m.filename == filename)
+                                            {
                                                 m.filename = new_filename;
                                                 m.enabled = enable;
                                                 changed = true;
@@ -2401,22 +2646,37 @@ impl SimpleComponent for AppModel {
                                     _ => "",
                                 };
                                 if !subfolder.is_empty() {
-                                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, subfolder);
+                                    crate::frontend::utils::open_instance_subfolder(
+                                        &inst.minecraft_dir,
+                                        subfolder,
+                                    );
                                 }
                             }
                             EditorOutput::BrowseModrinth(editor_type) => {
                                 _sender.input(AppMsg::BrowseModrinth(editor_type));
                             }
                             EditorOutput::RenameWorld(folder, new_name) => {
-                                if let Err(e) = crate::backend::instance::manager::rename_world(&inst.path, &folder, &new_name) {
+                                if let Err(e) = crate::backend::instance::manager::rename_world(
+                                    &inst.path, &folder, &new_name,
+                                ) {
                                     eprintln!("Failed to rename world: {}", e);
                                 }
                             }
                             EditorOutput::MoveItems(editor_type, ids) => {
-                                self.show_target_instance_selector(editor_type, ids, false, _sender.input_sender().clone());
+                                self.show_target_instance_selector(
+                                    editor_type,
+                                    ids,
+                                    false,
+                                    _sender.input_sender().clone(),
+                                );
                             }
                             EditorOutput::CopyItems(editor_type, ids) => {
-                                self.show_target_instance_selector(editor_type, ids, true, _sender.input_sender().clone());
+                                self.show_target_instance_selector(
+                                    editor_type,
+                                    ids,
+                                    true,
+                                    _sender.input_sender().clone(),
+                                );
                             }
                         }
                         // Refresh only the selected instance
@@ -2430,7 +2690,7 @@ impl SimpleComponent for AppModel {
                 if let Some(source_idx) = self.selected_instance {
                     let source_inst = &self.instances[source_idx];
                     let target_inst = &self.instances[target_idx];
-                    
+
                     let subfolder = match editor_type {
                         EditorType::Mods => "mods",
                         EditorType::ResourcePacks => "resourcepacks",
@@ -2438,14 +2698,22 @@ impl SimpleComponent for AppModel {
                         EditorType::Worlds => "saves",
                         _ => "mods",
                     };
-                    
+
                     for id in ids {
                         let source_path = source_inst.minecraft_dir.join(subfolder).join(&id);
-                        if let Err(e) = crate::backend::instance::manager::add_instance_item(&target_inst.path, subfolder, &source_path) {
+                        if let Err(e) = crate::backend::instance::manager::add_instance_item(
+                            &target_inst.path,
+                            subfolder,
+                            &source_path,
+                        ) {
                             eprintln!("Failed to copy item for move: {}", e);
                         } else {
                             // Remove from source after successful copy
-                            if let Err(e) = crate::backend::instance::manager::remove_instance_item(&source_inst.path, subfolder, &id) {
+                            if let Err(e) = crate::backend::instance::manager::remove_instance_item(
+                                &source_inst.path,
+                                subfolder,
+                                &id,
+                            ) {
                                 eprintln!("Failed to remove source item after move: {}", e);
                             }
                         }
@@ -2457,7 +2725,7 @@ impl SimpleComponent for AppModel {
                 if let Some(source_idx) = self.selected_instance {
                     let source_inst = &self.instances[source_idx];
                     let target_inst = &self.instances[target_idx];
-                    
+
                     let subfolder = match editor_type {
                         EditorType::Mods => "mods",
                         EditorType::ResourcePacks => "resourcepacks",
@@ -2465,10 +2733,14 @@ impl SimpleComponent for AppModel {
                         EditorType::Worlds => "saves",
                         _ => "mods",
                     };
-                    
+
                     for id in ids {
                         let source_path = source_inst.minecraft_dir.join(subfolder).join(&id);
-                        if let Err(e) = crate::backend::instance::manager::add_instance_item(&target_inst.path, subfolder, &source_path) {
+                        if let Err(e) = crate::backend::instance::manager::add_instance_item(
+                            &target_inst.path,
+                            subfolder,
+                            &source_path,
+                        ) {
                             eprintln!("Failed to copy item: {}", e);
                         }
                     }
@@ -2482,17 +2754,26 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::OpenResourcePacksFolder => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, "resourcepacks");
+                    crate::frontend::utils::open_instance_subfolder(
+                        &inst.minecraft_dir,
+                        "resourcepacks",
+                    );
                 }
             }
             AppMsg::OpenShaderPacksFolder => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, "shaderpacks");
+                    crate::frontend::utils::open_instance_subfolder(
+                        &inst.minecraft_dir,
+                        "shaderpacks",
+                    );
                 }
             }
             AppMsg::OpenScreenshotsFolder => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-                    crate::frontend::utils::open_instance_subfolder(&inst.minecraft_dir, "screenshots");
+                    crate::frontend::utils::open_instance_subfolder(
+                        &inst.minecraft_dir,
+                        "screenshots",
+                    );
                 }
             }
             AppMsg::OpenWorldsFolder => {
@@ -2527,7 +2808,7 @@ impl SimpleComponent for AppModel {
 
                         let minecraft_dir = inst.minecraft_dir.clone();
                         let sender_clone = _sender.input_sender().clone();
-                        
+
                         let mods_dir = minecraft_dir.join("mods");
                         if !mods_dir.exists() {
                             let _ = std::fs::create_dir_all(&mods_dir);
@@ -2543,13 +2824,19 @@ impl SimpleComponent for AppModel {
                         let mut tasks = Vec::new();
                         let installs_len = installs.len();
                         for (project_id, version_id) in installs {
-                            tasks.push(crate::backend::download::manager::NetworkTask::ModrinthDownload {
-                                project_id,
-                                version_id: if version_id.is_empty() { None } else { Some(version_id) },
-                                game_version: gv.clone(),
-                                loader: loader.clone(),
-                                mods_dir: mods_dir.clone(),
-                            });
+                            tasks.push(
+                                crate::backend::download::manager::NetworkTask::ModrinthDownload {
+                                    project_id,
+                                    version_id: if version_id.is_empty() {
+                                        None
+                                    } else {
+                                        Some(version_id)
+                                    },
+                                    game_version: gv.clone(),
+                                    loader: loader.clone(),
+                                    mods_dir: mods_dir.clone(),
+                                },
+                            );
                         }
 
                         let job = crate::backend::download::manager::NetworkJob {
@@ -2560,8 +2847,10 @@ impl SimpleComponent for AppModel {
                             log: Vec::new(),
                         };
 
-                        let (tx, rx) = std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
-                        
+                        let (tx, rx) = std::sync::mpsc::channel::<
+                            crate::backend::download::manager::DownloadMsg,
+                        >();
+
                         // Queue the job in DOWNLOAD_QUEUE
                         crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
 
@@ -2569,14 +2858,14 @@ impl SimpleComponent for AppModel {
                         thread::spawn(move || {
                             let mut success_count = 0;
                             let mut last_error = None;
-                            
+
                             while let Ok(msg) = rx.recv() {
                                 let is_finished = matches!(
                                     msg,
                                     crate::backend::download::manager::DownloadMsg::Finished
                                         | crate::backend::download::manager::DownloadMsg::Error(_)
                                 );
-                                
+
                                 match &msg {
                                     crate::backend::download::manager::DownloadMsg::Finished => {
                                         success_count = installs_len; // treat all as succeeded on completion
@@ -2586,7 +2875,7 @@ impl SimpleComponent for AppModel {
                                     }
                                     _ => {}
                                 }
-                                
+
                                 let app_msg = AppMsg::DownloadProgress(msg);
                                 if sender_clone.send(app_msg).is_err() {
                                     break;
@@ -2595,13 +2884,17 @@ impl SimpleComponent for AppModel {
                                     break;
                                 }
                             }
-                            
+
                             // Send installation results and refreshes after job completes/fails
                             if success_count > 0 {
-                                sender_clone.send(AppMsg::ModrinthInstallResult(Ok(success_count))).ok();
+                                sender_clone
+                                    .send(AppMsg::ModrinthInstallResult(Ok(success_count)))
+                                    .ok();
                                 sender_clone.send(AppMsg::RefreshSelectedInstance).ok();
                             } else if let Some(e) = last_error {
-                                sender_clone.send(AppMsg::ModrinthInstallResult(Err(e))).ok();
+                                sender_clone
+                                    .send(AppMsg::ModrinthInstallResult(Err(e)))
+                                    .ok();
                             }
                         });
                     }
@@ -2617,7 +2910,10 @@ impl SimpleComponent for AppModel {
                     self.instance_editor.emit(EditorInput::ShowToast(msg));
                 }
                 Err(e) => {
-                    self.instance_editor.emit(EditorInput::ShowToast(format!("Installation failed: {}", e)));
+                    self.instance_editor.emit(EditorInput::ShowToast(format!(
+                        "Installation failed: {}",
+                        e
+                    )));
                 }
             },
             AppMsg::RenameInstanceRequest(index) => {
@@ -2646,7 +2942,9 @@ impl SimpleComponent for AppModel {
                         move |response| {
                             if response == "rename" {
                                 let new_name = entry.text().to_string();
-                                sender_clone.send(AppMsg::ConfirmRename(index, new_name)).ok();
+                                sender_clone
+                                    .send(AppMsg::ConfirmRename(index, new_name))
+                                    .ok();
                             }
                         },
                     );
@@ -2664,7 +2962,7 @@ impl SimpleComponent for AppModel {
                     dialog.add_response("cancel", "Cancel");
                     dialog.add_response("delete", "Delete");
                     dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
- 
+
                     let sender_clone = _sender.input_sender().clone();
                     dialog.choose(
                         &self.window,
@@ -2681,7 +2979,7 @@ impl SimpleComponent for AppModel {
             AppMsg::ChangeInstanceIconFromFile(idx) => {
                 if let Some(_inst) = self.instances.get(idx) {
                     let s = _sender.input_sender().clone();
-                    
+
                     let dialog = gtk::FileDialog::builder()
                         .title("Select Instance Icon")
                         .accept_label("Select")
@@ -2696,13 +2994,17 @@ impl SimpleComponent for AppModel {
                     list_store.append(&filters);
                     dialog.set_filters(Some(&list_store));
 
-                    dialog.open(Some(&self.window), None::<&gtk::gio::Cancellable>, move |res| {
-                        if let Ok(file) = res {
-                            if let Some(path) = file.path() {
-                                let _ = s.send(AppMsg::ApplyIconPath(idx, path));
+                    dialog.open(
+                        Some(&self.window),
+                        None::<&gtk::gio::Cancellable>,
+                        move |res| {
+                            if let Ok(file) = res {
+                                if let Some(path) = file.path() {
+                                    let _ = s.send(AppMsg::ApplyIconPath(idx, path));
+                                }
                             }
-                        }
-                    });
+                        },
+                    );
                 }
             }
             AppMsg::ApplyDefaultIcon(idx) => {
@@ -2715,8 +3017,11 @@ impl SimpleComponent for AppModel {
                     let inst_path = inst.path.clone();
                     let target = inst_path.join("icon.png");
                     if std::fs::copy(&source_path, &target).is_ok() {
-                        self.overview_grid.emit(OverviewInput::ClearTextureCache(target));
-                        let _ = crate::backend::instance::manager::update_cfg_key(&inst_path, "iconKey", "custom");
+                        self.overview_grid
+                            .emit(OverviewInput::ClearTextureCache(target));
+                        let _ = crate::backend::instance::manager::update_cfg_key(
+                            &inst_path, "iconKey", "custom",
+                        );
                         // Targeted refresh instead of full scan
                         let sender_clone = _sender.input_sender().clone();
                         thread::spawn(move || {
@@ -2741,7 +3046,12 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::ConfirmDelete(index) => {
                 if let Some(inst) = self.instances.get(index) {
-                    let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                    let folder = inst
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
                     let _ = delete_instance(&inst.path);
                     // Remove from groups
                     if let Some(path) = &self.config.instances_path {
@@ -2754,19 +3064,21 @@ impl SimpleComponent for AppModel {
                 }
                 self.selected_instance = None;
                 self.active_sidebar_page = SidebarPage::Library;
-                self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::Library));
+                self.sidebar
+                    .emit(SidebarInput::SetSelected(SidebarPage::Library));
                 self.rebuild_overview();
             }
             AppMsg::AccountAction => {
                 self.active_sidebar_page = SidebarPage::Accounts;
-                self.sidebar.emit(SidebarInput::SetSelected(SidebarPage::Accounts));
+                self.sidebar
+                    .emit(SidebarInput::SetSelected(SidebarPage::Accounts));
             }
             AppMsg::SwitchAccount(uuid) => {
                 if let Ok(_) = switch_account(&mut self.config, &uuid) {
                     let _ = self.config.save();
                     self.account_view
                         .emit(AccountInput::UpdateConfig(self.config.clone()));
-                        self.toast_overlay
+                    self.toast_overlay
                         .add_toast(adw::Toast::new("Switched account"));
                 }
             }
@@ -2797,7 +3109,7 @@ impl SimpleComponent for AppModel {
                     let _ = self.config.save();
                     self.account_view
                         .emit(AccountInput::UpdateConfig(self.config.clone()));
-                    }
+                }
             }
             AppMsg::RefreshAccountsRequest => {
                 self.account_view.emit(AccountInput::RefreshAll);
@@ -2860,9 +3172,8 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::SelectModLoaderRequest => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-                    self.mod_loader_dialog.emit(ModLoaderDialogInput::Open(
-                        inst.minecraft_version.clone(),
-                    ));
+                    self.mod_loader_dialog
+                        .emit(ModLoaderDialogInput::Open(inst.minecraft_version.clone()));
                     self.mod_loader_dialog.widget().present(Some(&self.window));
                 }
             }
@@ -2941,7 +3252,11 @@ impl SimpleComponent for AppModel {
                         .default_response("ok")
                         .build();
                     dialog.add_response("ok", "OK");
-                    dialog.choose(self.account_view.widget(), None::<&gtk::gio::Cancellable>, |_| {});
+                    dialog.choose(
+                        self.account_view.widget(),
+                        None::<&gtk::gio::Cancellable>,
+                        |_| {},
+                    );
                 }
             }
             AppMsg::LoginDeviceCode(code, uri) => {
@@ -2965,7 +3280,11 @@ impl SimpleComponent for AppModel {
                     .build();
 
                 dialog.add_response("ok", "OK");
-                dialog.choose(self.account_view.widget(), None::<&gtk::gio::Cancellable>, |_| {});
+                dialog.choose(
+                    self.account_view.widget(),
+                    None::<&gtk::gio::Cancellable>,
+                    |_| {},
+                );
 
                 // Select the text for easy copying
                 entry.select_region(0, -1);
@@ -2983,8 +3302,7 @@ impl SimpleComponent for AppModel {
                             .emit(AccountInput::UpdateConfig(self.config.clone()));
                         self.setup_dialog
                             .emit(SetupInput::UpdateConfig(self.config.clone()));
-                        self.settings_dialog
-                            .emit(SettingsInput::RefreshJava); // This also refreshes accounts in settings
+                        self.settings_dialog.emit(SettingsInput::RefreshJava); // This also refreshes accounts in settings
 
                         let dialog = adw::AlertDialog::builder()
                             .heading("Login Successful")
@@ -2993,7 +3311,11 @@ impl SimpleComponent for AppModel {
                             .default_response("ok")
                             .build();
                         dialog.add_response("ok", "OK");
-                        dialog.choose(self.account_view.widget(), None::<&gtk::gio::Cancellable>, |_| {});
+                        dialog.choose(
+                            self.account_view.widget(),
+                            None::<&gtk::gio::Cancellable>,
+                            |_| {},
+                        );
                     }
                     Err(err) => {
                         let dialog = adw::AlertDialog::builder()
@@ -3003,7 +3325,11 @@ impl SimpleComponent for AppModel {
                             .default_response("ok")
                             .build();
                         dialog.add_response("ok", "OK");
-                        dialog.choose(self.account_view.widget(), None::<&gtk::gio::Cancellable>, |_| {});
+                        dialog.choose(
+                            self.account_view.widget(),
+                            None::<&gtk::gio::Cancellable>,
+                            |_| {},
+                        );
                     }
                 }
             }
@@ -3015,7 +3341,9 @@ impl SimpleComponent for AppModel {
                     .emit(AccountInput::UpdateConfig(self.config.clone()));
             }
             AppMsg::SwitchTab(name) => {
-                self.active_tab = name;
+                self.active_tab = name.clone();
+                self.instance_sidebar
+                    .emit(InstanceSidebarInput::SetActiveTab(name));
             }
             AppMsg::SetInstanceFeralGameMode(enabled) => {
                 if let Some(path) = self.get_active_instance_path() {
@@ -3080,11 +3408,12 @@ impl SimpleComponent for AppModel {
                     if let Some(mut child) = guard.take() {
                         let _ = child.kill();
                         self.running_instances.remove(&path);
-                        
+
                         // Update UI
                         if Some(&path) == self.get_active_instance_path().as_ref() {
                             let inst = self.instances.get(self.selected_instance.unwrap()).cloned();
-                            self.instance_summary.emit(SummaryInput::Update(inst, false));
+                            self.instance_summary
+                                .emit(SummaryInput::Update(inst, false));
                         }
 
                         let buf = self.get_console_buffer(&path);
@@ -3098,7 +3427,8 @@ impl SimpleComponent for AppModel {
                     let instance = inst.clone();
                     self.launch_after_download = false;
                     self.verifying_loading = true;
-                    self.instance_summary.emit(SummaryInput::SetVerifyingLoading(true));
+                    self.instance_summary
+                        .emit(SummaryInput::SetVerifyingLoading(true));
                     let sender_clone = _sender.input_sender().clone();
                     thread::spawn(move || {
                         if let Some(mc_version) = &instance.minecraft_version {
@@ -3134,14 +3464,14 @@ impl SimpleComponent for AppModel {
                     }
                     options.mc_data_path = self.config.minecraft_data_path.clone();
 
-                    // Priority: Instance specific java > Global java > "java"
+                    let is_java_automatic = inst.java_path.is_none();
                     let java_path = inst
                         .java_path
                         .clone()
-                        .or_else(|| self.config.java_path.clone())
                         .unwrap_or_else(|| std::path::PathBuf::from("java"));
 
                     options.java_path = java_path;
+                    options.is_java_automatic = is_java_automatic;
                     options.max_memory = self.config.max_memory;
                     options.min_memory = self.config.min_memory;
                     options.account = get_active_account(&self.config).cloned();
@@ -3171,9 +3501,10 @@ impl SimpleComponent for AppModel {
                     }
 
                     self.running_instances.insert(instance.path.clone());
-                    
+
                     // Update Summary Tab immediately
-                    self.instance_summary.emit(SummaryInput::Update(Some(instance.clone()), true));
+                    self.instance_summary
+                        .emit(SummaryInput::Update(Some(instance.clone()), true));
 
                     let buf = self.get_console_buffer(&instance.path);
                     buf.set_text(&format!("Starting launch for {}...\n", instance.name));
@@ -3189,29 +3520,37 @@ impl SimpleComponent for AppModel {
                         let min_mem = options.min_memory;
 
                         // Check if running within a Flatpak sandbox
-                        let is_flatpak = std::path::Path::new("/.flatpak-info").exists() || std::env::var("FLATPAK_ID").is_ok();
+                        let is_flatpak = std::path::Path::new("/.flatpak-info").exists()
+                            || std::env::var("FLATPAK_ID").is_ok();
                         if is_flatpak {
                             let _ = sender_clone.send(AppMsg::ConsoleLog(
                                 instance_path.clone(),
-                                "ℹ️  Flatpak sandbox environment detected. Sandboxed isolation is active.\n".to_string(),
+                                "[Info] Flatpak sandbox environment detected. Sandboxed isolation is active.\n".to_string(),
                             ));
                         }
 
                         // --- 1. Pre-flight health and Java version checks ---
                         let mc_version = instance.minecraft_version.as_deref().unwrap_or("1.21.8");
-                        let required_ver = crate::backend::runtime::java::get_required_java_version(mc_version);
-                        let mut selected_probed = crate::backend::runtime::java::probe_java(&options.java_path);
+                        let required_ver =
+                            crate::backend::runtime::java::get_required_java_version(mc_version);
+                        let mut selected_probed =
+                            crate::backend::runtime::java::probe_java(&options.java_path);
 
                         let mut java_ok = false;
                         let mut compatibility_msg = String::new();
 
                         if let Some(ref j) = selected_probed {
-                            if let Some(actual_ver) = crate::backend::runtime::java::get_java_major_version(&j.version) {
+                            if let Some(actual_ver) =
+                                crate::backend::runtime::java::get_java_major_version(&j.version)
+                            {
                                 if actual_ver == required_ver {
                                     java_ok = true;
                                     compatibility_msg = format!("Java {} (compatible)", actual_ver);
                                 } else {
-                                    compatibility_msg = format!("Java {} (recommended: Java {})", actual_ver, required_ver);
+                                    compatibility_msg = format!(
+                                        "Java {} (recommended: Java {})",
+                                        actual_ver, required_ver
+                                    );
                                 }
                             } else {
                                 compatibility_msg = "Unknown version".to_string();
@@ -3220,95 +3559,147 @@ impl SimpleComponent for AppModel {
                             compatibility_msg = "Invalid or missing executable".to_string();
                         }
 
-                        // Try to auto-switch if not fully compatible/working
-                        if !java_ok {
-                            let _ = sender_clone.send(AppMsg::ConsoleLog(
-                                instance_path.clone(),
-                                format!(
-                                    "Checking Java compatibility... Selected path: {:?} ({})\n",
-                                    options.java_path, compatibility_msg
-                                ),
-                            ));
-
-                            let _ = sender_clone.send(AppMsg::ConsoleLog(
-                                instance_path.clone(),
-                                format!("Scanning system for a fully compatible Java {} runtime...\n", required_ver),
-                            ));
-
-                            // Find all system Java installations
-                            let system_javas = crate::backend::runtime::java::find_java_versions(None);
-                            let mut found_compatible = None;
-
-                            // 1st priority: Find exact match for required Java version
-                            for sj in &system_javas {
-                                if let Some(ver) = crate::backend::runtime::java::get_java_major_version(&sj.version) {
-                                    if ver == required_ver {
-                                        found_compatible = Some(sj.clone());
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // 2nd priority: If required version is 8 but we didn't find any Java 8, or if we need a working JVM
-                            if found_compatible.is_none() && selected_probed.is_none() {
-                                // If the selected Java path doesn't work at all, fall back to ANY working Java
-                                if let Some(any_working) = system_javas.first() {
-                                    found_compatible = Some(any_working.clone());
-                                }
-                            }
-
-                            if let Some(ref comp_java) = found_compatible {
-                                let comp_ver = crate::backend::runtime::java::get_java_major_version(&comp_java.version).unwrap_or(0);
+                        if options.is_java_automatic {
+                            // Automatic mode: Try to auto-switch if not fully compatible/working
+                            if !java_ok {
                                 let _ = sender_clone.send(AppMsg::ConsoleLog(
                                     instance_path.clone(),
                                     format!(
-                                        "⚡ Auto-selector: Automatically switched launch to compatible system Java:\n  -> Path: {:?}\n  -> Version: Java {}\n",
-                                        comp_java.path, comp_ver
+                                        "Checking Java compatibility... Selected path: {:?} ({})\n",
+                                        options.java_path, compatibility_msg
                                     ),
                                 ));
-                                options.java_path = comp_java.path.clone();
-                                selected_probed = Some(comp_java.clone());
-                            } else {
-                                if selected_probed.is_none() {
-                                    // Complete showstopper: selected Java doesn't work and we found NO working Java on the system
-                                    let mut flatpak_tip = String::new();
-                                    if is_flatpak {
-                                        flatpak_tip = "\n💡 FLATPAK SANDBOX TIP:\n\
-                                                       Your host system's Java installations (in /usr/lib/jvm) are isolated and NOT visible in Flatpak.\n\
-                                                       Please click the 'Install Java' button in Settings or Java Selector to download\n\
-                                                       and install the required Java runtime directly inside the sandbox in one click!\n".to_string();
+
+                                let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                    instance_path.clone(),
+                                    format!(
+                                        "Scanning system for a fully compatible Java {} runtime...\n",
+                                        required_ver
+                                    ),
+                                ));
+
+                                // Find all Java installations (system & launcher-downloaded)
+                                let launcher_java_dir = options.mc_data_path.join("java");
+                                let system_javas =
+                                    crate::backend::runtime::java::find_java_versions(Some(&launcher_java_dir));
+                                let mut found_compatible = None;
+
+                                // 1st priority: Find exact match for required Java version
+                                for sj in &system_javas {
+                                    if let Some(ver) =
+                                        crate::backend::runtime::java::get_java_major_version(
+                                            &sj.version,
+                                        )
+                                    {
+                                        if ver == required_ver {
+                                            found_compatible = Some(sj.clone());
+                                            break;
+                                        }
                                     }
-                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
-                                        instance_path.clone(),
-                                        format!(
-                                            "❌ ERROR: No working Java installation was found on your system!\n\
-                                             Please install Java (e.g. OpenJDK) or select a valid Java path in global settings.{}\n",
-                                            flatpak_tip
-                                        ),
-                                    ));
-                                    let _ = sender_clone.send(AppMsg::ProcessFinished(
-                                        instance_path.clone(),
-                                        0,
-                                        start_time_chrono,
-                                        Utc::now(),
-                                    ));
-                                    return;
-                                } else {
-                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
-                                        instance_path.clone(),
-                                        format!(
-                                            "⚠️ WARNING: No compatible Java {} was found on your system.\n\
-                                             Attempting launch with configured Java ({:?}) anyway, but it may fail or crash!\n",
-                                            required_ver, options.java_path
-                                        ),
-                                    ));
                                 }
+
+                                // 2nd priority: If required version is 8 but we didn't find any Java 8, or if we need a working JVM
+                                if found_compatible.is_none() && selected_probed.is_none() {
+                                    // If the selected Java path doesn't work at all, fall back to ANY working Java
+                                    if let Some(any_working) = system_javas.first() {
+                                        found_compatible = Some(any_working.clone());
+                                    }
+                                }
+
+                                if let Some(ref comp_java) = found_compatible {
+                                    let comp_ver =
+                                        crate::backend::runtime::java::get_java_major_version(
+                                            &comp_java.version,
+                                        )
+                                        .unwrap_or(0);
+                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                        instance_path.clone(),
+                                        format!(
+                                            "[Auto-selector] Automatically switched launch to compatible system Java:\n  -> Path: {:?}\n  -> Version: Java {}\n",
+                                            comp_java.path, comp_ver
+                                        ),
+                                    ));
+                                    options.java_path = comp_java.path.clone();
+                                    selected_probed = Some(comp_java.clone());
+                                } else {
+                                    if selected_probed.is_none() {
+                                        // Complete showstopper: selected Java doesn't work and we found NO working Java on the system
+                                        let mut flatpak_tip = String::new();
+                                        if is_flatpak {
+                                            flatpak_tip = "\nFLATPAK SANDBOX TIP:\n\
+                                                           Your host system's Java installations (in /usr/lib/jvm) are isolated and NOT visible in Flatpak.\n\
+                                                           Please click the 'Install Java' button in Settings or Java Selector to download\n\
+                                                           and install the required Java runtime directly inside the sandbox in one click!\n".to_string();
+                                        }
+                                        let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                            instance_path.clone(),
+                                            format!(
+                                                "[Error] ERROR: No working Java installation was found on your system!\n\
+                                                 Please install Java (e.g. OpenJDK) or select a valid Java path in settings.{}\n",
+                                                flatpak_tip
+                                            ),
+                                        ));
+                                        let _ = sender_clone.send(AppMsg::ProcessFinished(
+                                            instance_path.clone(),
+                                            0,
+                                            start_time_chrono,
+                                            Utc::now(),
+                                        ));
+                                        return;
+                                    } else {
+                                        let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                            instance_path.clone(),
+                                            format!(
+                                                "[Warning] WARNING: No compatible Java {} was found on your system.\n\
+                                                 Attempting launch with configured Java ({:?}) anyway, but it may fail or crash!\n",
+                                                required_ver, options.java_path
+                                            ),
+                                        ));
+                                    }
+                                }
+                            } else {
+                                let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                    instance_path.clone(),
+                                    format!(
+                                        "Java check passed: {:?} (Java {})\n",
+                                        options.java_path, required_ver
+                                    ),
+                                ));
                             }
                         } else {
-                            let _ = sender_clone.send(AppMsg::ConsoleLog(
-                                instance_path.clone(),
-                                format!("Java check passed: {:?} (Java {})\n", options.java_path, required_ver),
-                            ));
+                            // Custom mode: Do not run auto-switch, just validate and warn
+                            if selected_probed.is_none() {
+                                let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                    instance_path.clone(),
+                                    format!(
+                                        "[Error] ERROR: The configured custom Java path ({:?}) is invalid or not executable!\n",
+                                        options.java_path
+                                    ),
+                                ));
+                                let _ = sender_clone.send(AppMsg::ProcessFinished(
+                                    instance_path.clone(),
+                                    0,
+                                    start_time_chrono,
+                                    Utc::now(),
+                                ));
+                                return;
+                            } else if !java_ok {
+                                let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                    instance_path.clone(),
+                                    format!(
+                                        "[Warning] WARNING: The custom Java version ({}) does not match the recommended Java {} major version for this Minecraft version. Launching anyway...\n",
+                                        compatibility_msg, required_ver
+                                    ),
+                                ));
+                            } else {
+                                let _ = sender_clone.send(AppMsg::ConsoleLog(
+                                    instance_path.clone(),
+                                    format!(
+                                        "Custom Java check passed: {:?} ({})\n",
+                                        options.java_path, compatibility_msg
+                                    ),
+                                ));
+                            }
                         }
 
                         match launch_instance(&instance, options) {
@@ -3329,8 +3720,13 @@ impl SimpleComponent for AppModel {
 
                                 // Record last launch time to instance.cfg and memory
                                 let now = chrono::Utc::now().timestamp() as u64;
-                                let _ = crate::backend::instance::manager::update_cfg_key(&instance_path, "lastLaunchTime", &now.to_string());
-                                let _ = sender_clone.send(AppMsg::InstanceLaunched(instance_path.clone(), now));
+                                let _ = crate::backend::instance::manager::update_cfg_key(
+                                    &instance_path,
+                                    "lastLaunchTime",
+                                    &now.to_string(),
+                                );
+                                let _ = sender_clone
+                                    .send(AppMsg::InstanceLaunched(instance_path.clone(), now));
 
                                 // Spawn a concurrent thread to read stderr in real time
                                 let sender_clone_err = sender_clone.clone();
@@ -3374,7 +3770,10 @@ impl SimpleComponent for AppModel {
                                     if let Some(mut c) = guard.take() {
                                         c.wait()
                                     } else {
-                                        Err(std::io::Error::new(std::io::ErrorKind::Other, "Process was killed or already finished"))
+                                        Err(std::io::Error::new(
+                                            std::io::ErrorKind::Other,
+                                            "Process was killed or already finished",
+                                        ))
                                     }
                                 };
 
@@ -3387,19 +3786,25 @@ impl SimpleComponent for AppModel {
                                 match exit_status {
                                     Ok(status) => {
                                         if status.success() {
-                                            exit_status_msg = "\nProcess finished successfully.\n".to_string();
+                                            exit_status_msg =
+                                                "\nProcess finished successfully.\n".to_string();
                                         } else {
                                             exited_with_error = true;
                                             if let Some(code) = status.code() {
-                                                exit_status_msg = format!("\nProcess finished with exit code: {}\n", code);
+                                                exit_status_msg = format!(
+                                                    "\nProcess finished with exit code: {}\n",
+                                                    code
+                                                );
                                             } else {
-                                                exit_status_msg = "\nProcess terminated by signal.\n".to_string();
+                                                exit_status_msg =
+                                                    "\nProcess terminated by signal.\n".to_string();
                                             }
                                         }
                                     }
                                     Err(e) => {
                                         exited_with_error = true;
-                                        exit_status_msg = format!("\nProcess finished with error: {}\n", e);
+                                        exit_status_msg =
+                                            format!("\nProcess finished with error: {}\n", e);
                                     }
                                 }
 
@@ -3416,7 +3821,7 @@ impl SimpleComponent for AppModel {
 
                                     let mut flatpak_tip = String::new();
                                     if is_flatpak {
-                                        flatpak_tip = "\n\n📦 FLATPAK SANDBOX DETECTED:\n\
+                                        flatpak_tip = "\n\nFLATPAK SANDBOX DETECTED:\n\
                                                        Your host system's Java installations are isolated and not visible inside Flatpak.\n\
                                                        -> Recommendation: Open Settings -> Java -> Install Java, and download a compatible\n\
                                                           runtime directly inside the sandbox in one click!".to_string();
@@ -3425,11 +3830,11 @@ impl SimpleComponent for AppModel {
                                     let diagnosis = format!(
                                         "\n\
                                         =================================================================\n\
-                                        ⚠️  OBELISK INSTANT CRASH DETECTED\n\
+                                        OBELISK INSTANT CRASH DETECTED\n\
                                         =================================================================\n\
                                         The game terminated immediately (within {} seconds) with a failure status.\n\
                                         This usually indicates incompatible Java, wrong JVM flags, or low memory.\n\n\
-                                        🔍 Diagnosis & Environment Checklist:\n\
+                                        Diagnosis & Environment Checklist:\n\
                                         1. Java Version Compatibility:\n\
                                            - Configured Java: {}\n\
                                            - Required Minecraft Java: Java {}\n\
@@ -3438,7 +3843,7 @@ impl SimpleComponent for AppModel {
                                            - Configured Max Heap (-Xmx): {} MB\n\
                                            - Configured Min Heap (-Xms): {} MB\n\
                                            (Make sure these are within your system's physical RAM capacity)\n\n\
-                                        💡 Suggested Solutions:\n\
+                                        Suggested Solutions:\n\
                                            - Check the error logs above for ClassFormatError or VM Option errors.\n\
                                            - Change the Java path in Instance -> Settings or Global Settings.\n\
                                            - Adjust max/min memory limits in Launcher settings.{}\n\
@@ -3447,19 +3852,17 @@ impl SimpleComponent for AppModel {
                                         actual_ver_str,
                                         required_ver,
                                         if selected_probed.is_some() && crate::backend::runtime::java::get_java_major_version(&selected_probed.as_ref().unwrap().version).unwrap_or(0) == required_ver {
-                                            "✅ Java version matches requirements."
+                                            "Java version matches requirements."
                                         } else {
-                                            "❌ Java version is incompatible! Please install or select the recommended Java version."
+                                            "Java version is incompatible! Please install or select the recommended Java version."
                                         },
                                         max_mem,
                                         min_mem,
                                         flatpak_tip
                                     );
 
-                                    let _ = sender_clone.send(AppMsg::ConsoleLog(
-                                        instance_path.clone(),
-                                        diagnosis,
-                                    ));
+                                    let _ = sender_clone
+                                        .send(AppMsg::ConsoleLog(instance_path.clone(), diagnosis));
                                 }
 
                                 let _ = sender_clone.send(AppMsg::ProcessFinished(
@@ -3508,8 +3911,10 @@ impl SimpleComponent for AppModel {
                     if is_active {
                         let inst = self.instances.get(self.selected_instance.unwrap()).cloned();
                         let running = self.running_instances.contains(&path);
-                        self.instance_summary.emit(SummaryInput::Update(inst, running));
-                        self.instance_console.emit(ConsoleInput::Update(buf, running));
+                        self.instance_summary
+                            .emit(SummaryInput::Update(inst, running));
+                        self.instance_console
+                            .emit(ConsoleInput::Update(buf, running));
                     }
                 }
             }
@@ -3521,7 +3926,9 @@ impl SimpleComponent for AppModel {
                 // We sync the total duration to instance.cfg for Prism compatibility,
                 // but keep our detailed sessions in playtime.json.
                 if duration > 0 {
-                    let _ = crate::backend::instance::manager::update_instance_playtime(&path, duration);
+                    let _ = crate::backend::instance::manager::update_instance_playtime(
+                        &path, duration,
+                    );
                 }
 
                 // Important: find and update the instance in self.instances so the UI sees the new playtime
@@ -3554,12 +3961,13 @@ impl SimpleComponent for AppModel {
 
                 if is_active {
                     let inst = self.instances.get(self.selected_instance.unwrap()).cloned();
-                    self.instance_summary.emit(SummaryInput::Update(inst, false));
+                    self.instance_summary
+                        .emit(SummaryInput::Update(inst, false));
                     self.instance_console.emit(ConsoleInput::Update(
                         self.get_active_console_buffer(),
                         false,
                     ));
-                    
+
                     // Re-scan single instance to make sure we're fully in sync
                     let sender_clone = _sender.input_sender().clone();
                     let path_clone = path.clone();
@@ -3612,7 +4020,8 @@ impl SimpleComponent for AppModel {
                 }
 
                 // Show success toast
-                self.toast_overlay.add_toast(adw::Toast::new("Instance created successfully"));
+                self.toast_overlay
+                    .add_toast(adw::Toast::new("Instance created successfully"));
 
                 // Ensure the dialog is closed
                 self.add_instance_dialog.widget().close();
@@ -3641,22 +4050,29 @@ impl SimpleComponent for AppModel {
                 let sender_clone = _sender.input_sender().clone();
 
                 let job = crate::backend::download::manager::NetworkJob {
-                    id: format!("mc-{}-{}", raw_version.id, std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()),
+                    id: format!(
+                        "mc-{}-{}",
+                        raw_version.id,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                    ),
                     title: format!("Minecraft {}", raw_version.id),
-                    tasks: vec![crate::backend::download::manager::NetworkTask::MinecraftDownload {
-                        version: raw_version.clone(),
-                        loader: loader.clone(),
-                        loader_version: loader_version.clone(),
-                        data_path: data_path.clone(),
-                    }],
+                    tasks: vec![
+                        crate::backend::download::manager::NetworkTask::MinecraftDownload {
+                            version: raw_version.clone(),
+                            loader: loader.clone(),
+                            loader_version: loader_version.clone(),
+                            data_path: data_path.clone(),
+                        },
+                    ],
                     status: crate::backend::download::manager::NetworkJobStatus::Pending,
                     log: Vec::new(),
                 };
 
-                let (tx, rx) = std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
+                let (tx, rx) =
+                    std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
 
                 // Queue the job in DOWNLOAD_QUEUE
                 crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
@@ -3721,18 +4137,23 @@ impl SimpleComponent for AppModel {
                     }
                 };
 
-                self.download_dialog.emit(DownloadDialogInput::UpdateState(state.clone()));
+                self.download_dialog
+                    .emit(DownloadDialogInput::UpdateState(state.clone()));
                 self.download_status_bar
                     .emit(DownloadStatusBarInput::Update(state, visible));
             }
             AppMsg::DownloadFinished => {
                 if self.verifying_loading {
-                    self.toast_overlay.add_toast(adw::Toast::new("Instance verification completed successfully!"));
+                    self.toast_overlay.add_toast(adw::Toast::new(
+                        "Instance verification completed successfully!",
+                    ));
                 }
                 self.verifying_loading = false;
-                self.instance_summary.emit(SummaryInput::SetVerifyingLoading(false));
+                self.instance_summary
+                    .emit(SummaryInput::SetVerifyingLoading(false));
 
-                self.download_dialog.emit(DownloadDialogInput::UpdateState(DownloadState::Finished));
+                self.download_dialog
+                    .emit(DownloadDialogInput::UpdateState(DownloadState::Finished));
                 self.download_status_bar
                     .emit(DownloadStatusBarInput::Update(
                         DownloadState::Finished,
@@ -3747,9 +4168,13 @@ impl SimpleComponent for AppModel {
             AppMsg::DownloadError(err) => {
                 self.launch_after_download = false;
                 self.verifying_loading = false;
-                self.instance_summary.emit(SummaryInput::SetVerifyingLoading(false));
+                self.instance_summary
+                    .emit(SummaryInput::SetVerifyingLoading(false));
 
-                self.download_dialog.emit(DownloadDialogInput::UpdateState(DownloadState::Failed(err.clone())));
+                self.download_dialog
+                    .emit(DownloadDialogInput::UpdateState(DownloadState::Failed(
+                        err.clone(),
+                    )));
                 self.download_status_bar
                     .emit(DownloadStatusBarInput::Update(
                         DownloadState::Failed(err),
@@ -3757,7 +4182,8 @@ impl SimpleComponent for AppModel {
                     ));
             }
             AppMsg::DismissDownloadStatus => {
-                self.download_status_bar.emit(DownloadStatusBarInput::Dismiss);
+                self.download_status_bar
+                    .emit(DownloadStatusBarInput::Dismiss);
             }
             AppMsg::RemoveJob(id) => {
                 crate::backend::download::manager::DOWNLOAD_QUEUE.remove_job(&id);
@@ -3775,7 +4201,6 @@ impl SimpleComponent for AppModel {
     }
 }
 
-
 // ─── AppModel helper methods ──────────────────────────────────────────────────
 
 impl AppModel {
@@ -3786,9 +4211,11 @@ impl AppModel {
             .content_width(380)
             .can_close(true)
             .build();
-        
+
         let content = adw::ToolbarView::builder().build();
-        let header = adw::HeaderBar::builder().show_end_title_buttons(false).build();
+        let header = adw::HeaderBar::builder()
+            .show_end_title_buttons(false)
+            .build();
         let window_title = adw::WindowTitle::builder().title("Move to Group").build();
         header.set_title_widget(Some(&window_title));
         content.add_top_bar(&header);
@@ -3826,7 +4253,7 @@ impl AppModel {
             });
         }
         content.add_bottom_bar(&cancel_btn);
-            
+
         let group_names = self.groups.sorted_group_names();
         for gname in group_names {
             let row = adw::ActionRow::builder()
@@ -3844,7 +4271,7 @@ impl AppModel {
             });
             lb.append(&row);
         }
-        
+
         let new_group_row = adw::ActionRow::builder()
             .title("New Group…")
             .activatable(true)
@@ -3860,7 +4287,7 @@ impl AppModel {
             });
         }
         lb.append(&new_group_row);
-        
+
         scrolled.set_child(Some(&lb));
         content.set_content(Some(&scrolled));
         dialog_win.set_child(Some(&content));
@@ -3873,7 +4300,6 @@ impl AppModel {
             self.groups.clone(),
         ));
     }
-
 
     /// Show an dialog to get a group name, then optionally move `move_idx` into it.
     fn show_create_group_dialog_then_move(
@@ -3917,32 +4343,40 @@ impl AppModel {
         );
     }
 
-    fn show_target_instance_selector(&self, editor_type: EditorType, ids: Vec<String>, is_copy: bool, sender_clone: relm4::Sender<AppMsg>) {
+    fn show_target_instance_selector(
+        &self,
+        editor_type: EditorType,
+        ids: Vec<String>,
+        is_copy: bool,
+        sender_clone: relm4::Sender<AppMsg>,
+    ) {
         if let Some(current_inst_index) = self.selected_instance {
             let instances = self.instances.clone();
             let ids_clone = ids.clone();
             let type_clone = editor_type.clone();
-            
+
             let heading = match (is_copy, ids.len()) {
                 (true, 1) => "Copy Item".to_string(),
                 (true, _) => format!("Copy {} Items", ids.len()),
                 (false, 1) => "Move Item".to_string(),
                 (false, _) => format!("Move {} Items", ids.len()),
             };
-            
+
             let dialog = adw::AlertDialog::builder()
                 .heading(&heading)
                 .body("Select the target instance:")
                 .build();
             dialog.add_response("cancel", "Cancel");
-            
+
             let list_box = gtk::ListBox::new();
             list_box.set_selection_mode(gtk::SelectionMode::Single);
             list_box.add_css_class("boxed-list");
-            
+
             let mut inst_indices = Vec::new();
             for (idx, other) in instances.iter().enumerate() {
-                if idx == current_inst_index { continue; }
+                if idx == current_inst_index {
+                    continue;
+                }
                 inst_indices.push(idx);
                 let row = adw::ActionRow::builder()
                     .title(&other.name)
@@ -3950,26 +4384,38 @@ impl AppModel {
                     .build();
                 list_box.append(&row);
             }
-            
+
             let scrolled = gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Never)
                 .min_content_height(200)
                 .max_content_height(400)
                 .child(&list_box)
                 .build();
-                
+
             dialog.set_extra_child(Some(&scrolled));
-            
+
             dialog.connect_response(None, move |_d, response| {
                 if response != "cancel" {
                     if let Some(row) = list_box.selected_row() {
                         let selected_row_idx = row.index() as usize;
                         if let Some(&target_idx) = inst_indices.get(selected_row_idx) {
-                             if is_copy {
-                                 sender_clone.send(AppMsg::ConfirmCopyItems(type_clone.clone(), ids_clone.clone(), target_idx)).ok();
-                             } else {
-                                 sender_clone.send(AppMsg::ConfirmMoveItems(type_clone.clone(), ids_clone.clone(), target_idx)).ok();
-                             }
+                            if is_copy {
+                                sender_clone
+                                    .send(AppMsg::ConfirmCopyItems(
+                                        type_clone.clone(),
+                                        ids_clone.clone(),
+                                        target_idx,
+                                    ))
+                                    .ok();
+                            } else {
+                                sender_clone
+                                    .send(AppMsg::ConfirmMoveItems(
+                                        type_clone.clone(),
+                                        ids_clone.clone(),
+                                        target_idx,
+                                    ))
+                                    .ok();
+                            }
                         }
                     }
                 }

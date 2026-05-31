@@ -271,10 +271,18 @@ fn parse_description(val: &serde_json::Value) -> String {
     }
 }
 
-fn extract_icon_to_cache(archive: &mut zip::ZipArchive<fs::File>, icon_path_in_jar: &str, cache_filename: &str) -> Option<String> {
-    let clean_path = icon_path_in_jar.strip_prefix('/').unwrap_or(icon_path_in_jar);
+fn extract_icon_to_cache(
+    archive: &mut zip::ZipArchive<fs::File>,
+    icon_path_in_jar: &str,
+    cache_filename: &str,
+) -> Option<String> {
+    let clean_path = icon_path_in_jar
+        .strip_prefix('/')
+        .unwrap_or(icon_path_in_jar);
     if let Ok(mut icon_file) = archive.by_name(clean_path) {
-        if let Some(proj_dirs) = directories::ProjectDirs::from("com", "magnotec", "obelisk-launcher") {
+        if let Some(proj_dirs) =
+            directories::ProjectDirs::from("com", "magnotec", "obelisk-launcher")
+        {
             let icons_dir = proj_dirs.cache_dir().join("icons");
             let _ = fs::create_dir_all(&icons_dir);
             let out_path = icons_dir.join(cache_filename);
@@ -342,7 +350,8 @@ fn get_mod_info(path: &Path, full: bool) -> ModInfo {
 
                         if !icon_in_jar.is_empty() {
                             let cache_filename = format!("{}-{}.png", info.id, info.version);
-                            info.icon_path = extract_icon_to_cache(&mut archive, &icon_in_jar, &cache_filename);
+                            info.icon_path =
+                                extract_icon_to_cache(&mut archive, &icon_in_jar, &cache_filename);
                         }
                     }
 
@@ -381,8 +390,10 @@ fn get_mod_info(path: &Path, full: bool) -> ModInfo {
 
                             // Extract Forge icon
                             if let Some(logo) = &mod_data.logo_file {
-                                let cache_filename = format!("{}-{}-forge.png", info.id, info.version);
-                                info.icon_path = extract_icon_to_cache(&mut archive, logo, &cache_filename);
+                                let cache_filename =
+                                    format!("{}-{}-forge.png", info.id, info.version);
+                                info.icon_path =
+                                    extract_icon_to_cache(&mut archive, logo, &cache_filename);
                             }
                         }
                     }
@@ -542,7 +553,8 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
         return None;
     }
 
-    let has_mismatch = instance_path.join(".minecraft").is_dir() && instance_path.join("minecraft").is_dir();
+    let has_mismatch =
+        instance_path.join(".minecraft").is_dir() && instance_path.join("minecraft").is_dir();
 
     let minecraft_dir = get_minecraft_dir(instance_path);
 
@@ -583,15 +595,11 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
                     match key.trim() {
                         "name" => name = value.trim().to_string(),
                         "iconKey" => icon_key = Some(value.trim().to_string()),
-                        "totalTimePlayed" => {
-                            total_time_played = value.trim().parse().unwrap_or(0)
-                        }
+                        "totalTimePlayed" => total_time_played = value.trim().parse().unwrap_or(0),
                         "lastLaunchTime" => {
                             last_launched = value.trim().parse().ok();
                         }
-                        "IntendedVersion" => {
-                            minecraft_version = Some(value.trim().to_string())
-                        }
+                        "IntendedVersion" => minecraft_version = Some(value.trim().to_string()),
                         "JavaPath" => java_path = Some(PathBuf::from(value.trim())),
                         "FeralGameMode" => feral_gamemode = value.trim() == "true",
                         "DiscreteGpu" => discrete_gpu = value.trim() == "true",
@@ -662,9 +670,12 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
             for mod_entry in mod_entries.flatten() {
                 let m_path = mod_entry.path();
                 if m_path.is_file() {
-                    let fname = m_path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                    let fname = m_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default();
                     if fname.ends_with(".jar") || fname.ends_with(".jar.disabled") {
-                         mods.push(get_mod_info(&m_path, full_scan));
+                        mods.push(get_mod_info(&m_path, full_scan));
                     }
                 }
             }
@@ -692,7 +703,11 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
             for w_entry in w_entries.flatten() {
                 if w_entry.path().is_dir() {
                     let w_path = w_entry.path();
-                    let folder_name = w_path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string();
+                    let folder_name = w_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
 
                     if !full_scan {
                         worlds.push(WorldInfo {
@@ -760,7 +775,9 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
                                     if let Some(level_name) = data.level_name {
                                         name = level_name;
                                     }
-                                    seed = data.random_seed.or_else(|| data.world_gen_settings.and_then(|s| s.seed));
+                                    seed = data
+                                        .random_seed
+                                        .or_else(|| data.world_gen_settings.and_then(|s| s.seed));
                                     last_played = data.last_played;
                                     if let Some(ver) = data.version {
                                         mc_version = ver.name;
@@ -873,7 +890,9 @@ pub fn create_instance(
          totalTimePlayed=0\n\
          instanceId={}\n\
          IntendedVersion={}\n",
-        options.name, uuid::Uuid::new_v4().to_string(), options.minecraft_version
+        options.name,
+        uuid::Uuid::new_v4().to_string(),
+        options.minecraft_version
     );
     fs::write(instance_dir.join("instance.cfg"), cfg_content)
         .map_err(|e| format!("Failed to write instance.cfg: {}", e))?;
@@ -1127,7 +1146,8 @@ fn remove_cfg_key(instance_path: &Path, key: &str) -> Result<(), String> {
 
     if removed {
         let new_content = lines.join("\n");
-        fs::write(&cfg_path, &new_content).map_err(|e| format!("Failed to write instance.cfg: {}", e))?;
+        fs::write(&cfg_path, &new_content)
+            .map_err(|e| format!("Failed to write instance.cfg: {}", e))?;
     }
     Ok(())
 }
@@ -1205,7 +1225,11 @@ pub fn set_mod_loader(instance_path: &Path, loader: &ModLoader) -> Result<(), St
 
 /// Sets (or replaces) the mod loader for an existing instance, using a specific version.
 /// Unlike `set_mod_loader`, this uses the caller-supplied version string instead of hardcoded defaults.
-pub fn set_mod_loader_with_version(instance_path: &Path, loader: &ModLoader, version: &str) -> Result<(), String> {
+pub fn set_mod_loader_with_version(
+    instance_path: &Path,
+    loader: &ModLoader,
+    version: &str,
+) -> Result<(), String> {
     let mut pack = read_pack(instance_path)?;
 
     let mc_version = pack
@@ -1468,10 +1492,14 @@ pub fn set_component_version(
     write_pack(instance_path, &pack)
 }
 
-pub fn update_instance_playtime(instance_path: &Path, additional_seconds: u64) -> Result<u64, String> {
+pub fn update_instance_playtime(
+    instance_path: &Path,
+    additional_seconds: u64,
+) -> Result<u64, String> {
     let cfg_path = instance_path.join("instance.cfg");
-    let content = fs::read_to_string(&cfg_path).map_err(|e| format!("Failed to read instance.cfg: {}", e))?;
-    
+    let content =
+        fs::read_to_string(&cfg_path).map_err(|e| format!("Failed to read instance.cfg: {}", e))?;
+
     let mut current_playtime = 0u64;
     for line in content.lines() {
         if let Some((key, value)) = line.split_once('=') {
@@ -1481,7 +1509,7 @@ pub fn update_instance_playtime(instance_path: &Path, additional_seconds: u64) -
             }
         }
     }
-    
+
     let new_playtime = current_playtime + additional_seconds;
     update_cfg_key(instance_path, "totalTimePlayed", &new_playtime.to_string())?;
     Ok(new_playtime)
@@ -1520,17 +1548,16 @@ pub fn toggle_mod_enabled(
     let new_path = mods_dir.join(&new_filename);
     fs::rename(current_path, new_path).map_err(|e| format!("Failed to rename mod file: {}", e))?;
 
-
     Ok(new_filename)
 }
 
 pub fn rename_world(instance_path: &Path, folder_name: &str, new_name: &str) -> Result<(), String> {
     let minecraft_dir = get_minecraft_dir(instance_path);
-    
+
     let worlds_dir = minecraft_dir.join("saves");
     let world_path = worlds_dir.join(folder_name);
     let level_dat_path = world_path.join("level.dat");
-    
+
     if !level_dat_path.exists() {
         return Err("World level.dat not found".to_string());
     }
@@ -1543,11 +1570,14 @@ pub fn rename_world(instance_path: &Path, folder_name: &str, new_name: &str) -> 
     decoder.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
 
     let mut value: fastnbt::Value = fastnbt::from_bytes(&bytes).map_err(|e| e.to_string())?;
-    
+
     // NBT path: Data -> LevelName
     if let fastnbt::Value::Compound(root) = &mut value {
         if let Some(fastnbt::Value::Compound(data)) = root.get_mut("Data") {
-            data.insert("LevelName".to_string(), fastnbt::Value::String(new_name.to_string()));
+            data.insert(
+                "LevelName".to_string(),
+                fastnbt::Value::String(new_name.to_string()),
+            );
         }
     }
 
@@ -1561,7 +1591,11 @@ pub fn rename_world(instance_path: &Path, folder_name: &str, new_name: &str) -> 
     Ok(())
 }
 
-pub fn move_world(source_instance_path: &Path, target_instance_path: &Path, folder_name: &str) -> Result<(), String> {
+pub fn move_world(
+    source_instance_path: &Path,
+    target_instance_path: &Path,
+    folder_name: &str,
+) -> Result<(), String> {
     let source_minecraft_dir = get_minecraft_dir(source_instance_path);
 
     let target_minecraft_dir = get_minecraft_dir(target_instance_path);
@@ -1581,5 +1615,6 @@ pub fn move_world(source_instance_path: &Path, target_instance_path: &Path, fold
         fs::create_dir_all(&target_saves_dir).map_err(|e| e.to_string())?;
     }
 
-    fs::rename(source_path, target_path).map_err(|e| format!("Failed to move world directory: {}", e))
+    fs::rename(source_path, target_path)
+        .map_err(|e| format!("Failed to move world directory: {}", e))
 }

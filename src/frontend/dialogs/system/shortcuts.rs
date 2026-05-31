@@ -67,9 +67,9 @@ impl SimpleComponent for ShortcutsDialog {
     }
 
     fn init(
-        _init: Self::Init, 
-        root: Self::Root, 
-        _sender: ComponentSender<Self>
+        _init: Self::Init,
+        root: Self::Root,
+        _sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = ShortcutsDialog;
         let widgets = view_output!();

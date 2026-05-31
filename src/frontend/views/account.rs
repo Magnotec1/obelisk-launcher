@@ -1,7 +1,4 @@
-use crate::backend::auth::account::{
-    refresh_all_accounts, verify_account_status,
-    AccountStatus,
-};
+use crate::backend::auth::account::{refresh_all_accounts, verify_account_status, AccountStatus};
 use crate::backend::auth::microsoft::{Account, AccountType};
 use crate::config::Config;
 use crate::frontend::app::AppMsg;
@@ -30,7 +27,7 @@ impl FactoryComponent for AccountRow {
             set_subtitle: &self.get_subtitle(),
             #[watch]
             set_activatable: !self.is_active,
-            
+
             connect_activated[sender, uuid = self.account.uuid.clone()] => move |_| {
                 sender.output(AccountRowOutput::Switch(uuid.clone())).ok();
             },
@@ -159,111 +156,111 @@ impl Component for AccountView {
     type CommandOutput = ();
 
     view! {
-        adw::Bin {
-            set_vexpand: true,
+    adw::Bin {
+        set_vexpand: true,
 
-            #[wrap(Some)]
-            #[name = "toast_overlay"]
-            set_child = &adw::ToastOverlay {
-                gtk::ScrolledWindow {
-                    set_vexpand: true,
-                    set_hscrollbar_policy: gtk::PolicyType::Never,
+        #[wrap(Some)]
+        #[name = "toast_overlay"]
+        set_child = &adw::ToastOverlay {
+            gtk::ScrolledWindow {
+                set_vexpand: true,
+                set_hscrollbar_policy: gtk::PolicyType::Never,
 
-                    adw::Clamp {
-                        set_maximum_size: 600,
-                        set_tightening_threshold: 400,
+                adw::Clamp {
+                    set_maximum_size: 600,
+                    set_tightening_threshold: 400,
 
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_margin_all: 16,
-                            set_spacing: 16,
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_margin_all: 16,
+                        set_spacing: 16,
 
-                                // ── Active account card ──
+                            // ── Active account card ──
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Vertical,
+                                set_css_classes: &["card"],
+
                                 gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_css_classes: &["card"],
+                                    set_orientation: gtk::Orientation::Horizontal,
+                                    set_margin_all: 16,
+                                    set_spacing: 16,
+
+                                    gtk::Image {
+                                        set_icon_name: Some("avatar-default-symbolic"),
+                                        set_pixel_size: 40,
+                                        set_css_classes: &["dim-label"],
+                                    },
 
                                     gtk::Box {
-                                        set_orientation: gtk::Orientation::Horizontal,
-                                        set_margin_all: 16,
-                                        set_spacing: 16,
-
-                                        gtk::Image {
-                                            set_icon_name: Some("avatar-default-symbolic"),
-                                            set_pixel_size: 40,
-                                            set_css_classes: &["dim-label"],
-                                        },
-
-                                        gtk::Box {
-                                            set_orientation: gtk::Orientation::Vertical,
-                                            set_hexpand: true,
-                                            set_spacing: 2,
-                                            set_valign: gtk::Align::Center,
-
-                                            gtk::Label {
-                                                set_label: "Active Account",
-                                                set_css_classes: &["heading"],
-                                                set_halign: gtk::Align::Start,
-                                            },
-                                            gtk::Label {
-                                                set_css_classes: &["title-2"],
-                                                set_halign: gtk::Align::Start,
-                                                set_ellipsize: gtk::pango::EllipsizeMode::End,
-                                                #[watch]
-                                                set_label: &model.get_active_name(),
-                                            },
-                                        }
-                                    },
-                                },
-
-                                // ── Content area: Spinner or List ──
-                                gtk::Stack {
-                                    add_named[Some("loading")] = &gtk::Box {
                                         set_orientation: gtk::Orientation::Vertical,
-                                        set_halign: gtk::Align::Center,
+                                        set_hexpand: true,
+                                        set_spacing: 2,
                                         set_valign: gtk::Align::Center,
-                                        set_spacing: 16,
-                                        set_margin_top: 32,
-                                        set_margin_bottom: 32,
-
-                                        adw::Spinner {
-                                            set_width_request: 48,
-                                            set_height_request: 48,
-                                        },
 
                                         gtk::Label {
-                                            #[watch]
-                                            set_label: &model.refresh_message,
-                                            set_css_classes: &["dim-label"],
-                                        }
-                                    },
-                                    add_named[Some("list")] = &gtk::Box {
-                                        set_orientation: gtk::Orientation::Vertical,
-                                        set_spacing: 12,
-                                        gtk::Label {
-                                            set_label: "All Accounts",
+                                            set_label: "Active Account",
                                             set_css_classes: &["heading"],
                                             set_halign: gtk::Align::Start,
-                                            set_margin_start: 4,
-                                            set_margin_top: 8,
                                         },
-                                    
-                                        #[local_ref]
-                                        account_list -> gtk::ListBox {
-                                            set_css_classes: &["boxed-list"],
-                                            set_selection_mode: gtk::SelectionMode::None,
-                                        }
+                                        gtk::Label {
+                                            set_css_classes: &["title-2"],
+                                            set_halign: gtk::Align::Start,
+                                            set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                            #[watch]
+                                            set_label: &model.get_active_name(),
+                                        },
+                                    }
+                                },
+                            },
+
+                            // ── Content area: Spinner or List ──
+                            gtk::Stack {
+                                add_named[Some("loading")] = &gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_halign: gtk::Align::Center,
+                                    set_valign: gtk::Align::Center,
+                                    set_spacing: 16,
+                                    set_margin_top: 32,
+                                    set_margin_bottom: 32,
+
+                                    adw::Spinner {
+                                        set_width_request: 48,
+                                        set_height_request: 48,
                                     },
 
-                                    #[watch]
-                                    set_visible_child_name: if model.refreshing { "loading" } else { "list" },
-                                }
+                                    gtk::Label {
+                                        #[watch]
+                                        set_label: &model.refresh_message,
+                                        set_css_classes: &["dim-label"],
+                                    }
+                                },
+                                add_named[Some("list")] = &gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 12,
+                                    gtk::Label {
+                                        set_label: "All Accounts",
+                                        set_css_classes: &["heading"],
+                                        set_halign: gtk::Align::Start,
+                                        set_margin_start: 4,
+                                        set_margin_top: 8,
+                                    },
+
+                                    #[local_ref]
+                                    account_list -> gtk::ListBox {
+                                        set_css_classes: &["boxed-list"],
+                                        set_selection_mode: gtk::SelectionMode::None,
+                                    }
+                                },
+
+                                #[watch]
+                                set_visible_child_name: if model.refreshing { "loading" } else { "list" },
                             }
                         }
                     }
                 }
             }
         }
+    }
 
     fn init(
         config: Config,
@@ -322,7 +319,7 @@ impl Component for AccountView {
             AccountInput::RefreshAll => {
                 self.refreshing = true;
                 self.refresh_message = "Refreshing all accounts…".to_string();
-                
+
                 let mut config_clone = self.config.clone();
                 let sender_out = sender.output_sender().clone();
                 let sender_in = sender.input_sender().clone();
@@ -344,7 +341,7 @@ impl AccountView {
         if let Some(overlay) = start.downcast_ref::<adw::ToastOverlay>() {
             return Some(overlay.clone());
         }
-        
+
         let mut child = start.first_child();
         while let Some(c) = child {
             if let Some(found) = self.find_toast_overlay(c.clone()) {

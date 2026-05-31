@@ -1,9 +1,9 @@
 use crate::backend::runtime::java::{find_java_versions, JavaInstance, JavaSource};
 use adw::prelude::*;
+use gtk::gio;
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::path::PathBuf;
-use gtk::gio;
 
 #[derive(Debug)]
 pub struct JavaRow {
@@ -126,124 +126,122 @@ impl SimpleComponent for JavaSelectorDialog {
     type Output = JavaSelectorOutput;
 
     view! {
-        #[name = "dialog"]
-        adw::Dialog {
-            set_title: "Select Java Version",
-            set_content_width: 500,
-            set_content_height: 400,
-            set_can_close: true,
+            #[name = "dialog"]
+            adw::Dialog {
+                set_title: "Select Java Version",
+                set_content_width: 500,
+                set_content_height: 400,
+                set_can_close: true,
 
-            #[wrap(Some)]
-            set_child = &adw::ToolbarView { 
-                add_top_bar = &adw::HeaderBar {
-                    #[wrap(Some)]
-                    set_title_widget = &adw::WindowTitle {
-                        set_title: "Java Installations",
-                    },
-                    pack_end = &gtk::Button {
-                        set_icon_name: "view-refresh-symbolic",
-                        connect_clicked => JavaSelectorInput::Refresh,
-                    }
-                },
-                add_bottom_bar = &gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_spacing: 12,
-                    set_margin_bottom: 16,
-                    set_margin_start: 16,
-                    set_margin_end: 16,
-                    set_halign: gtk::Align::Center,
-
-                    gtk::Button {
-                        set_label: "Cancel",
-                        set_css_classes: &["pill"],
-                        connect_clicked[root, sender] => move |_| {
-                            sender.input(JavaSelectorInput::Close);
-                            root.close();
-                        },
-                    },
-                    gtk::Button {
-                        set_label: "Use",
-                        #[watch]
-                        set_sensitive: model.selected_path.is_some(),
-                        set_css_classes: &["suggested-action", "pill"],
-                        connect_clicked[root, sender] => move |_| {
-                            sender.input(JavaSelectorInput::Use);
-                            root.close();
-                        },
-                    }
-                },
                 #[wrap(Some)]
-                set_content = &gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 12,
-
-                    gtk::Box {
+                set_child = &adw::ToolbarView {
+                    add_top_bar = &adw::HeaderBar {
+                        #[wrap(Some)]
+                        set_title_widget = &adw::WindowTitle {
+                            set_title: "Java Installations",
+                        },
+                        pack_end = &gtk::Button {
+                            set_icon_name: "view-refresh-symbolic",
+                            connect_clicked => JavaSelectorInput::Refresh,
+                        }
+                    },
+                    add_bottom_bar = &gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 8,
+                        set_spacing: 12,
+                        set_margin_bottom: 16,
                         set_margin_start: 16,
                         set_margin_end: 16,
+                        set_halign: gtk::Align::Center,
 
-                        gtk::SearchEntry {
-                            set_hexpand: true,
-                            set_placeholder_text: Some("Search versions..."),
-                            connect_search_changed[sender] => move |entry| {
-                                sender.input(JavaSelectorInput::SearchChanged(entry.text().to_string()));
+                        gtk::Button {
+                            set_label: "Cancel",
+                            set_css_classes: &["pill"],
+                            connect_clicked[root, sender] => move |_| {
+                                sender.input(JavaSelectorInput::Close);
+                                root.close();
+                            },
+                        },
+                        gtk::Button {
+                            set_label: "Use",
+                            #[watch]
+                            set_sensitive: model.selected_path.is_some(),
+                            set_css_classes: &["suggested-action", "pill"],
+                            connect_clicked[root, sender] => move |_| {
+                                sender.input(JavaSelectorInput::Use);
+                                root.close();
+                            },
+                        }
+                    },
+                    #[wrap(Some)]
+                    set_content = &gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 12,
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 8,
+                            set_margin_start: 16,
+                            set_margin_end: 16,
+
+                            gtk::SearchEntry {
+                                set_hexpand: true,
+                                set_placeholder_text: Some("Search versions..."),
+                                connect_search_changed[sender] => move |entry| {
+                                    sender.input(JavaSelectorInput::SearchChanged(entry.text().to_string()));
+                                },
+                            },
+
+                            gtk::Button {
+                                set_icon_name: "folder-open-symbolic",
+                                set_tooltip_text: Some("Browse for Java executable"),
+                                connect_clicked => JavaSelectorInput::Browse,
                             },
                         },
 
-                        gtk::Button {
-                            set_icon_name: "folder-open-symbolic",
-                            set_tooltip_text: Some("Browse for Java executable"),
-                            connect_clicked => JavaSelectorInput::Browse,
+                        gtk::Stack {
+                            set_margin_start: 16,
+                            set_margin_end: 16,
+                            set_margin_bottom: 16,
+                            set_vexpand: true,
+
+                        add_named[Some("loading")] = &gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_halign: gtk::Align::Center,
+                            set_valign: gtk::Align::Center,
+                            set_hexpand: true,
+                            set_vexpand: true,
+                            set_spacing: 12,
+
+                            adw::Spinner {
+                                set_width_request: 32,
+                                set_height_request: 32,
+                            },
+
+                            gtk::Label {
+                                set_label: "Scanning for Java runtimes...",
+                                set_css_classes: &["dim-label"],
+                            }
                         },
-                    },
 
-                    gtk::Stack {
-                        set_margin_start: 16,
-                        set_margin_end: 16,
-                        set_margin_bottom: 16,
-                        set_vexpand: true,
-
-                    add_named[Some("loading")] = &gtk::Box {
-                        set_orientation: gtk::Orientation::Vertical,
-                        set_halign: gtk::Align::Center,
-                        set_valign: gtk::Align::Center,
-                        set_hexpand: true,
-                        set_vexpand: true,
-                        set_spacing: 12,
-
-                        adw::Spinner {
-                            set_width_request: 32,
-                            set_height_request: 32,
+                        add_named[Some("content")] = &gtk::ScrolledWindow {
+                            set_vexpand: true,
+                            #[local_ref]
+                            _java_list_box -> gtk::ListBox {},
                         },
-
-                        gtk::Label {
-                            set_label: "Scanning for Java runtimes...",
-                            set_css_classes: &["dim-label"],
-                        }
-                    },
-
-                    add_named[Some("content")] = &gtk::ScrolledWindow {
-                        set_vexpand: true,
-                        #[local_ref]
-                        _java_list_box -> gtk::ListBox {},
-                    },
-                    #[watch]
-                    set_visible_child_name: if model.loading { "loading" } else { "content" },
+                        #[watch]
+                        set_visible_child_name: if model.loading { "loading" } else { "content" },
+                    }
                 }
             }
         }
     }
-}
 
     fn init(
         init: Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let list_box = gtk::ListBox::builder()
-            .css_classes(["boxed-list"])
-            .build();
+        let list_box = gtk::ListBox::builder().css_classes(["boxed-list"]).build();
 
         let java_list = FactoryVecDeque::builder()
             .launch(list_box)
@@ -295,8 +293,13 @@ impl SimpleComponent for JavaSelectorDialog {
             JavaSelectorInput::Select(path) => {
                 self.selected_path = Some(path.clone());
                 for i in 0..self.java_list.len() {
-                    let is_selected = self.java_list.get(i).map(|r| r.path == path).unwrap_or(false);
-                    self.java_list.send(i, JavaRowInput::SetSelected(is_selected));
+                    let is_selected = self
+                        .java_list
+                        .get(i)
+                        .map(|r| r.path == path)
+                        .unwrap_or(false);
+                    self.java_list
+                        .send(i, JavaRowInput::SetSelected(is_selected));
                 }
             }
             JavaSelectorInput::Browse => {
@@ -305,13 +308,17 @@ impl SimpleComponent for JavaSelectorDialog {
                     .title("Select Java Executable")
                     .build();
 
-                file_dialog.open(None::<&gtk::Window>, None::<&gio::Cancellable>, move |res| {
-                    if let Ok(file) = res {
-                        if let Some(path) = file.path() {
-                            let _ = sender_clone.send(JavaSelectorInput::Select(path));
+                file_dialog.open(
+                    None::<&gtk::Window>,
+                    None::<&gio::Cancellable>,
+                    move |res| {
+                        if let Ok(file) = res {
+                            if let Some(path) = file.path() {
+                                let _ = sender_clone.send(JavaSelectorInput::Select(path));
+                            }
                         }
-                    }
-                });
+                    },
+                );
             }
             JavaSelectorInput::Use => {
                 if let Some(path) = self.selected_path.take() {
@@ -321,5 +328,4 @@ impl SimpleComponent for JavaSelectorDialog {
             }
         }
     }
-
 }

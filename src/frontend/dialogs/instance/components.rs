@@ -1,7 +1,7 @@
 #![allow(unused_assignments)]
 use crate::backend::runtime::versions::{
-    fetch_loader_versions_by_uid, fetch_versions, filter_versions, LoaderVersion,
-    MinecraftVersion, VersionType,
+    fetch_loader_versions_by_uid, fetch_versions, filter_versions, LoaderVersion, MinecraftVersion,
+    VersionType,
 };
 use adw::prelude::*;
 use relm4::factory::FactoryVecDeque;
@@ -302,7 +302,10 @@ impl SimpleComponent for ComponentEditorDialog {
                             let _ = sender_clone.send(ComponentEditorInput::VersionsLoaded(res));
                         });
                     }
-                    "net.fabricmc.fabric-loader" | "org.quiltmc.quilt-loader" | "net.minecraftforge" | "net.neoforged" => {
+                    "net.fabricmc.fabric-loader"
+                    | "org.quiltmc.quilt-loader"
+                    | "net.minecraftforge"
+                    | "net.neoforged" => {
                         let name = match uid.as_str() {
                             "net.fabricmc.fabric-loader" => "Fabric Loader",
                             "org.quiltmc.quilt-loader" => "Quilt Loader",
@@ -381,7 +384,10 @@ impl SimpleComponent for ComponentEditorDialog {
             ComponentEditorInput::ConfirmInstall => {
                 if let Some(v) = &self.selected_version {
                     sender
-                        .output(ComponentEditorOutput::SetVersion(self.uid.clone(), v.clone()))
+                        .output(ComponentEditorOutput::SetVersion(
+                            self.uid.clone(),
+                            v.clone(),
+                        ))
                         .ok();
                     self.visible = false;
                 }
@@ -415,7 +421,13 @@ impl ComponentEditorDialog {
                 let is_selected = self.selected_version.as_ref() == Some(&v.id);
                 let is_current = self.current_version.as_ref() == Some(&v.id);
                 let is_newest = i == 0;
-                guard.push_back((v.id.clone(), v.version_type.as_str().to_string(), is_selected, is_current, is_newest));
+                guard.push_back((
+                    v.id.clone(),
+                    v.version_type.as_str().to_string(),
+                    is_selected,
+                    is_current,
+                    is_newest,
+                ));
             }
         } else if self.uid == "net.fabricmc.fabric-loader"
             || self.uid == "org.quiltmc.quilt-loader"
@@ -433,7 +445,13 @@ impl ComponentEditorDialog {
                 let is_selected = self.selected_version.as_ref() == Some(&v.version);
                 let is_current = self.current_version.as_ref() == Some(&v.version);
                 let is_newest = i == 0;
-                guard.push_back((v.version.clone(), suffix.to_string(), is_selected, is_current, is_newest));
+                guard.push_back((
+                    v.version.clone(),
+                    suffix.to_string(),
+                    is_selected,
+                    is_current,
+                    is_newest,
+                ));
             }
         }
     }

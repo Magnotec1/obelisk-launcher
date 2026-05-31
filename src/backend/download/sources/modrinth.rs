@@ -171,11 +171,10 @@ impl RawProject {
     fn into_clean(self) -> ModProject {
         let license_name = match &self.license {
             Some(serde_json::Value::String(s)) => Some(s.clone()),
-            Some(serde_json::Value::Object(obj)) => {
-                obj.get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            }
+            Some(serde_json::Value::Object(obj)) => obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             _ => None,
         };
 
@@ -251,7 +250,11 @@ impl RawVersion {
             status: self.status,
             requested_status: self.requested_status,
             files: self.files.into_iter().map(|f| f.into_clean()).collect(),
-            dependencies: self.dependencies.into_iter().map(|d| d.into_clean()).collect(),
+            dependencies: self
+                .dependencies
+                .into_iter()
+                .map(|d| d.into_clean())
+                .collect(),
             game_versions: self.game_versions,
             loaders: self.loaders,
             date_published: self.date_published,
@@ -332,8 +335,14 @@ pub fn search_mods(
     loader: Option<ModLoader>,
     project_type: Option<&str>,
 ) -> Result<ModSearchResult, String> {
-    let cache_key =
-        build_search_cache_key(query, limit, offset, game_version, loader.as_ref(), project_type);
+    let cache_key = build_search_cache_key(
+        query,
+        limit,
+        offset,
+        game_version,
+        loader.as_ref(),
+        project_type,
+    );
 
     {
         let cache = SEARCH_CACHE.lock().unwrap();
@@ -375,13 +384,16 @@ pub fn search_mods(
         url.push_str(&format!("&facets={}", urlencoding::encode(&facets_str)));
     }
 
-    let response = HTTP_CLIENT.get(url).send().map_err(super::map_reqwest_error)?;
+    let response = HTTP_CLIENT
+        .get(url)
+        .send()
+        .map_err(super::map_reqwest_error)?;
     if !response.status().is_success() {
         return Err(format!("Modrinth API error: {}", response.status()));
     }
 
     let result: RawSearchResult = response.json().map_err(|e| e.to_string())?;
-    
+
     let clean_result = ModSearchResult {
         hits: result.hits.into_iter().map(|h| h.into_clean()).collect(),
         offset: result.offset,
@@ -440,7 +452,10 @@ pub fn get_project_versions(
         url.push_str(&format!("?{}", params.join("&")));
     }
 
-    let response = HTTP_CLIENT.get(url).send().map_err(super::map_reqwest_error)?;
+    let response = HTTP_CLIENT
+        .get(url)
+        .send()
+        .map_err(super::map_reqwest_error)?;
     if !response.status().is_success() {
         return Err(format!("Modrinth API error: {}", response.status()));
     }
@@ -473,7 +488,10 @@ pub fn get_project(id_or_slug: &str) -> Result<ModProject, String> {
     }
 
     let url = format!("{}/project/{}", MODRINTH_API_BASE, id_or_slug);
-    let response = HTTP_CLIENT.get(url).send().map_err(super::map_reqwest_error)?;
+    let response = HTTP_CLIENT
+        .get(url)
+        .send()
+        .map_err(super::map_reqwest_error)?;
     if !response.status().is_success() {
         return Err(format!("Modrinth API error: {}", response.status()));
     }
@@ -496,13 +514,19 @@ pub fn get_project(id_or_slug: &str) -> Result<ModProject, String> {
 }
 
 pub fn get_version_by_hash(hash: &str, algorithm: &str) -> Result<ModVersion, String> {
-    let url = format!("{}/version_file/{}?algorithm={}", MODRINTH_API_BASE, hash, algorithm);
-    let response = HTTP_CLIENT.get(url).send().map_err(super::map_reqwest_error)?;
-    
+    let url = format!(
+        "{}/version_file/{}?algorithm={}",
+        MODRINTH_API_BASE, hash, algorithm
+    );
+    let response = HTTP_CLIENT
+        .get(url)
+        .send()
+        .map_err(super::map_reqwest_error)?;
+
     if response.status() == 404 {
         return Err("Hash not found on Modrinth".to_string());
     }
-    
+
     if !response.status().is_success() {
         return Err(format!("Modrinth API error: {}", response.status()));
     }
@@ -559,7 +583,10 @@ where
     progress_callback("Resolving Modrinth dependencies...".to_string(), 0.1);
     let version = if let Some(vid) = target_version {
         let url = format!("{}/version/{}", MODRINTH_API_BASE, vid);
-        let response = HTTP_CLIENT.get(&url).send().map_err(super::map_reqwest_error)?;
+        let response = HTTP_CLIENT
+            .get(&url)
+            .send()
+            .map_err(super::map_reqwest_error)?;
         if !response.status().is_success() {
             return Err(format!(
                 "Error fetching version {}: {}",

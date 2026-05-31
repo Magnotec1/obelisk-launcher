@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::backend::instance::manager::ModLoader;
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LoaderVersion {
@@ -61,7 +60,6 @@ pub struct RawVersion {
     pub url: String,
 }
 
-
 pub fn fetch_fabric_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
     crate::backend::download::sources::minecraft::fetch_fabric_versions_for_game(game_version)
 }
@@ -99,10 +97,16 @@ pub fn fetch_neoforge_versions_for_game(game_version: &str) -> Result<Vec<Loader
     crate::backend::download::sources::minecraft::fetch_neoforge_versions_for_game(game_version)
 }
 
-pub fn fetch_loader_versions_by_uid(uid: &str, game_version: &str) -> Result<Vec<LoaderVersion>, String> {
+pub fn fetch_loader_versions_by_uid(
+    uid: &str,
+    game_version: &str,
+) -> Result<Vec<LoaderVersion>, String> {
     crate::backend::download::sources::minecraft::fetch_loader_versions_by_uid(uid, game_version)
 }
 
-pub fn fetch_loader_versions(loader: &ModLoader, game_version: &str) -> Result<Vec<LoaderVersion>, String> {
+pub fn fetch_loader_versions(
+    loader: &ModLoader,
+    game_version: &str,
+) -> Result<Vec<LoaderVersion>, String> {
     crate::backend::download::sources::minecraft::fetch_loader_versions(loader, game_version)
 }

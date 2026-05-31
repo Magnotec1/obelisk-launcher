@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <!-- Creeper face glow filter -->
+    <filter id="green-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Soft radial glow behind the obelisk -->
+    <radialGradient id="aura-glow" cx="50%" cy="65%" r="45%">
+      <stop offset="0%" stop-color="#00ff66" stop-opacity="0.22"/>
+      <stop offset="60%" stop-color="#00ff66" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#00ff66" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Creeper face vibrant green gradient -->
+    <linearGradient id="creeper-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00ff66"/>
+      <stop offset="100%" stop-color="#00aa3a"/>
+    </linearGradient>
+
+    <!-- Obelisk column gradients -->
+    <linearGradient id="col-left" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3b4657"/>
+      <stop offset="100%" stop-color="#222933"/>
+    </linearGradient>
+    <linearGradient id="col-right" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#28303d"/>
+      <stop offset="100%" stop-color="#161c24"/>
+    </linearGradient>
+
+    <!-- Obelisk pyramid cap gradients -->
+    <linearGradient id="pyr-left" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4e5b70"/>
+      <stop offset="100%" stop-color="#374252"/>
+    </linearGradient>
+    <linearGradient id="pyr-right" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#374252"/>
+      <stop offset="100%" stop-color="#28303d"/>
+    </linearGradient>
+
+    <!-- Obelisk base gradients -->
+    <linearGradient id="base-top" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#465266"/>
+      <stop offset="100%" stop-color="#2a3342"/>
+    </linearGradient>
+    <linearGradient id="base-left" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2a3342"/>
+      <stop offset="100%" stop-color="#19202a"/>
+    </linearGradient>
+    <linearGradient id="base-right" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#19202a"/>
+      <stop offset="100%" stop-color="#10141b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Flat background squircle (No drop shadow or gradient border to prevent any dock clipping) -->
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#181a20"/>
+
+  <!-- Soft green radial aura behind the obelisk -->
+  <circle cx="64" cy="72" r="42" fill="url(#aura-glow)"/>
+
+  <!-- Background particles (behind obelisk) -->
+  <rect x="36" y="38" width="3" height="3" fill="#00ff66" opacity="0.4" filter="url(#green-glow)"/>
+  <rect x="86" y="52" width="4" height="4" fill="#00ff66" opacity="0.5" filter="url(#green-glow)"/>
+  <rect x="28" y="66" width="3.5" height="3.5" fill="#00ff66" opacity="0.3" filter="url(#green-glow)"/>
+
+  <!-- Obelisk Base Bottom Left -->
+  <path d="M 64,102 L 28,84 L 28,96 L 64,114 Z" fill="url(#base-left)"/>
+  
+  <!-- Obelisk Base Bottom Right -->
+  <path d="M 64,102 L 100,84 L 100,96 L 64,114 Z" fill="url(#base-right)"/>
+  
+  <!-- Obelisk Base Top -->
+  <path d="M 64,102 L 28,84 L 64,66 L 100,84 Z" fill="url(#base-top)"/>
+
+  <!-- Main Obelisk Column Left -->
+  <path d="M 64,96 L 40,84 L 40,36 L 64,48 Z" fill="url(#col-left)"/>
+
+  <!-- Main Obelisk Column Right -->
+  <path d="M 64,96 L 88,84 L 88,36 L 64,48 Z" fill="url(#col-right)"/>
+
+  <!-- Obelisk Column Subtle Indent/Crack Left -->
+  <path d="M 40,64 L 46,67 L 46,70 L 40,67 Z" fill="#1d232c" opacity="0.8"/>
+  
+  <!-- Obelisk Column Subtle Indent/Crack Right -->
+  <path d="M 88,54 L 82,51 L 82,54 L 88,57 Z" fill="#0d1117" opacity="0.8"/>
+
+  <!-- Pyramid Cap Left -->
+  <path d="M 64,48 L 40,36 L 64,16 Z" fill="url(#pyr-left)"/>
+
+  <!-- Pyramid Cap Right -->
+  <path d="M 64,48 L 88,36 L 64,16 Z" fill="url(#pyr-right)"/>
+
+  <!-- Thin edge highlights to make it pop -->
+  <!-- Column center vertical ridge highlight -->
+  <line x1="64" y1="48" x2="64" y2="96" stroke="#ffffff" stroke-width="0.75" stroke-opacity="0.12"/>
+  
+  <!-- Column left-top edge highlight -->
+  <line x1="40" y1="36" x2="64" y2="48" stroke="#ffffff" stroke-width="0.75" stroke-opacity="0.12"/>
+
+  <!-- Glowing Creeper Face -->
+  <g fill="url(#creeper-grad)" filter="url(#green-glow)">
+    <!-- Left Eye -->
+    <path d="M 55,58.5 L 61,61.5 L 61,67.5 L 55,64.5 Z"/>
+    
+    <!-- Right Eye -->
+    <path d="M 67,61.5 L 73,58.5 L 73,64.5 L 67,67.5 Z"/>
+    
+    <!-- Nose & Mouth (Symmetric Joined Path) -->
+    <path d="M 64,69 L 67,67.5 L 67,70.5 L 70,69 L 70,75 L 64,78 L 58,75 L 58,69 L 61,70.5 L 61,67.5 Z"/>
+  </g>
+
+  <!-- Foreground particles (in front of obelisk) -->
+  <rect x="22" y="82" width="4" height="4" fill="#00ff66" opacity="0.75" filter="url(#green-glow)"/>
+  <rect x="98" y="74" width="3" height="3" fill="#00ff66" opacity="0.6" filter="url(#green-glow)"/>
+  <rect x="76" y="96" width="3.5" height="3.5" fill="#00ff66" opacity="0.7" filter="url(#green-glow)"/>
+  <rect x="46" y="104" width="3" height="3" fill="#00ff66" opacity="0.5" filter="url(#green-glow)"/>
+</svg>

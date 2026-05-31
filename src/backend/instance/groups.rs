@@ -18,7 +18,10 @@ pub struct GroupInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceGroups {
-    #[serde(default = "default_format_version", deserialize_with = "deserialize_format_version")]
+    #[serde(
+        default = "default_format_version",
+        deserialize_with = "deserialize_format_version"
+    )]
     pub format_version: u32,
     #[serde(default)]
     pub groups: HashMap<String, GroupInfo>,
@@ -35,9 +38,14 @@ where
     use serde::de::Error;
     let v = serde_json::Value::deserialize(deserializer)?;
     match v {
-        serde_json::Value::Number(n) => n.as_u64().map(|x| x as u32).ok_or_else(|| D::Error::custom("Invalid number")),
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .map(|x| x as u32)
+            .ok_or_else(|| D::Error::custom("Invalid number")),
         serde_json::Value::String(s) => s.parse::<u32>().map_err(D::Error::custom),
-        _ => Err(D::Error::custom("Expected string or number for formatVersion")),
+        _ => Err(D::Error::custom(
+            "Expected string or number for formatVersion",
+        )),
     }
 }
 

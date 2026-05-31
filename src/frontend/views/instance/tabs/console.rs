@@ -190,7 +190,13 @@ impl SimpleComponent for InstanceConsole {
 
         let widgets = view_output!();
 
-        widgets.console_stack.set_visible_child_name(if model.buffer.char_count() == 0 { "empty" } else { "logs" });
+        widgets
+            .console_stack
+            .set_visible_child_name(if model.buffer.char_count() == 0 {
+                "empty"
+            } else {
+                "logs"
+            });
 
         // Set up the console filter ToggleGroup
         {

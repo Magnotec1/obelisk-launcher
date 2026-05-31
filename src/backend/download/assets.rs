@@ -542,10 +542,7 @@ pub fn scan_versions(data_path: &Path, shared_path: Option<&Path>) -> Vec<AssetG
                 if index_path.exists() {
                     let index_size = index_path.metadata().map(|m| m.len()).unwrap_or(0);
                     entries.push(AssetEntry {
-                        name: format!(
-                            "Asset Index {} — shared objects not included",
-                            index_id
-                        ),
+                        name: format!("Asset Index {} — shared objects not included", index_id),
                         size: index_size,
                         path: index_path,
                     });

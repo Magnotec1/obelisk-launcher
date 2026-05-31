@@ -99,7 +99,7 @@ impl SimpleComponent for InstanceSharerDialog {
                             set_label: &model.loading_title,
                             set_css_classes: &["title-3"],
                         },
-                        
+
                         gtk::Label {
                             #[watch]
                             set_label: &model.loading_subtitle,
@@ -108,7 +108,7 @@ impl SimpleComponent for InstanceSharerDialog {
                             set_lines: 1,
                             set_max_width_chars: 40,
                         },
-                        
+
                         adw::Spinner {
                             #[watch]
                             set_visible: !model.show_progress,
@@ -138,7 +138,11 @@ impl SimpleComponent for InstanceSharerDialog {
         }
     }
 
-    fn init(_init: Self::Init, _root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(
+        _init: Self::Init,
+        _root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
         let model = InstanceSharerDialog {
             visible: false,
             instance_index: None,
@@ -193,15 +197,19 @@ impl SimpleComponent for InstanceSharerDialog {
                         .title("Export Instance to Zip")
                         .initial_name("instance.zip")
                         .build();
-                    
+
                     let sender = sender.clone();
-                    dialog.save(relm4::main_application().active_window().as_ref(), gtk::gio::Cancellable::NONE, move |res| {
-                        if let Ok(file) = res {
-                            if let Some(path) = file.path() {
-                                sender.input(SharerInput::ExportZipTo(path));
+                    dialog.save(
+                        relm4::main_application().active_window().as_ref(),
+                        gtk::gio::Cancellable::NONE,
+                        move |res| {
+                            if let Ok(file) = res {
+                                if let Some(path) = file.path() {
+                                    sender.input(SharerInput::ExportZipTo(path));
+                                }
                             }
-                        }
-                    });
+                        },
+                    );
                 }
             }
             SharerInput::ExportZipTo(path) => {
@@ -420,7 +428,11 @@ impl SimpleComponent for ImportDialog {
         }
     }
 
-    fn init(_init: Self::Init, _root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(
+        _init: Self::Init,
+        _root: Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
         let model = ImportDialog {
             visible: false,
             step: ImportStep::Selection,
@@ -469,12 +481,15 @@ impl SimpleComponent for ImportDialog {
                     self.step = ImportStep::Progress;
                     self.is_loading = true;
                     self.log_buffer.set_text("Initializing import...\n");
-                    sender.output(ImportOutput::Import(self.code.trim().to_string())).unwrap();
+                    sender
+                        .output(ImportOutput::Import(self.code.trim().to_string()))
+                        .unwrap();
                 }
             }
             ImportInput::AddLog(status) => {
                 let mut end_iter = self.log_buffer.end_iter();
-                self.log_buffer.insert(&mut end_iter, &format!("{}\n", status));
+                self.log_buffer
+                    .insert(&mut end_iter, &format!("{}\n", status));
             }
             ImportInput::SetLoading(loading) => {
                 self.is_loading = loading;
@@ -483,7 +498,7 @@ impl SimpleComponent for ImportDialog {
                 let dialog = gtk::FileDialog::builder()
                     .title("Import Instance from Zip")
                     .build();
-                
+
                 let filter = gtk::FileFilter::new();
                 filter.add_suffix("zip");
                 filter.set_name(Some("Zip files"));
@@ -492,13 +507,17 @@ impl SimpleComponent for ImportDialog {
                 dialog.set_filters(Some(&filters));
 
                 let sender = sender.clone();
-                dialog.open(relm4::main_application().active_window().as_ref(), gtk::gio::Cancellable::NONE, move |res| {
-                    if let Ok(file) = res {
-                        if let Some(path) = file.path() {
-                            sender.input(ImportInput::ZipSelected(path));
+                dialog.open(
+                    relm4::main_application().active_window().as_ref(),
+                    gtk::gio::Cancellable::NONE,
+                    move |res| {
+                        if let Ok(file) = res {
+                            if let Some(path) = file.path() {
+                                sender.input(ImportInput::ZipSelected(path));
+                            }
                         }
-                    }
-                });
+                    },
+                );
             }
             ImportInput::ZipSelected(path) => {
                 self.step = ImportStep::Progress;

@@ -1,9 +1,9 @@
 use crate::backend::playtime::PlaytimeManager;
-use adw::prelude::*;
-use relm4::prelude::*;
-use relm4::gtk;
-use chrono::{DateTime, Utc};
 use crate::frontend::app::AppMsg;
+use adw::prelude::*;
+use chrono::{DateTime, Utc};
+use relm4::gtk;
+use relm4::prelude::*;
 
 #[derive(Debug)]
 pub enum PlaytimeInput {
@@ -21,7 +21,7 @@ pub struct PlaytimeView {
     loading: bool,
     total_seconds: u64,
     instance_data: Vec<(String, u64, Option<DateTime<Utc>>, usize)>, // name, seconds, last_played, session_count
-    recent_sessions: Vec<(String, u64, DateTime<Utc>)>, // name, duration, end_time
+    recent_sessions: Vec<(String, u64, DateTime<Utc>)>,              // name, duration, end_time
     list_box: gtk::ListBox,
     history_list_box: gtk::ListBox,
 }
@@ -46,7 +46,7 @@ impl PlaytimeView {
         for (name, seconds, last_played, session_count) in &self.instance_data {
             let row = adw::ActionRow::new();
             row.set_title(name);
-            
+
             let mut subtitle = format_duration(*seconds);
             if let Some(lp) = last_played {
                 subtitle.push_str(&format!(" • Last played {}", lp.format("%Y-%m-%d")));
@@ -82,12 +82,16 @@ impl PlaytimeView {
             for (name, duration, end_time) in &self.recent_sessions {
                 let row = adw::ActionRow::new();
                 row.set_title(name);
-                row.set_subtitle(&format!("{} • {}", format_duration(*duration), end_time.format("%Y-%m-%d %H:%M")));
-                
+                row.set_subtitle(&format!(
+                    "{} • {}",
+                    format_duration(*duration),
+                    end_time.format("%Y-%m-%d %H:%M")
+                ));
+
                 let icon = gtk::Image::from_icon_name("document-open-recent-symbolic");
                 icon.set_css_classes(&["dim-label"]);
                 row.add_prefix(&icon);
-                
+
                 self.history_list_box.append(&row);
             }
         }
@@ -242,41 +246,49 @@ impl SimpleComponent for PlaytimeView {
         match msg {
             PlaytimeInput::UpdateData(manager, data) => {
                 use std::collections::HashMap;
-                let name_map: HashMap<String, String> = data.iter()
+                let name_map: HashMap<String, String> = data
+                    .iter()
                     .map(|(id, name, _)| (id.clone(), name.clone()))
                     .collect();
 
-                self.instance_data = data.into_iter().map(|(id, name, seconds)| {
-                    let instance_sessions: Vec<_> = manager.sessions.iter()
-                        .filter(|s| s.instance_id == id)
-                        .collect();
-                    
-                    let last_played = instance_sessions.iter()
-                        .map(|s| s.end_time)
-                        .max();
-                    
-                    let session_count = instance_sessions.len();
-                    
-                    (name, seconds, last_played, session_count)
-                }).collect();
-                
+                self.instance_data = data
+                    .into_iter()
+                    .map(|(id, name, seconds)| {
+                        let instance_sessions: Vec<_> = manager
+                            .sessions
+                            .iter()
+                            .filter(|s| s.instance_id == id)
+                            .collect();
+
+                        let last_played = instance_sessions.iter().map(|s| s.end_time).max();
+
+                        let session_count = instance_sessions.len();
+
+                        (name, seconds, last_played, session_count)
+                    })
+                    .collect();
+
                 // Calculate recent sessions (last 5)
                 let mut all_sessions = manager.sessions.clone();
                 all_sessions.sort_by(|a, b| b.end_time.cmp(&a.end_time));
-                
-                self.recent_sessions = all_sessions.into_iter()
+
+                self.recent_sessions = all_sessions
+                    .into_iter()
                     .take(5)
                     .map(|s| {
-                        let name = name_map.get(&s.instance_id).cloned().unwrap_or_else(|| "Unknown Instance".to_string());
+                        let name = name_map
+                            .get(&s.instance_id)
+                            .cloned()
+                            .unwrap_or_else(|| "Unknown Instance".to_string());
                         (name, s.duration_seconds, s.end_time)
                     })
                     .collect();
 
                 self.total_seconds = self.instance_data.iter().map(|(_, s, _, _)| s).sum();
                 self.instance_data.sort_by(|a, b| b.1.cmp(&a.1));
-                
+
                 self.rebuild_lists();
-                
+
                 let sender = sender.clone();
                 relm4::spawn_local(async move {
                     gtk::glib::timeout_future(std::time::Duration::from_millis(500)).await;

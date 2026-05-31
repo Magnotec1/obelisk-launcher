@@ -3,9 +3,6 @@ use crate::config::Config;
 use crate::frontend::dialogs::system::install_java::{
     InstallJavaDialog, InstallJavaInput, InstallJavaOutput,
 };
-use crate::frontend::dialogs::system::java::{
-    JavaSelectorDialog, JavaSelectorInput, JavaSelectorOutput,
-};
 use adw::prelude::*;
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
@@ -15,7 +12,6 @@ pub struct SettingsDialog {
     config: Config,
     active_page: String,
     java_versions: Vec<JavaInstance>,
-    java_selector: Controller<JavaSelectorDialog>,
     java_installer: Controller<InstallJavaDialog>,
     launcher_java_factory: FactoryVecDeque<JavaRow>,
     system_java_factory: FactoryVecDeque<JavaRow>,
@@ -43,7 +39,7 @@ impl FactoryComponent for JavaRow {
 
             add_suffix = &gtk::Button {
                 #[watch]
-                set_visible: self.path.to_string_lossy().contains("/java/"), 
+                set_visible: self.path.to_string_lossy().contains("/java/"),
                 set_icon_name: "edit-delete-symbolic",
                 set_css_classes: &["flat", "circular"],
                 connect_clicked[sender, path = self.path.clone()] => move |_| {
@@ -70,15 +66,12 @@ pub enum SettingsInput {
     ClearInstancesPath,
     SetSharedPath(PathBuf),
     ClearSharedPath,
-    SetJavaPath(PathBuf),
-    ClearJavaPath,
     SetMaxMemory(u32),
     SetMinMemory(u32),
     SetClientId(String),
     SetDefaultIcon(PathBuf),
     ClearDefaultIcon,
     RefreshJava,
-    OpenJavaSelector,
     OpenJavaInstaller,
     DeleteJava(PathBuf),
     SetJavaVersions(Vec<JavaInstance>),
@@ -258,35 +251,7 @@ impl SimpleComponent for SettingsDialog {
                     adw::PreferencesGroup {
                         set_title: "Java Configuration",
 
-                        adw::ActionRow {
-                            set_title: "Default Java Executable",
-                            #[watch]
-                            set_subtitle: &model.config.java_path
-                                .as_ref()
-                                .map(|p| p.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "java".to_string()),
 
-                            add_suffix = &gtk::Box {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_spacing: 8,
-                                set_valign: gtk::Align::Center,
-
-                                gtk::Button {
-                                    set_label: "Select",
-                                    set_tooltip_text: Some("Select default Java executable path"),
-                                    connect_clicked => SettingsInput::OpenJavaSelector,
-                                },
-
-                                gtk::Button {
-                                    set_icon_name: "edit-clear-symbolic",
-                                    set_css_classes: &["flat", "circular"],
-                                    set_tooltip_text: Some("Clear default Java path (reverts to system 'java')"),
-                                    #[watch]
-                                    set_sensitive: model.config.java_path.is_some(),
-                                    connect_clicked => SettingsInput::ClearJavaPath,
-                                }
-                            }
-                        },
 
                         adw::ActionRow {
                             set_title: "Maximum Memory (MB)",
@@ -379,17 +344,12 @@ impl SimpleComponent for SettingsDialog {
     ) -> ComponentParts<Self> {
         let java_dir = config.minecraft_data_path.join("java");
 
-        let java_selector = JavaSelectorDialog::builder()
-            .launch(Some(java_dir.clone()))
-            .forward(sender.input_sender(), |out| match out {
-                JavaSelectorOutput::Selected(path) => SettingsInput::SetJavaPath(path),
-            });
-
-        let java_installer = InstallJavaDialog::builder()
-            .launch(java_dir)
-            .forward(sender.input_sender(), |out| match out {
-                InstallJavaOutput::Finished => SettingsInput::RefreshJava,
-            });
+        let java_installer =
+            InstallJavaDialog::builder()
+                .launch(java_dir)
+                .forward(sender.input_sender(), |out| match out {
+                    InstallJavaOutput::Finished => SettingsInput::RefreshJava,
+                });
 
         let launcher_java_row = adw::ExpanderRow::builder()
             .title("Managed Runtimes")
@@ -417,7 +377,6 @@ impl SimpleComponent for SettingsDialog {
             config,
             active_page: "general".to_string(),
             java_versions: Vec::new(),
-            java_selector,
             java_installer,
             launcher_java_factory,
             system_java_factory,
@@ -427,9 +386,9 @@ impl SimpleComponent for SettingsDialog {
         let system_expander = model.system_java_factory.widget();
 
         let widgets = view_output!();
-        
+
         sender.input(SettingsInput::RefreshJava);
-        
+
         ComponentParts { model, widgets }
     }
 
@@ -456,13 +415,7 @@ impl SimpleComponent for SettingsDialog {
                     .output(SettingsOutput::ConfigUpdated(self.config.clone()))
                     .unwrap();
             }
-            SettingsInput::SetJavaPath(path) => {
-                self.config.java_path = Some(path);
-                let _ = self.config.save();
-                sender
-                    .output(SettingsOutput::ConfigUpdated(self.config.clone()))
-                    .unwrap();
-            }
+
             SettingsInput::SetMaxMemory(val) => {
                 self.config.max_memory = val;
                 let _ = self.config.save();
@@ -512,13 +465,7 @@ impl SimpleComponent for SettingsDialog {
                     .output(SettingsOutput::ConfigUpdated(self.config.clone()))
                     .unwrap();
             }
-            SettingsInput::ClearJavaPath => {
-                self.config.java_path = None;
-                let _ = self.config.save();
-                sender
-                    .output(SettingsOutput::ConfigUpdated(self.config.clone()))
-                    .unwrap();
-            }
+
             SettingsInput::SetJavaVersions(versions) => {
                 self.java_versions = versions.clone();
                 let mut launcher_guard = self.launcher_java_factory.guard();
@@ -545,11 +492,7 @@ impl SimpleComponent for SettingsDialog {
                     let _ = sender_clone.send(SettingsInput::SetJavaVersions(versions));
                 });
             }
-            SettingsInput::OpenJavaSelector => {
-                self.java_selector.emit(JavaSelectorInput::Open);
-                let parent = relm4::main_application().active_window();
-                self.java_selector.widget().present(parent.as_ref());
-            }
+
             SettingsInput::OpenJavaInstaller => {
                 self.java_installer.emit(InstallJavaInput::Open);
                 let parent = relm4::main_application().active_window();
@@ -558,14 +501,14 @@ impl SimpleComponent for SettingsDialog {
             SettingsInput::DeleteJava(path) => {
                 let java_dir = self.config.minecraft_data_path.join("java");
                 if path.starts_with(&java_dir) {
-                     let mut current = path.clone();
-                     while let Some(parent) = current.parent() {
-                         if parent == java_dir {
-                             let _ = std::fs::remove_dir_all(&current);
-                             break;
-                         }
-                         current = parent.to_path_buf();
-                     }
+                    let mut current = path.clone();
+                    while let Some(parent) = current.parent() {
+                        if parent == java_dir {
+                            let _ = std::fs::remove_dir_all(&current);
+                            break;
+                        }
+                        current = parent.to_path_buf();
+                    }
                 }
                 sender.input(SettingsInput::RefreshJava);
             }

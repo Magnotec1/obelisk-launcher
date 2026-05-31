@@ -233,12 +233,15 @@ impl SimpleComponent for InstanceSummary {
             }
         }
     }
-
 }
 
 impl InstanceSummary {
     fn format_playtime(&self) -> String {
-        let seconds = self.instance.as_ref().map(|inst| inst.total_time_played).unwrap_or(0);
+        let seconds = self
+            .instance
+            .as_ref()
+            .map(|inst| inst.total_time_played)
+            .unwrap_or(0);
         let minutes = (seconds as f32) / 60.0;
         let hours = minutes / 60.0;
         let days = hours / 24.0;

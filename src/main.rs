@@ -10,16 +10,14 @@ fn main() {
     // ── Register custom icon GResource bundle ────────────────────────────
     // The binary blob is compiled into the executable at build time so no
     // external file access is needed at runtime.
-    let resources = gtk::gio::Resource::from_data(
-        &gtk::glib::Bytes::from_static(include_bytes!(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/data/resources.gresource")
-        )),
-    )
+    let resources = gtk::gio::Resource::from_data(&gtk::glib::Bytes::from_static(include_bytes!(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/data/resources.gresource")
+    )))
     .expect("Failed to load GResource bundle");
     gtk::gio::resources_register(&resources);
 
     let config = Config::load();
-    let app = RelmApp::new("com.magnotec.obelisk.dev");
+    let app = RelmApp::new("com.magnotec.obelisk");
 
     // ── Register icon search path so GTK finds our bundled SVGs ──────────
     // GTK must be initialised (i.e. RelmApp created) before touching the
@@ -161,11 +159,11 @@ fn main() {
         }
 
         .overview-grid-mode flowboxchild:hover .overview-card {
-            background-color: alpha(@window_fg_color, 0.05);
+            background-color: mix(@card_bg_color, @window_fg_color, 0.05);
         }
 
         .overview-grid-mode flowboxchild:selected .overview-card {
-            background-color: alpha(@accent_color, 0.15);
+            background-color: mix(@card_bg_color, @accent_color, 0.15);
         }
 
         .overview-card-title {
@@ -240,15 +238,15 @@ fn main() {
         }
 
         .overview-list-mode flowboxchild:hover .overview-list-card {
-            background-color: alpha(@window_fg_color, 0.05);
+            background-color: mix(@card_bg_color, @window_fg_color, 0.05);
         }
 
         .overview-list-mode flowboxchild:selected .overview-list-card {
-            background-color: alpha(@accent_color, 0.15);
+            background-color: mix(@card_bg_color, @accent_color, 0.15);
         }
 
         .overview-list-mode flowboxchild.menu-open .overview-list-card {
-            background-color: alpha(@window_fg_color, 0.05);
+            background-color: mix(@card_bg_color, @window_fg_color, 0.05);
         }
 
         .overview-list-row {

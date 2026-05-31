@@ -1,7 +1,5 @@
 use crate::backend::instance::manager::ModLoader;
-use crate::backend::runtime::versions::{
-    LoaderVersion, MinecraftVersion, RawVersion, VersionType,
-};
+use crate::backend::runtime::versions::{LoaderVersion, MinecraftVersion, RawVersion, VersionType};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -127,8 +125,16 @@ fn classify_version(raw: &RawVersion) -> VersionType {
     }
 }
 
+fn get_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent("obelisk-launcher")
+        .build()
+        .map_err(|e| format!("failed to build reqwest client: {}", e))
+}
+
 pub fn fetch_versions() -> Result<Vec<MinecraftVersion>, String> {
-    let response = reqwest::blocking::get(VERSION_MANIFEST_URL)
+    let client = get_client()?;
+    let response = client.get(VERSION_MANIFEST_URL).send()
         .map_err(|e| format!("failed to fetch version manifest: {}", e))?;
 
     #[derive(Deserialize)]
@@ -159,11 +165,12 @@ pub fn find_version_by_id(id: &str) -> Result<Option<MinecraftVersion>, String> 
 }
 
 pub fn fetch_fabric_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
+    let client = get_client()?;
     let url = format!(
         "https://meta.fabricmc.net/v2/versions/loader/{}",
         game_version
     );
-    let response = reqwest::blocking::get(url).map_err(|e| {
+    let response = client.get(url).send().map_err(|e| {
         format!(
             "failed to fetch fabric loader versions for {}: {}",
             game_version, e
@@ -183,11 +190,12 @@ pub fn fetch_fabric_versions_for_game(game_version: &str) -> Result<Vec<LoaderVe
 }
 
 pub fn fetch_quilt_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
+    let client = get_client()?;
     let url = format!(
         "https://meta.quiltmc.org/v3/versions/loader/{}",
         game_version
     );
-    let response = reqwest::blocking::get(url).map_err(|e| {
+    let response = client.get(url).send().map_err(|e| {
         format!(
             "failed to fetch quilt loader versions for {}: {}",
             game_version, e
@@ -207,9 +215,10 @@ pub fn fetch_quilt_versions_for_game(game_version: &str) -> Result<Vec<LoaderVer
 }
 
 pub fn fetch_forge_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
+    let client = get_client()?;
     let url = "https://meta.prismlauncher.org/v1/net.minecraftforge/index.json";
-    let response =
-        reqwest::blocking::get(url).map_err(|e| format!("failed to fetch forge index: {}", e))?;
+    let response = client.get(url).send()
+        .map_err(|e| format!("failed to fetch forge index: {}", e))?;
 
     if response.status() == 404 {
         return Ok(Vec::new());
@@ -256,8 +265,15 @@ pub fn fetch_forge_versions_for_game(game_version: &str) -> Result<Vec<LoaderVer
 }
 
 pub fn fetch_neoforge_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
-    let url = "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge";
-    let response = reqwest::blocking::get(url)
+    let client = get_client()?;
+    let is_legacy_1_20_1 = game_version == "1.20.1";
+    let url = if is_legacy_1_20_1 {
+        "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/forge"
+    } else {
+        "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge"
+    };
+
+    let response = client.get(url).send()
         .map_err(|e| format!("failed to fetch neoforge versions: {}", e))?;
 
     #[derive(Deserialize)]
@@ -269,28 +285,42 @@ pub fn fetch_neoforge_versions_for_game(game_version: &str) -> Result<Vec<Loader
         .json()
         .map_err(|e| format!("failed to parse neoforge versions: {}", e))?;
 
-    let mc_parts: Vec<&str> = game_version.split('.').collect();
-    if mc_parts.len() < 2 {
-        return Ok(Vec::new());
-    }
+    let mut valid_versions: Vec<LoaderVersion> = if is_legacy_1_20_1 {
+        version_list
+            .versions
+            .iter()
+            .filter(|v| v.starts_with("1.20.1-"))
+            .map(|v| {
+                LoaderVersion {
+                    version: v.clone(),
+                    stable: true,
+                }
+            })
+            .collect()
+    } else {
+        let mc_parts: Vec<&str> = game_version.split('.').collect();
+        if mc_parts.len() < 2 {
+            return Ok(Vec::new());
+        }
 
-    let mc_minor = mc_parts.get(1).unwrap_or(&"0");
-    let mc_patch = mc_parts.get(2).unwrap_or(&"0");
-    let neoforge_prefix = format!("{}.{}.", mc_minor, mc_patch);
+        let mc_minor = mc_parts.get(1).unwrap_or(&"0");
+        let mc_patch = mc_parts.get(2).unwrap_or(&"0");
+        let neoforge_prefix = format!("{}.{}.", mc_minor, mc_patch);
 
-    let mut valid_versions: Vec<LoaderVersion> = version_list
-        .versions
-        .iter()
-        .filter(|v| v.starts_with(&neoforge_prefix))
-        .filter(|v| !v.contains('+'))
-        .map(|v| {
-            let stable = !v.contains("-beta");
-            LoaderVersion {
-                version: v.clone(),
-                stable,
-            }
-        })
-        .collect();
+        version_list
+            .versions
+            .iter()
+            .filter(|v| v.starts_with(&neoforge_prefix))
+            .filter(|v| !v.contains('+'))
+            .map(|v| {
+                let stable = !v.contains("-beta");
+                LoaderVersion {
+                    version: v.clone(),
+                    stable,
+                }
+            })
+            .collect()
+    };
 
     valid_versions.reverse();
     Ok(valid_versions)
@@ -496,10 +526,7 @@ where
                     .map_err(|e| format!("Fabric API request failed: {}", e))?;
 
                 if !resp.status().is_success() {
-                    return Err(format!(
-                        "Fabric API returned status {}",
-                        resp.status()
-                    ));
+                    return Err(format!("Fabric API returned status {}", resp.status()));
                 }
 
                 let fabric_meta: VersionMeta = resp
@@ -528,7 +555,12 @@ where
                     }
                 }
 
-                let _ = ensure_intermediary(game_version, data_path, &client, progress_callback.clone());
+                let _ = ensure_intermediary(
+                    game_version,
+                    data_path,
+                    &client,
+                    progress_callback.clone(),
+                );
             }
         }
         ModLoader::Quilt => {
@@ -573,7 +605,12 @@ where
                     }
                 }
 
-                let _ = ensure_intermediary(game_version, data_path, &client, progress_callback.clone());
+                let _ = ensure_intermediary(
+                    game_version,
+                    data_path,
+                    &client,
+                    progress_callback.clone(),
+                );
             }
         }
         ModLoader::Forge => {
@@ -637,6 +674,9 @@ where
             }
         }
         ModLoader::NeoForge => {
+            if version.id == "1.20.1" {
+                return Err("NeoForge 1.20.1 is not officially supported by Prism Launcher metadata. Please use standard Forge for 1.20.1 instances instead.".to_string());
+            }
             if let Some(loader_ver) = loader_version {
                 let meta_url = format!(
                     "https://meta.prismlauncher.org/v1/net.neoforged/{}.json",
@@ -651,7 +691,10 @@ where
                     .map_err(|e| format!("NeoForge meta request failed: {}", e))?;
 
                 if !resp.status().is_success() {
-                    return Err(format!("NeoForge meta API returned status {}", resp.status()));
+                    return Err(format!(
+                        "NeoForge meta API returned status {}",
+                        resp.status()
+                    ));
                 }
 
                 #[derive(Deserialize)]
@@ -738,15 +781,10 @@ where
             .as_ref()
             .and_then(|l| l.sha1.clone())
             .unwrap_or_default();
-        let legacy_size = lib
-            .legacy_info
-            .as_ref()
-            .and_then(|l| l.size)
-            .unwrap_or(0);
+        let legacy_size = lib.legacy_info.as_ref().and_then(|l| l.size).unwrap_or(0);
 
-        let maven_base = legacy_url.unwrap_or_else(|| {
-            "https://libraries.minecraft.net/".to_string()
-        });
+        let maven_base =
+            legacy_url.unwrap_or_else(|| "https://libraries.minecraft.net/".to_string());
 
         artifacts_to_download.push(Artifact {
             url: maven_base,

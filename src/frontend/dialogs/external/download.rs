@@ -1,7 +1,7 @@
-use adw::prelude::*;
-use relm4::prelude::*;
-use relm4::factory::FactoryVecDeque;
 use crate::backend::download::manager::{NetworkJob, NetworkJobStatus};
+use adw::prelude::*;
+use relm4::factory::FactoryVecDeque;
+use relm4::prelude::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DownloadState {
@@ -56,18 +56,18 @@ impl FactoryComponent for DownloadJobRow {
                 set_orientation: gtk::Orientation::Horizontal,
                 set_spacing: 4,
                 set_valign: gtk::Align::Center,
-                
+
                 gtk::Image {
                     #[watch]
                     set_icon_name: Some(self.get_icon_name()),
 
                     #[watch]
-                    set_visible: !matches!(self.job.status, NetworkJobStatus::Running { .. }),     
+                    set_visible: !matches!(self.job.status, NetworkJobStatus::Running { .. }),
                 },
-                
+
                 adw::Spinner {
                     #[watch]
-                    set_visible: matches!(self.job.status, NetworkJobStatus::Running { .. }),          
+                    set_visible: matches!(self.job.status, NetworkJobStatus::Running { .. }),
                 },
             },
 
@@ -114,9 +114,7 @@ impl FactoryComponent for DownloadJobRow {
     }
 
     fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        Self {
-            job: init,
-        }
+        Self { job: init }
     }
 
     fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
@@ -132,7 +130,10 @@ impl DownloadJobRow {
     fn get_subtitle(&self) -> String {
         match &self.job.status {
             NetworkJobStatus::Pending => "Queued • Pending".to_string(),
-            NetworkJobStatus::Running { active_task_name, progress } => {
+            NetworkJobStatus::Running {
+                active_task_name,
+                progress,
+            } => {
                 format!("Running: {} ({:.0}%)", active_task_name, progress * 100.0)
             }
             NetworkJobStatus::Completed => "Completed successfully".to_string(),
@@ -211,7 +212,7 @@ impl Component for DownloadDialog {
                     set_title_widget = &adw::WindowTitle {
                         set_title: "Download Manager",
                     },
-                    
+
                     pack_end = &gtk::Button {
                         set_icon_name: "edit-clear-all-symbolic",
                         set_tooltip_text: Some("Clear Finished Downloads"),
@@ -289,17 +290,11 @@ impl Component for DownloadDialog {
         }
     }
 
-    fn init(
-        _init: (), 
-        root: Self::Root, 
-        sender: ComponentSender<Self>
-    ) -> ComponentParts<Self> {
+    fn init(_init: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         let job_rows = FactoryVecDeque::builder()
             .launch(gtk::ListBox::new())
-            .forward(sender.input_sender(), |output| {
-                match output {
-                    DownloadJobRowOutput::Remove(id) => DownloadDialogInput::RemoveRow(id),
-                }
+            .forward(sender.input_sender(), |output| match output {
+                DownloadJobRowOutput::Remove(id) => DownloadDialogInput::RemoveRow(id),
             });
 
         let model = DownloadDialog {
@@ -313,12 +308,7 @@ impl Component for DownloadDialog {
         ComponentParts { model, widgets }
     }
 
-    fn update(
-        &mut self, 
-        msg: Self::Input, 
-        sender: ComponentSender<Self>,
-        root: &Self::Root,
-    ) {
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             DownloadDialogInput::Show => {
                 self.visible = true;
@@ -334,9 +324,9 @@ impl Component for DownloadDialog {
             }
             DownloadDialogInput::Refresh => {
                 let jobs = crate::backend::download::manager::DOWNLOAD_QUEUE.get_jobs();
-                
+
                 let mut guard = self.job_rows.guard();
-                
+
                 // 1. Remove rows no longer in queue
                 let mut to_remove = Vec::new();
                 for i in 0..guard.len() {
@@ -481,40 +471,42 @@ impl SimpleComponent for DownloadStatusBar {
 
         let progress_clone = progress_value.clone();
         let downloading_clone = is_downloading.clone();
-        widgets.progress_circle.set_draw_func(move |_area, cr, width, height| {
-            if !downloading_clone.get() {
-                return;
-            }
-            let progress = progress_clone.get();
-            let cx = width as f64 / 2.0;
-            let cy = height as f64 / 2.0;
-            let radius = (width.min(height) as f64 / 2.0) - 1.2; // leave padding
-            
-            if radius > 0.0 {
-                // Draw background track (light gray with transparency)
-                cr.set_source_rgba(0.7, 0.7, 0.7, 0.35);
-                cr.set_line_width(2.2);
-                cr.arc(cx, cy, radius, 0.0, 2.0 * std::f64::consts::PI);
-                let _ = cr.stroke();
-
-                if progress > 0.0 {
-                    // Query dynamic theme accent color using non-deprecated Widget::color()
-                    let accent_color = _area.color();
-
-                    cr.set_source_rgba(
-                        accent_color.red() as f64,
-                        accent_color.green() as f64,
-                        accent_color.blue() as f64,
-                        accent_color.alpha() as f64,
-                    );
-                    cr.set_line_width(2.2);
-                    let start_angle = -std::f64::consts::FRAC_PI_2;
-                    let end_angle = start_angle + progress * 2.0 * std::f64::consts::PI;
-                    cr.arc(cx, cy, radius, start_angle, end_angle);
-                    let _ = cr.stroke();
+        widgets
+            .progress_circle
+            .set_draw_func(move |_area, cr, width, height| {
+                if !downloading_clone.get() {
+                    return;
                 }
-            }
-        });
+                let progress = progress_clone.get();
+                let cx = width as f64 / 2.0;
+                let cy = height as f64 / 2.0;
+                let radius = (width.min(height) as f64 / 2.0) - 1.2; // leave padding
+
+                if radius > 0.0 {
+                    // Draw background track (light gray with transparency)
+                    cr.set_source_rgba(0.7, 0.7, 0.7, 0.35);
+                    cr.set_line_width(2.2);
+                    cr.arc(cx, cy, radius, 0.0, 2.0 * std::f64::consts::PI);
+                    let _ = cr.stroke();
+
+                    if progress > 0.0 {
+                        // Query dynamic theme accent color using non-deprecated Widget::color()
+                        let accent_color = _area.color();
+
+                        cr.set_source_rgba(
+                            accent_color.red() as f64,
+                            accent_color.green() as f64,
+                            accent_color.blue() as f64,
+                            accent_color.alpha() as f64,
+                        );
+                        cr.set_line_width(2.2);
+                        let start_angle = -std::f64::consts::FRAC_PI_2;
+                        let end_angle = start_angle + progress * 2.0 * std::f64::consts::PI;
+                        cr.arc(cx, cy, radius, start_angle, end_angle);
+                        let _ = cr.stroke();
+                    }
+                }
+            });
 
         ComponentParts { model, widgets }
     }
@@ -539,7 +531,10 @@ impl SimpleComponent for DownloadStatusBar {
 
 impl DownloadStatusBar {
     fn is_downloading(&self) -> bool {
-        matches!(self.state, DownloadState::Starting | DownloadState::Downloading { .. })
+        matches!(
+            self.state,
+            DownloadState::Starting | DownloadState::Downloading { .. }
+        )
     }
 
     fn get_progress(&self) -> f64 {

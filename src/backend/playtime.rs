@@ -39,9 +39,9 @@ impl PlaytimeManager {
                 }
             }
         }
-        // If file doesn't exist, we start fresh. 
+        // If file doesn't exist, we start fresh.
         // We'll rely on the app to populate instance_playtime from existing data if needed,
-        // but the user said "don't edit instance playtime in each instance", 
+        // but the user said "don't edit instance playtime in each instance",
         // so we'll just track new data here.
         Self::default()
     }
@@ -57,7 +57,10 @@ impl PlaytimeManager {
     }
 
     pub fn add_session(&mut self, session: PlaySession) {
-        let entry = self.instance_playtime.entry(session.instance_id.clone()).or_insert(0);
+        let entry = self
+            .instance_playtime
+            .entry(session.instance_id.clone())
+            .or_insert(0);
         *entry += session.duration_seconds;
         self.sessions.push(session);
         let _ = self.save();
@@ -68,15 +71,22 @@ impl PlaytimeManager {
     }
 
     pub fn get_instance_playtime(&self, instance_id: &str) -> u64 {
-        self.instance_playtime.get(instance_id).cloned().unwrap_or(0)
+        self.instance_playtime
+            .get(instance_id)
+            .cloned()
+            .unwrap_or(0)
     }
 
-    pub fn ensure_initialized(&mut self, instances: &[crate::backend::instance::manager::Instance]) {
+    pub fn ensure_initialized(
+        &mut self,
+        instances: &[crate::backend::instance::manager::Instance],
+    ) {
         if self.instance_playtime.is_empty() {
             let mut changed = false;
             for inst in instances {
                 if inst.total_time_played > 0 {
-                    self.instance_playtime.insert(inst.id.clone(), inst.total_time_played);
+                    self.instance_playtime
+                        .insert(inst.id.clone(), inst.total_time_played);
                     changed = true;
                 }
             }

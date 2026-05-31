@@ -1,12 +1,12 @@
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     // ── Paths ───────────────────────────────────────────────────────────────
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let data_dir     = Path::new(&manifest_dir).join("data");
-    let xml_path     = data_dir.join("resources.gresource.xml");
-    let out_path     = data_dir.join("resources.gresource");
+    let data_dir = Path::new(&manifest_dir).join("data");
+    let xml_path = data_dir.join("resources.gresource.xml");
+    let out_path = data_dir.join("resources.gresource");
 
     // ── Tell Cargo to re-run this script when icons or the manifest change ──
     println!("cargo:rerun-if-changed=data/resources.gresource.xml");
@@ -22,7 +22,7 @@ fn main() {
         .status()
         .expect(
             "Failed to run `glib-compile-resources`. \
-             Make sure the `libglib2.0-dev-bin` (or equivalent) package is installed."
+             Make sure the `libglib2.0-dev-bin` (or equivalent) package is installed.",
         );
 
     if !status.success() {

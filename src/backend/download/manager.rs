@@ -1,10 +1,10 @@
+use crate::backend::download::sources::{java, minecraft, modrinth};
 use crate::backend::instance::manager::ModLoader;
 use crate::backend::runtime::versions::RawVersion;
-use crate::backend::download::sources::{minecraft, java, modrinth};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Condvar, LazyLock};
-use std::thread;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
+use std::thread;
 
 pub static DOWNLOAD_QUEUE: LazyLock<NetworkQueue> = LazyLock::new(NetworkQueue::new);
 
@@ -54,7 +54,10 @@ pub enum NetworkTask {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetworkJobStatus {
     Pending,
-    Running { active_task_name: String, progress: f32 },
+    Running {
+        active_task_name: String,
+        progress: f32,
+    },
     Completed,
     Failed(String),
 }
@@ -126,13 +129,15 @@ impl NetworkQueue {
 
     pub fn clear_finished_jobs(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.jobs.retain(|j| matches!(j.status, NetworkJobStatus::Pending | NetworkJobStatus::Running { .. }));
+        inner.jobs.retain(|j| {
+            matches!(
+                j.status,
+                NetworkJobStatus::Pending | NetworkJobStatus::Running { .. }
+            )
+        });
     }
 
-    fn worker_loop(
-        inner: Arc<Mutex<QueueInner>>,
-        cv: Arc<Condvar>,
-    ) {
+    fn worker_loop(inner: Arc<Mutex<QueueInner>>, cv: Arc<Condvar>) {
         loop {
             // Find next Pending job in the unified list
             let (job_id, job) = {
@@ -149,7 +154,7 @@ impl NetworkQueue {
                         break;
                     }
                 }
-                
+
                 // Send an initial progress update to trigger the UI to refresh immediately
                 if let Some((ref j_id, _)) = found {
                     if let Some(tx) = guard.senders.get(j_id) {
@@ -216,21 +221,33 @@ impl NetworkQueue {
                     } => {
                         let (java_tx, java_rx) = std::sync::mpsc::channel();
                         let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                        
+
                         let pkg = package_id.clone();
                         let dir = target_dir.clone();
                         thread::spawn(move || {
-                            java::download_and_extract_with_progress(&pkg, &dir, cancel_flag, move |prog| {
-                                let _ = java_tx.send(prog);
-                            });
+                            java::download_and_extract_with_progress(
+                                &pkg,
+                                &dir,
+                                cancel_flag,
+                                move |prog| {
+                                    let _ = java_tx.send(prog);
+                                },
+                            );
                         });
 
                         let mut task_res = Ok(());
                         while let Ok(prog) = java_rx.recv() {
                             match prog {
                                 java::JavaDownloadProgress::Downloading { current, total } => {
-                                    let prog_pct = if total > 0 { current as f32 / total as f32 } else { 0.0 };
-                                    status_update(format!("Downloading Java... ({:.1}%)", prog_pct * 100.0), prog_pct);
+                                    let prog_pct = if total > 0 {
+                                        current as f32 / total as f32
+                                    } else {
+                                        0.0
+                                    };
+                                    status_update(
+                                        format!("Downloading Java... ({:.1}%)", prog_pct * 100.0),
+                                        prog_pct,
+                                    );
                                 }
                                 java::JavaDownloadProgress::Extracting => {
                                     status_update("Extracting Java runtime...".to_string(), 0.9);
@@ -264,7 +281,8 @@ impl NetworkQueue {
                             move |msg, progress| {
                                 callback(msg, progress);
                             },
-                        ).map(|_| ())
+                        )
+                        .map(|_| ())
                     }
                 };
 
@@ -337,15 +355,10 @@ pub fn download_minecraft_data(
     )
 }
 
-pub use java::{
-    get_available_packages as fetch_java_packages,
-    JavaPackage, JavaDownloadProgress,
-};
+pub use java::{get_available_packages as fetch_java_packages, JavaDownloadProgress, JavaPackage};
 
 pub use modrinth::{
-    clear_caches as clear_modrinth_caches,
-    get_project as fetch_modrinth_project,
-    get_project_versions as fetch_modrinth_versions,
-    search_mods as search_modrinth_mods,
-    ModProject, ModSearchResult, ModVersion, ModDependency, ModFile,
+    clear_caches as clear_modrinth_caches, get_project as fetch_modrinth_project,
+    get_project_versions as fetch_modrinth_versions, search_mods as search_modrinth_mods,
+    ModDependency, ModFile, ModProject, ModSearchResult, ModVersion,
 };

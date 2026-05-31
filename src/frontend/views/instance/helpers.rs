@@ -41,20 +41,20 @@ pub fn create_instance_popover(
     parent: Option<&impl IsA<gtk::Widget>>,
 ) -> gtk::Popover {
     let menu = gtk::gio::Menu::new();
-    
+
     // Main Section
     let main_section = gtk::gio::Menu::new();
     main_section.append(Some("Rename"), Some("pop.rename"));
     menu.append_section(None, &main_section);
-    
+
     // Icon Submenu
     let icon_menu = gtk::gio::Menu::new();
     icon_menu.append(Some("Choose from File…"), Some("pop.change_icon_file"));
     icon_menu.append(Some("Use Default Icon"), Some("pop.change_icon_default"));
     main_section.append_submenu(Some("Change Icon"), &icon_menu);
-    
+
     main_section.append(Some("Share…"), Some("pop.share"));
-    
+
     // Group Section
     let group_section = gtk::gio::Menu::new();
     group_section.append(Some("Move to Group…"), Some("pop.move_group"));
@@ -62,7 +62,7 @@ pub fn create_instance_popover(
         group_section.append(Some("Remove from Group"), Some("pop.remove_group"));
     }
     menu.append_section(None, &group_section);
-    
+
     // Delete Section
     let delete_section = gtk::gio::Menu::new();
     delete_section.append(Some("Delete"), Some("pop.delete"));
@@ -70,18 +70,18 @@ pub fn create_instance_popover(
 
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_has_arrow(true);
-    
+
     if let Some(p) = parent {
         popover.set_parent(p);
     }
-    
+
     let action_group = gtk::gio::SimpleActionGroup::new();
-    
+
     let s = sender.clone();
     let act = gtk::gio::SimpleAction::new("rename", None);
     act.connect_activate(move |_, _| s(ContextMenuOutput::RenameInstance(flat_idx)));
     action_group.add_action(&act);
-    
+
     let s = sender.clone();
     let act = gtk::gio::SimpleAction::new("change_icon_file", None);
     act.connect_activate(move |_, _| s(ContextMenuOutput::ChangeIconFromFile(flat_idx)));

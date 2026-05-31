@@ -1,6 +1,8 @@
 use crate::backend::auth::account::{add_account, create_offline_account};
 use crate::backend::download::manager::{fetch_java_packages, JavaPackage};
-use crate::backend::download::sources::java::{download_and_extract_with_progress, JavaDownloadProgress};
+use crate::backend::download::sources::java::{
+    download_and_extract_with_progress, JavaDownloadProgress,
+};
 use crate::backend::runtime::java::{find_java_versions, get_java_major_version, JavaInstance};
 use crate::config::Config;
 use adw::prelude::*;
@@ -73,36 +75,46 @@ impl SetupDialog {
         match step {
             0 => true, // Welcome is always complete
             1 => self.config.instances_path.is_some(),
-            2 => self.config.microsoft_client_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+            2 => self
+                .config
+                .microsoft_client_id
+                .as_ref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false),
             3 => !self.config.accounts.is_empty(),
             4 => !self.java_versions.is_empty(), // Javas verified if at least one version exists
-            5 => true, // Finish page is always complete
+            5 => true,                           // Finish page is always complete
             _ => false,
         }
     }
 
     fn has_java_version(&self, major: u32) -> bool {
-        self.java_versions.iter().any(|v| {
-            get_java_major_version(&v.version) == Some(major)
-        })
+        self.java_versions
+            .iter()
+            .any(|v| get_java_major_version(&v.version) == Some(major))
     }
 
     #[allow(dead_code)]
     fn get_java_path(&self, major: u32) -> Option<PathBuf> {
-        self.java_versions.iter()
+        self.java_versions
+            .iter()
             .find(|v| get_java_major_version(&v.version) == Some(major))
             .map(|v| v.path.clone())
     }
 
     fn get_java_name(&self, major: u32) -> Option<String> {
-        self.java_versions.iter()
+        self.java_versions
+            .iter()
             .find(|v| get_java_major_version(&v.version) == Some(major))
             .map(|v| format!("{} ({})", v.name, v.version))
     }
 
     fn get_java_status(&self, major: u32) -> String {
         if self.has_java_version(major) {
-            format!("Installed: {}", self.get_java_name(major).unwrap_or_default())
+            format!(
+                "Installed: {}",
+                self.get_java_name(major).unwrap_or_default()
+            )
         } else if self.installing_version == Some(major) {
             self.java_install_status.clone()
         } else {
@@ -134,9 +146,21 @@ fn format_size(bytes: Option<i64>) -> String {
 }
 
 fn find_package_for_version(packages: &[JavaPackage], major: u32) -> Option<JavaPackage> {
-    let distros_priority = ["Temurin", "Zulu", "Corretto", "Liberica", "Microsoft", "Oracle"];
+    let distros_priority = [
+        "Temurin",
+        "Zulu",
+        "Corretto",
+        "Liberica",
+        "Microsoft",
+        "Oracle",
+    ];
     for distro in distros_priority {
-        if let Some(pkg) = packages.iter().find(|p| p.major_version == major && p.distribution.to_lowercase().contains(&distro.to_lowercase())) {
+        if let Some(pkg) = packages.iter().find(|p| {
+            p.major_version == major
+                && p.distribution
+                    .to_lowercase()
+                    .contains(&distro.to_lowercase())
+        }) {
             return Some(pkg.clone());
         }
     }
@@ -903,18 +927,26 @@ impl SimpleComponent for SetupDialog {
             SetupInput::SetInstancesPath(path) => {
                 self.config.instances_path = Some(path);
                 let _ = self.config.save();
-                sender.output(SetupOutput::ConfigUpdated(self.config.clone())).ok();
+                sender
+                    .output(SetupOutput::ConfigUpdated(self.config.clone()))
+                    .ok();
                 sender.input(SetupInput::RefreshJava); // Refresh Java as path is now set
             }
             SetupInput::SetClientId(id) => {
                 self.client_id_input = id.clone();
                 let cleaned = id.trim().to_string();
-                let new_val = if cleaned.is_empty() { None } else { Some(cleaned) };
+                let new_val = if cleaned.is_empty() {
+                    None
+                } else {
+                    Some(cleaned)
+                };
 
                 if self.config.microsoft_client_id != new_val {
                     self.config.microsoft_client_id = new_val;
                     let _ = self.config.save();
-                    sender.output(SetupOutput::ConfigUpdated(self.config.clone())).ok();
+                    sender
+                        .output(SetupOutput::ConfigUpdated(self.config.clone()))
+                        .ok();
                 }
             }
             SetupInput::SetOfflineUsername(name) => {
@@ -926,7 +958,9 @@ impl SimpleComponent for SetupDialog {
                     let account = create_offline_account(&name);
                     add_account(&mut self.config, account);
                     let _ = self.config.save();
-                    sender.output(SetupOutput::ConfigUpdated(self.config.clone())).ok();
+                    sender
+                        .output(SetupOutput::ConfigUpdated(self.config.clone()))
+                        .ok();
                     self.offline_username.clear();
                 }
             }
@@ -1017,9 +1051,15 @@ impl SimpleComponent for SetupDialog {
                     let package_id = package.id.clone();
 
                     std::thread::spawn(move || {
-                        download_and_extract_with_progress(&package_id, &target_dir, cancel_flag, move |progress| {
-                            let _ = sender_clone.send(SetupInput::JavaProgress(major_version, progress));
-                        });
+                        download_and_extract_with_progress(
+                            &package_id,
+                            &target_dir,
+                            cancel_flag,
+                            move |progress| {
+                                let _ = sender_clone
+                                    .send(SetupInput::JavaProgress(major_version, progress));
+                            },
+                        );
                     });
                 }
             }
@@ -1030,8 +1070,15 @@ impl SimpleComponent for SetupDialog {
 
                 match progress {
                     JavaDownloadProgress::Downloading { current, total } => {
-                        self.java_install_progress = if total > 0 { current as f32 / total as f32 } else { 0.0 };
-                        self.java_install_status = format!("Downloading JRE... ({:.1}%)", self.java_install_progress * 100.0);
+                        self.java_install_progress = if total > 0 {
+                            current as f32 / total as f32
+                        } else {
+                            0.0
+                        };
+                        self.java_install_status = format!(
+                            "Downloading JRE... ({:.1}%)",
+                            self.java_install_progress * 100.0
+                        );
                     }
                     JavaDownloadProgress::Extracting => {
                         self.java_install_progress = -1.0; // Show spinner

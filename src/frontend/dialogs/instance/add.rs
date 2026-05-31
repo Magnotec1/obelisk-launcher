@@ -152,7 +152,11 @@ impl AddInstanceDialog {
         // Limit to 100 items to prevent UI freeze
         for v in self.filtered_versions.iter().take(100) {
             let is_selected = self.selected_version.as_ref() == Some(&v.id);
-            guard.push_back((v.id.clone(), v.version_type.as_str().to_string(), is_selected));
+            guard.push_back((
+                v.id.clone(),
+                v.version_type.as_str().to_string(),
+                is_selected,
+            ));
         }
     }
 }

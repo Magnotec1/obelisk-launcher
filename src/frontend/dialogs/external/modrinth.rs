@@ -1,12 +1,9 @@
 #![allow(unused_assignments)]
 
 use crate::backend::download::manager::{
-    clear_modrinth_caches as clear_caches,
-    fetch_modrinth_project as get_project,
-    fetch_modrinth_versions as get_project_versions,
-    search_modrinth_mods as search_mods,
-    ModProject as ModrinthProject,
-    ModSearchResult as ModrinthSearchResult,
+    clear_modrinth_caches as clear_caches, fetch_modrinth_project as get_project,
+    fetch_modrinth_versions as get_project_versions, search_modrinth_mods as search_mods,
+    ModProject as ModrinthProject, ModSearchResult as ModrinthSearchResult,
     ModVersion as ModrinthVersion,
 };
 use crate::backend::instance::manager::ModLoader;
@@ -282,7 +279,9 @@ impl FactoryComponent for QueueRow {
     }
 
     fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        let strings: Vec<String> = init.2.iter()
+        let strings: Vec<String> = init
+            .2
+            .iter()
             .map(|v| format!("{} · {}", v.name, v.version_number))
             .collect();
         let refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
@@ -300,20 +299,36 @@ impl FactoryComponent for QueueRow {
         match msg {
             QueueRowInput::SetVersions(versions) => {
                 self.versions = versions;
-                let strings: Vec<String> = self.versions.iter()
+                let strings: Vec<String> = self
+                    .versions
+                    .iter()
                     .map(|v| format!("{} · {}", v.name, v.version_number))
                     .collect();
                 let refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
-                self.string_list.splice(0, self.string_list.n_items(), &refs);
+                self.string_list
+                    .splice(0, self.string_list.n_items(), &refs);
             }
             QueueRowInput::Select(idx) => {
                 if let Some(v) = self.versions.get(idx as usize) {
                     if self.item.version_id.as_ref() != Some(&v.id) {
-                        let filename = v.files.iter().find(|f| f.primary).or_else(|| v.files.first()).map(|f| f.filename.clone()).unwrap_or_default();
+                        let filename = v
+                            .files
+                            .iter()
+                            .find(|f| f.primary)
+                            .or_else(|| v.files.first())
+                            .map(|f| f.filename.clone())
+                            .unwrap_or_default();
                         self.item.version_id = Some(v.id.clone());
                         self.item.version_name = Some(v.name.clone());
                         self.item.filename = Some(filename.clone());
-                        sender.output(QueueRowOutput::SelectVersion(self.project_id.clone(), v.id.clone(), v.name.clone(), filename)).ok();
+                        sender
+                            .output(QueueRowOutput::SelectVersion(
+                                self.project_id.clone(),
+                                v.id.clone(),
+                                v.name.clone(),
+                                filename,
+                            ))
+                            .ok();
                     }
                 }
             }
@@ -323,7 +338,9 @@ impl FactoryComponent for QueueRow {
 
 impl QueueRow {
     fn get_selected_index(&self) -> u32 {
-        self.item.version_id.as_ref()
+        self.item
+            .version_id
+            .as_ref()
             .and_then(|vid| self.versions.iter().position(|v| v.id == *vid))
             .unwrap_or(0) as u32
     }
@@ -408,8 +425,7 @@ pub struct ModrinthBrowser {
     versions: FactoryVecDeque<VersionRow>,
 }
 
-impl ModrinthBrowser {
-}
+impl ModrinthBrowser {}
 
 #[relm4::component(pub)]
 impl Component for ModrinthBrowser {
@@ -847,12 +863,14 @@ impl Component for ModrinthBrowser {
             .launch(gtk::ListBox::new())
             .forward(sender.input_sender(), |output| match output {
                 VersionRowOutput::Install(pid, vid) => BrowserInput::InstallProject(pid, vid),
-                VersionRowOutput::AddToQueue(pid, vid, vname, fname) => BrowserInput::AddVersionToQueue(pid, vid, vname, fname),
+                VersionRowOutput::AddToQueue(pid, vid, vname, fname) => {
+                    BrowserInput::AddVersionToQueue(pid, vid, vname, fname)
+                }
             });
 
-        let queue_dialog = QueueDialog::builder()
-            .launch(())
-            .forward(sender.input_sender(), |output| match output {
+        let queue_dialog = QueueDialog::builder().launch(()).forward(
+            sender.input_sender(),
+            |output| match output {
                 QueueDialogOutput::Remove(id) => BrowserInput::RemoveQueueItem(id),
                 QueueDialogOutput::Clear => BrowserInput::ClearQueue,
                 QueueDialogOutput::Install => BrowserInput::PromptInstallQueue,
@@ -860,7 +878,8 @@ impl Component for ModrinthBrowser {
                 QueueDialogOutput::SelectVersion(id, vid, vname, fname) => {
                     BrowserInput::ApplyVersionToQueue(id, vid, vname, fname)
                 }
-            });
+            },
+        );
 
         let mut model = ModrinthBrowser {
             visible: false,
@@ -887,18 +906,13 @@ impl Component for ModrinthBrowser {
         let projects_list = model.projects.widget();
         let versions_list = model.versions.widget();
         let widgets = view_output!();
-        
+
         model.toast_overlay = widgets.toast_overlay.clone();
 
         ComponentParts { model, widgets }
     }
 
-    fn update(
-        &mut self, 
-        msg: Self::Input, 
-        sender: ComponentSender<Self>,
-        root: &Self::Root,
-    ) {
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             BrowserInput::Open(game_version, loader) => {
                 self.visible = true;
@@ -988,7 +1002,10 @@ impl Component for ModrinthBrowser {
                 }
             }
             BrowserInput::LoadMore => {
-                if self.loading || self.loading_more || (self.projects.len() as u32) >= self.total_hits {
+                if self.loading
+                    || self.loading_more
+                    || (self.projects.len() as u32) >= self.total_hits
+                {
                     return;
                 }
                 self.loading_more = true;
@@ -999,7 +1016,8 @@ impl Component for ModrinthBrowser {
                 let next_offset = self.offset + 20;
 
                 std::thread::spawn(move || {
-                    let result = search_mods(&query, 20, next_offset, Some(&gv), Some(l), Some("mod"));
+                    let result =
+                        search_mods(&query, 20, next_offset, Some(&gv), Some(l), Some("mod"));
                     s_clone.send(BrowserInput::LoadMoreDone(result)).ok();
                 });
             }
@@ -1032,7 +1050,10 @@ impl Component for ModrinthBrowser {
                         }
                     }
                     Err(e) => {
-                        sender.input(BrowserInput::ShowToast(format!("Failed to load more: {}", e)));
+                        sender.input(BrowserInput::ShowToast(format!(
+                            "Failed to load more: {}",
+                            e
+                        )));
                     }
                 }
             }
@@ -1084,7 +1105,11 @@ impl Component for ModrinthBrowser {
                 }
             }
             BrowserInput::AddVersionToQueue(pid, vid, vname, fname) => {
-                let title = self.selected_project.as_ref().map(|p| p.title.clone()).unwrap_or_else(|| "Unknown".to_string());
+                let title = self
+                    .selected_project
+                    .as_ref()
+                    .map(|p| p.title.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
                 self.download_queue.insert(
                     pid.clone(),
                     QueueItem {
@@ -1094,7 +1119,7 @@ impl Component for ModrinthBrowser {
                         filename: Some(fname),
                     },
                 );
-                
+
                 // Update ProjectRow if visible
                 let mut guard = self.projects.guard();
                 for i in 0..guard.len() {
@@ -1107,7 +1132,8 @@ impl Component for ModrinthBrowser {
                 }
             }
             BrowserInput::OpenQueueDialog => {
-                self.queue_dialog.emit(QueueDialogInput::Open(self.download_queue.clone()));
+                self.queue_dialog
+                    .emit(QueueDialogInput::Open(self.download_queue.clone()));
                 self.queue_dialog.widget().present(Some(root));
             }
             BrowserInput::OpenProjectDetails(id) => {
@@ -1125,10 +1151,8 @@ impl Component for ModrinthBrowser {
 
                 std::thread::spawn(move || {
                     let result = (|| {
-                        let project =
-                            get_project(&id_clone)?;
-                        let versions =
-                            get_project_versions(&id_clone, Some(&gv), Some(l))?;
+                        let project = get_project(&id_clone)?;
+                        let versions = get_project_versions(&id_clone, Some(&gv), Some(l))?;
                         Ok((project, versions))
                     })();
                     sender.input(BrowserInput::DetailsLoaded(result));
@@ -1230,10 +1254,7 @@ impl Component for ModrinthBrowser {
             BrowserInput::ConfirmInstallQueue => {
                 let mut installs = Vec::new();
                 for (id, item) in &self.download_queue {
-                    installs.push((
-                        id.clone(),
-                        item.version_id.clone().unwrap_or_default(),
-                    ));
+                    installs.push((id.clone(), item.version_id.clone().unwrap_or_default()));
                 }
                 sender.output(BrowserOutput::InstallMods(installs)).ok();
                 self.visible = false;
@@ -1256,12 +1277,15 @@ impl Component for ModrinthBrowser {
 
                 std::thread::spawn(move || {
                     let result = get_project_versions(&id_clone, Some(&gv), Some(l));
-                    s_clone.send(BrowserInput::VersionsFetched(id_clone, result)).ok();
+                    s_clone
+                        .send(BrowserInput::VersionsFetched(id_clone, result))
+                        .ok();
                 });
             }
             BrowserInput::VersionsFetched(id, result) => {
                 if let Ok(versions) = result {
-                    self.queue_dialog.emit(QueueDialogInput::SetVersions(id, versions));
+                    self.queue_dialog
+                        .emit(QueueDialogInput::SetVersions(id, versions));
                 }
             }
             BrowserInput::ApplyVersionToQueue(id, vid, vname, fname) => {
@@ -1418,7 +1442,9 @@ impl Component for QueueDialog {
                 .forward(sender.input_sender(), |output| match output {
                     QueueRowOutput::Remove(id) => QueueDialogInput::Remove(id),
                     QueueRowOutput::FetchVersions(id) => QueueDialogInput::FetchVersions(id),
-                    QueueRowOutput::SelectVersion(id, vid, vname, fname) => QueueDialogInput::SelectVersion(id, vid, vname, fname),
+                    QueueRowOutput::SelectVersion(id, vid, vname, fname) => {
+                        QueueDialogInput::SelectVersion(id, vid, vname, fname)
+                    }
                 }),
         };
 
@@ -1428,12 +1454,7 @@ impl Component for QueueDialog {
         ComponentParts { model, widgets }
     }
 
-    fn update(
-        &mut self, 
-        msg: Self::Input, 
-        sender: ComponentSender<Self>,
-        root: &Self::Root,
-    ) {
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             QueueDialogInput::Open(items) => {
                 self.all_items = items;
@@ -1443,7 +1464,9 @@ impl Component for QueueDialog {
                 // Proactively fetch versions only for missing items
                 for id in self.all_items.keys() {
                     if !self.version_cache.contains_key(id) {
-                        sender.output(QueueDialogOutput::FetchVersions(id.clone())).ok();
+                        sender
+                            .output(QueueDialogOutput::FetchVersions(id.clone()))
+                            .ok();
                     }
                 }
             }
@@ -1498,7 +1521,9 @@ impl Component for QueueDialog {
                         }
                     }
                 }
-                sender.output(QueueDialogOutput::SelectVersion(id, vid, vname, fname)).ok();
+                sender
+                    .output(QueueDialogOutput::SelectVersion(id, vid, vname, fname))
+                    .ok();
             }
             QueueDialogInput::SetVersions(id, versions) => {
                 self.version_cache.insert(id.clone(), versions.clone());
@@ -1533,7 +1558,6 @@ impl QueueDialog {
     }
 }
 
-
 fn fetch_icon(url: String, sender: relm4::Sender<BrowserInput>) {
     thread::spawn(move || {
         let client = reqwest::blocking::Client::builder()
@@ -1554,7 +1578,10 @@ fn fetch_icon(url: String, sender: relm4::Sender<BrowserInput>) {
                                 sender.send(BrowserInput::IconLoaded(url, tex)).ok();
                             }
                             Err(e) => {
-                                eprintln!("[modrinth-icon] Texture decode error for {}: {}", url, e);
+                                eprintln!(
+                                    "[modrinth-icon] Texture decode error for {}: {}",
+                                    url, e
+                                );
                             }
                         }
                     }

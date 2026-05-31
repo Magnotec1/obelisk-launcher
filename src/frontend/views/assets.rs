@@ -1,9 +1,29 @@
-use crate::backend::download::assets::{
-    delete_asset, format_size, scan_versions, AssetScanResult,
-};
+use crate::backend::download::assets::{delete_asset, format_size, scan_versions, AssetScanResult};
 use adw::prelude::*;
 use relm4::prelude::*;
 use std::path::PathBuf;
+
+fn get_category_color_hex(name: &str) -> &'static str {
+    match name {
+        "Game Assets" => "#3584e4",
+        "Client JARs" => "#f6d32d",
+        "Libraries" => "#2ec27e",
+        "Version Metadata" => "#813d9c",
+        "Instance Data" => "#e66100",
+        "Versions" => "#e01b24",
+        _ => "#777777",
+    }
+}
+
+fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
+    if hex.len() < 7 {
+        return (0.5, 0.5, 0.5);
+    }
+    let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(128) as f64 / 255.0;
+    let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(128) as f64 / 255.0;
+    let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(128) as f64 / 255.0;
+    (r, g, b)
+}
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -15,12 +35,14 @@ pub enum AssetInput {
     Refresh,
     Loading(bool),
     Delete(PathBuf),
-    SetPage(u32),
+    ShowCategory(String, String),
+    ShowCategoriesPage,
 }
 
 #[derive(Debug)]
 pub enum AssetOutput {
     RefreshRequest,
+    SubpageChanged(Option<String>),
 }
 
 pub struct AssetManagerView {
@@ -30,12 +52,51 @@ pub struct AssetManagerView {
     instances_path: Option<PathBuf>,
     scan_result: Option<AssetScanResult>,
     view_stack: adw::ViewStack,
-    dropdown_model: gtk::StringList,
+    category_list_box: gtk::ListBox,
+    subpage_stack: gtk::Stack,
+    active_category_title: String,
     page_ids: Vec<String>,
     sender: Option<ComponentSender<AssetManagerView>>,
+
+    chart_slices: std::rc::Rc<std::cell::RefCell<Vec<(String, f64, &'static str)>>>,
+    chart_drawing_area: gtk::DrawingArea,
+    legend_box: gtk::Box,
 }
 
 impl AssetManagerView {
+    fn create_category_row(
+        &self,
+        title: &str,
+        subtitle: &str,
+        icon_name: &str,
+        page_id: String,
+    ) -> adw::ActionRow {
+        let row = adw::ActionRow::new();
+        row.set_title(title);
+        row.set_subtitle(subtitle);
+        row.set_activatable(true);
+
+        let icon = gtk::Image::from_icon_name(icon_name);
+        icon.set_css_classes(&["dim-label"]);
+        row.add_prefix(&icon);
+
+        let arrow = gtk::Image::from_icon_name("go-next-symbolic");
+        arrow.set_css_classes(&["dim-label"]);
+        row.add_suffix(&arrow);
+
+        if let Some(ref sender) = self.sender {
+            let sender_clone = sender.clone();
+            let title_owned = title.to_string();
+            row.connect_activated(move |_| {
+                sender_clone.input(AssetInput::ShowCategory(
+                    page_id.clone(),
+                    title_owned.clone(),
+                ));
+            });
+        }
+        row
+    }
+
     fn create_page_box(&self) -> gtk::Box {
         let content_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
         content_box.set_margin_top(16);
@@ -43,7 +104,9 @@ impl AssetManagerView {
     }
 
     fn remove_widgets_for_paths(
-        w_map: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>>,
+        w_map: &std::rc::Rc<
+            std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>,
+        >,
         paths: &[PathBuf],
     ) {
         let mut map = w_map.borrow_mut();
@@ -63,7 +126,9 @@ impl AssetManagerView {
     fn build_versions_page(
         &self,
         version_groups: &[crate::backend::download::assets::AssetGroup],
-        path_widgets: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>>,
+        path_widgets: &std::rc::Rc<
+            std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>,
+        >,
     ) -> gtk::Box {
         let content_box = self.create_page_box();
 
@@ -154,7 +219,11 @@ impl AssetManagerView {
                 let entry_size = entry.size;
 
                 let widget_ref = ent_row.clone().upcast::<gtk::Widget>();
-                path_widgets.borrow_mut().entry(entry_path.clone()).or_default().push(widget_ref);
+                path_widgets
+                    .borrow_mut()
+                    .entry(entry_path.clone())
+                    .or_default()
+                    .push(widget_ref);
 
                 let del_btn = gtk::Button::new();
                 del_btn.set_icon_name("user-trash-symbolic");
@@ -210,7 +279,9 @@ impl AssetManagerView {
     fn build_category_page(
         &self,
         category: &crate::backend::download::assets::AssetCategory,
-        path_widgets: &std::rc::Rc<std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>>,
+        path_widgets: &std::rc::Rc<
+            std::cell::RefCell<std::collections::HashMap<PathBuf, Vec<gtk::Widget>>>,
+        >,
     ) -> gtk::Box {
         let content_box = self.create_page_box();
 
@@ -309,7 +380,11 @@ impl AssetManagerView {
                 let entry_size = entry.size;
 
                 let widget_ref = ent_row.clone().upcast::<gtk::Widget>();
-                path_widgets.borrow_mut().entry(entry_path.clone()).or_default().push(widget_ref);
+                path_widgets
+                    .borrow_mut()
+                    .entry(entry_path.clone())
+                    .or_default()
+                    .push(widget_ref);
 
                 let del_btn = gtk::Button::new();
                 del_btn.set_icon_name("user-trash-symbolic");
@@ -372,7 +447,12 @@ impl AssetManagerView {
         while let Some(child) = self.view_stack.first_child() {
             self.view_stack.remove(&child);
         }
-        self.dropdown_model.splice(0, self.dropdown_model.n_items(), &[]);
+        while let Some(child) = self.category_list_box.first_child() {
+            self.category_list_box.remove(&child);
+        }
+        while let Some(child) = self.legend_box.first_child() {
+            self.legend_box.remove(&child);
+        }
         self.page_ids.clear();
 
         let scan = match &self.scan_result {
@@ -380,18 +460,86 @@ impl AssetManagerView {
             None => return,
         };
 
-        use std::rc::Rc;
+        // Rebuild slices and legend
+        let mut slices = Vec::new();
+        let version_groups = scan_versions(&self.data_path, self.shared_path.as_deref());
+        let versions_size: u64 = if !version_groups.is_empty() {
+            version_groups.iter().map(|g| g.total_size).sum()
+        } else {
+            0
+        };
+        let mut total: u64 = versions_size;
+        for cat in &scan.categories {
+            total += cat.total_size;
+        }
+
+        if total > 0 {
+            if versions_size > 0 {
+                slices.push((
+                    "Versions".to_string(),
+                    versions_size as f64 / total as f64,
+                    get_category_color_hex("Versions"),
+                ));
+            }
+            for cat in &scan.categories {
+                if cat.total_size > 0 {
+                    slices.push((
+                        cat.name.clone(),
+                        cat.total_size as f64 / total as f64,
+                        get_category_color_hex(&cat.name),
+                    ));
+                }
+            }
+            slices.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        *self.chart_slices.borrow_mut() = slices.clone();
+
+        for (name, percentage, hex) in &slices {
+            let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+
+            let color_label = gtk::Label::builder()
+                .use_markup(true)
+                .label(format!("<span foreground='{}'>●</span>", hex))
+                .build();
+
+            let name_label = gtk::Label::new(Some(name));
+            name_label.set_css_classes(&["caption"]);
+
+            let pct_label = gtk::Label::new(Some(&format!("{:.1}%", percentage * 100.0)));
+            pct_label.set_css_classes(&["caption", "dim-label"]);
+            pct_label.set_hexpand(true);
+            pct_label.set_halign(gtk::Align::End);
+
+            row_box.append(&color_label);
+            row_box.append(&name_label);
+            row_box.append(&pct_label);
+
+            self.legend_box.append(&row_box);
+        }
+        self.chart_drawing_area.queue_draw();
+
         use std::cell::RefCell;
         use std::collections::HashMap;
+        use std::rc::Rc;
 
-        let path_widgets: Rc<RefCell<HashMap<PathBuf, Vec<gtk::Widget>>>> = Rc::new(RefCell::new(HashMap::new()));
+        let path_widgets: Rc<RefCell<HashMap<PathBuf, Vec<gtk::Widget>>>> =
+            Rc::new(RefCell::new(HashMap::new()));
 
         // 1. Build Versions page if there are versions
         let version_groups = scan_versions(&self.data_path, self.shared_path.as_deref());
         if !version_groups.is_empty() {
+            let versions_total_size: u64 = version_groups.iter().map(|g| g.total_size).sum();
             let content_box = self.build_versions_page(&version_groups, &path_widgets);
-            self.view_stack.add_titled(&content_box, Some("versions"), "Versions");
-            self.dropdown_model.append("Versions");
+            self.view_stack
+                .add_titled(&content_box, Some("versions"), "Versions");
+
+            let row = self.create_category_row(
+                "Versions",
+                &format_size(versions_total_size),
+                "folder-symbolic",
+                "versions".to_string(),
+            );
+            self.category_list_box.append(&row);
             self.page_ids.push("versions".to_string());
         }
 
@@ -399,10 +547,18 @@ impl AssetManagerView {
         for category in &scan.categories {
             let content_box = self.build_category_page(category, &path_widgets);
             let id = category.name.to_lowercase().replace(" ", "-");
-            let page = self.view_stack.add_titled(&content_box, Some(&id), &category.name);
+            let page = self
+                .view_stack
+                .add_titled(&content_box, Some(&id), &category.name);
             page.set_icon_name(Some("folder-symbolic"));
-            
-            self.dropdown_model.append(&category.name);
+
+            let row = self.create_category_row(
+                &category.name,
+                &format_size(category.total_size),
+                category.icon,
+                id.clone(),
+            );
+            self.category_list_box.append(&row);
             self.page_ids.push(id);
         }
     }
@@ -453,114 +609,161 @@ impl SimpleComponent for AssetManagerView {
                             set_spacing: 16,
                             set_margin_all: 16,
 
-                            // Summary / info card
-                            gtk::Box {
-                                set_orientation: gtk::Orientation::Vertical,
-                                set_css_classes: &["card"],
+                            #[local_ref]
+                            subpage_stack_ref -> gtk::Stack {
+                                set_vexpand: true,
+                                set_vhomogeneous: false,
+                                set_hhomogeneous: false,
+                                set_transition_type: gtk::StackTransitionType::SlideLeftRight,
 
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Horizontal,
-                                    set_margin_all: 16,
+                                add_named[Some("categories")] = &gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
                                     set_spacing: 16,
+
+                                    // Summary / info card
+                                    gtk::Box {
+                                        set_orientation: gtk::Orientation::Vertical,
+                                        set_css_classes: &["card"],
+
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_margin_all: 16,
+                                            set_margin_bottom: 12,
+                                            set_spacing: 16,
+
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_hexpand: true,
+                                                set_spacing: 2,
+
+                                                gtk::Label {
+                                                    set_label: "Total Disk Usage",
+                                                    set_css_classes: &["heading"],
+                                                    set_halign: gtk::Align::Start,
+                                                },
+                                                gtk::Label {
+                                                    #[watch]
+                                                    set_label: &model.scan_result.as_ref()
+                                                        .map(|s| format_size(s.total_size))
+                                                        .unwrap_or_else(|| "Scanning…".to_string()),
+                                                    set_css_classes: &["title-1"],
+                                                    set_halign: gtk::Align::Start,
+                                                },
+                                            },
+                                        },
+
+                                        gtk::Separator {},
+
+                                        // Data directory row
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 8,
+                                            set_margin_start: 16,
+                                            set_margin_end: 16,
+                                            set_margin_top: 16,
+                                            set_margin_bottom: 16,
+
+                                            gtk::Image {
+                                                set_icon_name: Some("folder-symbolic"),
+                                                set_css_classes: &["dim-label"],
+                                            },
+                                            gtk::Label {
+                                                set_label: "Data directory",
+                                                set_css_classes: &["dim-label"],
+                                            },
+                                            gtk::Label {
+                                                #[watch]
+                                                set_label: &model.data_path.to_string_lossy(),
+                                                set_css_classes: &["caption", "monospace"],
+                                                set_halign: gtk::Align::Start,
+                                                set_hexpand: true,
+                                                set_ellipsize: gtk::pango::EllipsizeMode::Start,
+                                                set_selectable: true,
+                                            },
+                                        },
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 8,
+                                            set_margin_start: 16,
+                                            set_margin_end: 16,
+                                            set_margin_bottom: 16,
+
+                                            gtk::Image {
+                                                set_icon_name: Some("folder-remote-symbolic"),
+                                                set_css_classes: &["dim-label"],
+                                            },
+                                            gtk::Label {
+                                                set_label: "Shared directory",
+                                                set_css_classes: &["dim-label"],
+                                            },
+                                            gtk::Label {
+                                                #[watch]
+                                                set_label: &model.shared_path.as_ref().map_or_else(|| "None".to_string(), |p| p.to_string_lossy().to_string()),
+                                                set_css_classes: &["caption", "monospace"],
+                                                set_halign: gtk::Align::Start,
+                                                set_hexpand: true,
+                                                set_ellipsize: gtk::pango::EllipsizeMode::Start,
+                                                set_selectable: true,
+                                            },
+                                        }
+                                    },
+
+                                    // Storage Breakdown card
+                                    gtk::Box {
+                                        set_orientation: gtk::Orientation::Horizontal,
+                                        set_spacing: 24,
+                                        set_css_classes: &["card"],
+                                        set_margin_start: 0,
+                                        set_margin_end: 0,
+                                        set_margin_top: 0,
+
+                                        gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 20,
+                                            set_margin_all: 16,
+                                            set_hexpand: true,
+
+                                            #[local_ref]
+                                            chart_drawing_area_ref -> gtk::DrawingArea {
+                                                set_halign: gtk::Align::Start,
+                                                set_valign: gtk::Align::Center,
+                                            },
+
+                                            #[local_ref]
+                                            legend_box_ref -> gtk::Box {
+                                                set_hexpand: true,
+                                                set_valign: gtk::Align::Center,
+                                            }
+                                        }
+                                    },
 
                                     gtk::Box {
                                         set_orientation: gtk::Orientation::Vertical,
-                                        set_hexpand: true,
-                                        set_spacing: 2,
-
+                                        set_spacing: 12,
                                         gtk::Label {
-                                            set_label: "Total Disk Usage",
+                                            set_label: "Categories",
                                             set_css_classes: &["heading"],
                                             set_halign: gtk::Align::Start,
+                                            set_margin_start: 4,
                                         },
-                                        gtk::Label {
-                                            #[watch]
-                                            set_label: &model.scan_result.as_ref()
-                                                .map(|s| format_size(s.total_size))
-                                                .unwrap_or_else(|| "Scanning…".to_string()),
-                                            set_css_classes: &["title-1"],
-                                            set_halign: gtk::Align::Start,
-                                        },
-                                    },
+
+                                        #[local_ref]
+                                        category_list_box_ref -> gtk::ListBox {
+                                            set_css_classes: &["boxed-list"],
+                                            set_selection_mode: gtk::SelectionMode::None,
+                                        }
+                                    }
                                 },
 
-                                gtk::Separator {},
-                                
-                                // Data directory row
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 8,
-                                    set_margin_start: 16,
-                                    set_margin_end: 16,
-                                    set_margin_top: 16,
-                                    set_margin_bottom: 16,
+                                add_named[Some("details")] = &gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_vexpand: true,
 
-                                    gtk::Image {
-                                        set_icon_name: Some("folder-symbolic"),
-                                        set_css_classes: &["dim-label"],
-                                    },
-                                    gtk::Label {
-                                        set_label: "Data directory",
-                                        set_css_classes: &["dim-label"],
-                                    },
-                                    gtk::Label {
-                                        #[watch]
-                                        set_label: &model.data_path.to_string_lossy(),
-                                        set_css_classes: &["caption", "monospace"],
-                                        set_halign: gtk::Align::Start,
-                                        set_hexpand: true,
-                                        set_ellipsize: gtk::pango::EllipsizeMode::Start,
-                                        set_selectable: true,
-                                    },
-                                },
-                                gtk::Box {
-                                    set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 8,
-                                    set_margin_start: 16,
-                                    set_margin_end: 16,
-                                    set_margin_bottom: 16,
-
-                                    gtk::Image {
-                                        set_icon_name: Some("folder-remote-symbolic"),
-                                        set_css_classes: &["dim-label"],
-                                    },
-                                    gtk::Label {
-                                        set_label: "Shared directory",
-                                        set_css_classes: &["dim-label"],
-                                    },
-                                    gtk::Label {
-                                        #[watch]
-                                        set_label: &model.shared_path.as_ref().map_or_else(|| "None".to_string(), |p| p.to_string_lossy().to_string()),
-                                        set_css_classes: &["caption", "monospace"],
-                                        set_halign: gtk::Align::Start,
-                                        set_hexpand: true,
-                                        set_ellipsize: gtk::pango::EllipsizeMode::Start,
-                                        set_selectable: true,
-                                    },
-                                }
-                            },
-
-                            gtk::Box {
-                                set_orientation: gtk::Orientation::Vertical,
-                                set_spacing: 12,
-                                gtk::Label {
-                                    set_label: "Categories",
-                                    set_css_classes: &["heading"],
-                                    set_halign: gtk::Align::Start,
-                                    set_margin_start: 4,
-                                },
-                                gtk::DropDown {
-                                    set_model: Some(&model.dropdown_model),
-                                    set_halign: gtk::Align::Start,
-                                    connect_selected_notify[sender] => move |dropdown| {
-                                        sender.input(AssetInput::SetPage(dropdown.selected()));
+                                    #[local_ref]
+                                    view_stack_ref -> adw::ViewStack {
+                                        set_vexpand: true,
                                     }
                                 }
-                            },
-
-                            #[local_ref]
-                            view_stack_ref -> adw::ViewStack {
-                                set_vexpand: true,
                             }
                         }
                     }
@@ -582,6 +785,20 @@ impl SimpleComponent for AssetManagerView {
         view_stack.set_vhomogeneous(false);
         view_stack.set_hhomogeneous(false);
 
+        let category_list_box = gtk::ListBox::new();
+        category_list_box.set_css_classes(&["boxed-list"]);
+        category_list_box.set_selection_mode(gtk::SelectionMode::None);
+
+        let subpage_stack = gtk::Stack::new();
+        subpage_stack.set_vhomogeneous(false);
+        subpage_stack.set_hhomogeneous(false);
+
+        let chart_drawing_area = gtk::DrawingArea::new();
+        chart_drawing_area.set_content_width(120);
+        chart_drawing_area.set_content_height(120);
+
+        let legend_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+
         let model = AssetManagerView {
             loading: true,
             data_path: PathBuf::new(),
@@ -589,12 +806,54 @@ impl SimpleComponent for AssetManagerView {
             instances_path: None,
             scan_result: None,
             view_stack: view_stack.clone(),
-            dropdown_model: gtk::StringList::new(&[]),
+            category_list_box: category_list_box.clone(),
+            subpage_stack: subpage_stack.clone(),
+            active_category_title: String::new(),
             page_ids: Vec::new(),
             sender: Some(sender.clone()),
+            chart_slices: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            chart_drawing_area: chart_drawing_area.clone(),
+            legend_box: legend_box.clone(),
         };
 
+        let slices_clone = model.chart_slices.clone();
+        chart_drawing_area.set_draw_func(move |_area, cr, width, height| {
+            let slices = slices_clone.borrow();
+            let cx = width as f64 / 2.0;
+            let cy = height as f64 / 2.0;
+            let radius = (width.min(height) as f64 / 2.0) - 6.0;
+            let stroke_width = radius * 0.35;
+            let middle_radius = radius - (stroke_width / 2.0);
+
+            if radius <= 0.0 {
+                return;
+            }
+
+            if slices.is_empty() {
+                cr.set_source_rgba(0.7, 0.7, 0.7, 0.2);
+                cr.set_line_width(stroke_width);
+                cr.arc(cx, cy, middle_radius, 0.0, 2.0 * std::f64::consts::PI);
+                let _ = cr.stroke();
+                return;
+            }
+
+            let mut current_angle = -std::f64::consts::FRAC_PI_2;
+            for (_name, percentage, hex) in slices.iter() {
+                let angle = percentage * 2.0 * std::f64::consts::PI;
+                let (r, g, b) = hex_to_rgb(hex);
+                cr.set_source_rgb(r, g, b);
+                cr.set_line_width(stroke_width);
+                cr.arc(cx, cy, middle_radius, current_angle, current_angle + angle);
+                let _ = cr.stroke();
+                current_angle += angle;
+            }
+        });
+
         let view_stack_ref = &model.view_stack;
+        let category_list_box_ref = &model.category_list_box;
+        let subpage_stack_ref = &model.subpage_stack;
+        let chart_drawing_area_ref = &model.chart_drawing_area;
+        let legend_box_ref = &model.legend_box;
         let widgets = view_output!();
 
         ComponentParts { model, widgets }
@@ -616,19 +875,40 @@ impl SimpleComponent for AssetManagerView {
             AssetInput::Loading(loading) => {
                 self.loading = loading;
                 if loading {
-                    while let Some(page) = self.view_stack.pages().item(0).and_downcast::<adw::ViewStackPage>() {
+                    while let Some(page) = self
+                        .view_stack
+                        .pages()
+                        .item(0)
+                        .and_downcast::<adw::ViewStackPage>()
+                    {
                         self.view_stack.remove(&page.child());
                     }
+                    while let Some(child) = self.category_list_box.first_child() {
+                        self.category_list_box.remove(&child);
+                    }
+                    while let Some(child) = self.legend_box.first_child() {
+                        self.legend_box.remove(&child);
+                    }
+                    self.chart_slices.borrow_mut().clear();
+                    self.subpage_stack.set_visible_child_name("categories");
+                    _sender.output(AssetOutput::SubpageChanged(None)).ok();
                 }
             }
             AssetInput::Delete(path) => {
                 let _ = delete_asset(&path);
                 self.rebuild_list();
             }
-            AssetInput::SetPage(index) => {
-                if let Some(id) = self.page_ids.get(index as usize) {
-                    self.view_stack.set_visible_child_name(id);
-                }
+            AssetInput::ShowCategory(id, title) => {
+                self.view_stack.set_visible_child_name(&id);
+                self.active_category_title = title.clone();
+                self.subpage_stack.set_visible_child_name("details");
+                _sender
+                    .output(AssetOutput::SubpageChanged(Some(title)))
+                    .ok();
+            }
+            AssetInput::ShowCategoriesPage => {
+                self.subpage_stack.set_visible_child_name("categories");
+                _sender.output(AssetOutput::SubpageChanged(None)).ok();
             }
         }
     }
