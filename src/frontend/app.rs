@@ -49,7 +49,7 @@ use crate::frontend::dialogs::system::setup::{SetupDialog, SetupInput, SetupOutp
 use crate::frontend::dialogs::system::shortcuts::ShortcutsDialog;
 use crate::frontend::views::account::{AccountInput, AccountView};
 use crate::frontend::views::assets::{AssetInput, AssetManagerView, AssetOutput};
-pub use crate::frontend::views::instance::tabs::console::{LogLevel, LogLine};
+// Log levels removed as logs are filtered via search only now
 use crate::frontend::views::instance::{
     ConsoleInput, ConsoleOutput, EditorTabInput, EditorTabOutput, InstanceConsole,
     InstanceEditorTab, InstanceSettingsTab, InstanceSummary, SettingsTabInput, SettingsTabOutput,
@@ -65,12 +65,19 @@ use crate::frontend::views::sidebar::{
 use adw::prelude::*;
 use gtk::glib;
 use relm4::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceStatus {
+    NotRunning,
+    Loading,
+    Running,
+}
 
 pub struct AppModel {
     config: Config,
@@ -114,13 +121,13 @@ pub struct AppModel {
     auth_in_progress: bool,
 
     // Launch state
-    running_instances: HashSet<PathBuf>,
+    instance_statuses: HashMap<PathBuf, InstanceStatus>,
     instance_processes: HashMap<PathBuf, Arc<Mutex<Option<Child>>>>,
     instance_consoles: HashMap<PathBuf, gtk::TextBuffer>,
-    instance_logs: HashMap<PathBuf, Vec<LogLine>>,
+    instance_logs: HashMap<PathBuf, Vec<String>>,
     default_console_buffer: gtk::TextBuffer,
     active_tab: String,
-    console_filter: LogLevel,
+    console_search_query: String,
 
     // Download state
     loading_instances: bool,
@@ -238,12 +245,13 @@ pub enum AppMsg {
 
     // Launching
     LaunchInstance,
+    LaunchInstanceFromIndex(usize),
     VerifyInstance,
     KillInstance,
+    KillInstanceFromIndex(usize),
     ConsoleLog(PathBuf, String),
     ClearConsole(PathBuf),
-    ClearActiveConsole,
-    SetConsoleFilter(LogLevel),
+    SetConsoleSearchQuery(String),
     ProcessFinished(
         PathBuf,
         u64,
@@ -323,23 +331,36 @@ impl AppModel {
     }
 
     fn rebuild_console_buffer(&mut self, path: &PathBuf) {
-        let filter = self.console_filter;
         let buf = self.get_console_buffer(path);
         buf.set_text("");
 
         if let Some(logs) = self.instance_logs.get(path) {
             let mut iter = buf.end_iter();
+            let query = self.console_search_query.to_lowercase();
             for line in logs {
-                if filter == LogLevel::All || line.level == filter {
-                    buf.insert(&mut iter, &line.content);
+                if query.is_empty() || line.to_lowercase().contains(&query) {
+                    buf.insert(&mut iter, line);
                 }
             }
         }
     }
 
-    fn is_active_instance_running(&self) -> bool {
+    fn get_instance_status(&self, path: &std::path::Path) -> InstanceStatus {
+        self.instance_statuses.get(path).copied().unwrap_or(InstanceStatus::NotRunning)
+    }
+
+    fn get_active_instance_status(&self) -> InstanceStatus {
         if let Some(path) = self.get_active_instance_path() {
-            return self.running_instances.contains(&path);
+            return self.get_instance_status(&path);
+        }
+        InstanceStatus::NotRunning
+    }
+
+    fn get_active_instance_has_logs(&self) -> bool {
+        if let Some(path) = self.get_active_instance_path() {
+            if let Some(logs) = self.instance_logs.get(&path) {
+                return !logs.is_empty();
+            }
         }
         false
     }
@@ -400,8 +421,7 @@ impl AppModel {
         match output {
             ConsoleOutput::Launch => sender.input(AppMsg::LaunchInstance),
             ConsoleOutput::Kill => sender.input(AppMsg::KillInstance),
-            ConsoleOutput::Clear => sender.input(AppMsg::ClearActiveConsole),
-            ConsoleOutput::SetFilter(level) => sender.input(AppMsg::SetConsoleFilter(level)),
+            ConsoleOutput::Search(query) => sender.input(AppMsg::SetConsoleSearchQuery(query)),
         }
     }
 
@@ -1260,7 +1280,7 @@ impl SimpleComponent for AppModel {
             active_sidebar_page: SidebarPage::Library,
 
             instance_summary: InstanceSummary::builder()
-                .launch((None, false))
+                .launch((None, InstanceStatus::NotRunning))
                 .forward(sender.input_sender(), AppMsg::Summary),
 
             instance_editor_tab: InstanceEditorTab::builder()
@@ -1272,7 +1292,7 @@ impl SimpleComponent for AppModel {
                 .forward(sender.input_sender(), AppMsg::SettingsTab),
 
             instance_console: InstanceConsole::builder()
-                .launch((gtk::TextBuffer::new(None), false))
+                .launch((gtk::TextBuffer::new(None), InstanceStatus::NotRunning, false))
                 .forward(sender.input_sender(), AppMsg::Console),
 
             account_view: AccountView::builder()
@@ -1292,13 +1312,13 @@ impl SimpleComponent for AppModel {
             loading_instances: true,
             auth_in_progress: false,
 
-            running_instances: HashSet::new(),
+            instance_statuses: HashMap::new(),
             instance_processes: HashMap::new(),
             instance_consoles: HashMap::new(),
             instance_logs: HashMap::new(),
             default_console_buffer: gtk::TextBuffer::new(None),
             active_tab: "summary".to_string(),
-            console_filter: LogLevel::Info,
+            console_search_query: String::new(),
             launch_after_download: false,
             toast_overlay: adw::ToastOverlay::new(),
             active_editor_type: None,
@@ -1450,6 +1470,8 @@ impl SimpleComponent for AppModel {
                 }
             },
             AppMsg::OverviewEvent(out) => match out {
+                OverviewOutput::LaunchInstance(idx) => _sender.input(AppMsg::LaunchInstanceFromIndex(idx)),
+                OverviewOutput::KillInstance(idx) => _sender.input(AppMsg::KillInstanceFromIndex(idx)),
                 OverviewOutput::SelectInstance(idx) => _sender.input(AppMsg::SelectInstance(idx)),
                 OverviewOutput::RenameInstance(idx) => {
                     _sender.input(AppMsg::RenameInstanceRequest(idx))
@@ -1521,6 +1543,7 @@ impl SimpleComponent for AppModel {
                 self.overview_grid.emit(OverviewInput::SetSortBy(sort_by));
             }
             AppMsg::InstanceLaunched(path, timestamp) => {
+                self.instance_statuses.insert(path.clone(), InstanceStatus::Running);
                 for inst in &mut self.instances {
                     if inst.path == path {
                         inst.last_launched = Some(timestamp);
@@ -1528,6 +1551,16 @@ impl SimpleComponent for AppModel {
                     }
                 }
                 self.rebuild_overview();
+                if Some(&path) == self.get_active_instance_path().as_ref() {
+                    let inst = self.instances.get(self.selected_instance.unwrap()).cloned();
+                    self.instance_summary
+                        .emit(SummaryInput::Update(inst, InstanceStatus::Running));
+                    self.instance_console.emit(ConsoleInput::Update {
+                        buffer: self.get_active_console_buffer(),
+                        status: InstanceStatus::Running,
+                        has_any_logs: self.get_active_instance_has_logs(),
+                    });
+                }
             }
             AppMsg::ToggleOverviewLayout => {
                 let new_mode = if self.overview_layout == LayoutMode::Grid {
@@ -1897,17 +1930,18 @@ impl SimpleComponent for AppModel {
 
                 if let Some(index) = self.selected_instance {
                     let inst = self.instances.get(index).cloned();
-                    let running = self.is_active_instance_running();
+                    let status = self.get_active_instance_status();
                     self.instance_summary
-                        .emit(SummaryInput::Update(inst.clone(), running));
+                        .emit(SummaryInput::Update(inst.clone(), status));
                     self.instance_editor_tab
                         .emit(EditorTabInput::Update(inst.clone(), self.config.clone()));
                     self.instance_settings_tab
                         .emit(SettingsTabInput::Update(inst.clone(), self.config.clone()));
-                    self.instance_console.emit(ConsoleInput::Update(
-                        self.get_active_console_buffer(),
-                        running,
-                    ));
+                    self.instance_console.emit(ConsoleInput::Update {
+                        buffer: self.get_active_console_buffer(),
+                        status,
+                        has_any_logs: self.get_active_instance_has_logs(),
+                    });
                 }
             }
 
@@ -1931,9 +1965,9 @@ impl SimpleComponent for AppModel {
                         if existing.path == updated_inst.path {
                             *existing = updated_inst.clone();
 
-                            let running = self.is_active_instance_running();
+                            let status = self.get_active_instance_status();
                             self.instance_summary
-                                .emit(SummaryInput::Update(Some(updated_inst.clone()), running));
+                                .emit(SummaryInput::Update(Some(updated_inst.clone()), status));
                             self.instance_editor_tab.emit(EditorTabInput::Update(
                                 Some(updated_inst.clone()),
                                 self.config.clone(),
@@ -2064,9 +2098,9 @@ impl SimpleComponent for AppModel {
                     if inst.path == updated_inst.path {
                         *inst = updated_inst.clone();
                         if self.selected_instance == Some(i) {
-                            let running = self.is_active_instance_running();
+                            let status = self.get_active_instance_status();
                             self.instance_summary
-                                .emit(SummaryInput::Update(Some(updated_inst.clone()), running));
+                                .emit(SummaryInput::Update(Some(updated_inst.clone()), status));
                             self.instance_editor_tab.emit(EditorTabInput::Update(
                                 Some(updated_inst.clone()),
                                 self.config.clone(),
@@ -2090,10 +2124,10 @@ impl SimpleComponent for AppModel {
                 self.instance_sidebar
                     .emit(InstanceSidebarInput::SetActiveTab("summary".to_string()));
                 let inst_opt = self.instances.get(index).cloned();
-                let running = self.is_active_instance_running();
+                let status = self.get_active_instance_status();
 
                 self.instance_summary
-                    .emit(SummaryInput::Update(inst_opt.clone(), running));
+                    .emit(SummaryInput::Update(inst_opt.clone(), status));
                 self.instance_summary
                     .emit(SummaryInput::SetSharingLoading(self.sharing_loading));
                 self.instance_summary
@@ -2106,10 +2140,11 @@ impl SimpleComponent for AppModel {
                     inst_opt.clone(),
                     self.config.clone(),
                 ));
-                self.instance_console.emit(ConsoleInput::Update(
-                    self.get_active_console_buffer(),
-                    running,
-                ));
+                self.instance_console.emit(ConsoleInput::Update {
+                    buffer: self.get_active_console_buffer(),
+                    status,
+                    has_any_logs: self.get_active_instance_has_logs(),
+                });
 
                 if let Some(_inst) = inst_opt {
                     _sender.input(AppMsg::RefreshSelectedInstance);
@@ -3402,18 +3437,25 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::KillInstance => {
-                if let Some(path) = self.get_active_instance_path() {
+                if let Some(idx) = self.selected_instance {
+                    _sender.input(AppMsg::KillInstanceFromIndex(idx));
+                }
+            }
+            AppMsg::KillInstanceFromIndex(idx) => {
+                if let Some(inst) = self.instances.get(idx) {
+                    let path = inst.path.clone();
                     let game_process = self.get_game_process(&path);
                     let mut guard = game_process.lock().unwrap();
                     if let Some(mut child) = guard.take() {
                         let _ = child.kill();
-                        self.running_instances.remove(&path);
+                        self.instance_statuses.insert(path.clone(), InstanceStatus::NotRunning);
+                        self.rebuild_overview();
 
                         // Update UI
                         if Some(&path) == self.get_active_instance_path().as_ref() {
                             let inst = self.instances.get(self.selected_instance.unwrap()).cloned();
                             self.instance_summary
-                                .emit(SummaryInput::Update(inst, false));
+                                .emit(SummaryInput::Update(inst, InstanceStatus::NotRunning));
                         }
 
                         let buf = self.get_console_buffer(&path);
@@ -3456,8 +3498,18 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::LaunchInstance => {
-                if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
+                if let Some(idx) = self.selected_instance {
+                    _sender.input(AppMsg::LaunchInstanceFromIndex(idx));
+                }
+            }
+            AppMsg::LaunchInstanceFromIndex(idx) => {
+                if let Some(inst) = self.instances.get(idx) {
                     let instance = inst.clone();
+                    let status = self.get_instance_status(&instance.path);
+                    if status != InstanceStatus::NotRunning {
+                        return;
+                    }
+
                     let mut options = LaunchOptions::default();
                     if let Some(shared_path) = self.config.shared_data_path.clone() {
                         options.shared_data_path = shared_path;
@@ -3478,6 +3530,7 @@ impl SimpleComponent for AppModel {
 
                     // Check if everything is downloaded
                     if !check_instance_assets(&instance, &options) {
+                        _sender.input(AppMsg::SelectInstance(idx));
                         self.launch_after_download = true;
                         let sender_clone = _sender.input_sender().clone();
                         thread::spawn(move || {
@@ -3500,11 +3553,14 @@ impl SimpleComponent for AppModel {
                         return;
                     }
 
-                    self.running_instances.insert(instance.path.clone());
+                    self.instance_statuses.insert(instance.path.clone(), InstanceStatus::Loading);
+                    self.rebuild_overview();
 
                     // Update Summary Tab immediately
-                    self.instance_summary
-                        .emit(SummaryInput::Update(Some(instance.clone()), true));
+                    if Some(idx) == self.selected_instance {
+                        self.instance_summary
+                            .emit(SummaryInput::Update(Some(instance.clone()), InstanceStatus::Loading));
+                    }
 
                     let buf = self.get_console_buffer(&instance.path);
                     buf.set_text(&format!("Starting launch for {}...\n", instance.name));
@@ -3823,15 +3879,15 @@ impl SimpleComponent for AppModel {
                                     if is_flatpak {
                                         flatpak_tip = "\n\nFLATPAK SANDBOX DETECTED:\n\
                                                        Your host system's Java installations are isolated and not visible inside Flatpak.\n\
-                                                       -> Recommendation: Open Settings -> Java -> Install Java, and download a compatible\n\
+                                                       -> Recommendation: Open Preferences -> Java -> Install Managed Runtime, and download a compatible\n\
                                                           runtime directly inside the sandbox in one click!".to_string();
                                     }
 
                                     let diagnosis = format!(
                                         "\n\
-                                        =================================================================\n\
-                                        OBELISK INSTANT CRASH DETECTED\n\
-                                        =================================================================\n\
+                                        ------------------------------------------------------------------\n\
+                                        The game seems to have instantly crashed.\n\
+                                        ------------------------------------------------------------------\n\
                                         The game terminated immediately (within {} seconds) with a failure status.\n\
                                         This usually indicates incompatible Java, wrong JVM flags, or low memory.\n\n\
                                         Diagnosis & Environment Checklist:\n\
@@ -3845,16 +3901,16 @@ impl SimpleComponent for AppModel {
                                            (Make sure these are within your system's physical RAM capacity)\n\n\
                                         Suggested Solutions:\n\
                                            - Check the error logs above for ClassFormatError or VM Option errors.\n\
-                                           - Change the Java path in Instance -> Settings or Global Settings.\n\
+                                           - Change the Java path in Instance -> Editor -> Components -> Java.\n\
                                            - Adjust max/min memory limits in Launcher settings.{}\n\
-                                        =================================================================\n",
+                                        ------------------------------------------------------------------\n",
                                         duration,
                                         actual_ver_str,
                                         required_ver,
                                         if selected_probed.is_some() && crate::backend::runtime::java::get_java_major_version(&selected_probed.as_ref().unwrap().version).unwrap_or(0) == required_ver {
-                                            "Java version matches requirements."
+                                            "Java version seems correct."
                                         } else {
-                                            "Java version is incompatible! Please install or select the recommended Java version."
+                                            "Java version seems incorrect! Try installing and using another java version."
                                         },
                                         max_mem,
                                         min_mem,
@@ -3891,36 +3947,34 @@ impl SimpleComponent for AppModel {
             AppMsg::ConsoleLog(path, msg) => {
                 let is_active = Some(&path) == self.get_active_instance_path().as_ref();
 
-                let level = LogLevel::from_line(&msg);
-                let line = LogLine {
-                    level,
-                    content: msg.clone(),
-                };
-
                 self.instance_logs
                     .entry(path.clone())
                     .or_default()
-                    .push(line);
+                    .push(msg.clone());
 
-                let filter = self.console_filter;
-                if filter == LogLevel::All || level == filter {
+                let query = self.console_search_query.to_lowercase();
+                if query.is_empty() || msg.to_lowercase().contains(&query) {
                     let buf = self.get_console_buffer(&path);
                     let mut iter = buf.end_iter();
                     buf.insert(&mut iter, &msg);
 
                     if is_active {
                         let inst = self.instances.get(self.selected_instance.unwrap()).cloned();
-                        let running = self.running_instances.contains(&path);
+                        let status = self.get_instance_status(&path);
                         self.instance_summary
-                            .emit(SummaryInput::Update(inst, running));
+                            .emit(SummaryInput::Update(inst, status));
                         self.instance_console
-                            .emit(ConsoleInput::Update(buf, running));
+                            .emit(ConsoleInput::Update {
+                                buffer: buf,
+                                status,
+                                has_any_logs: self.get_active_instance_has_logs(),
+                            });
                     }
                 }
             }
             AppMsg::ProcessFinished(path, duration, start, end) => {
                 let is_active = Some(&path) == self.get_active_instance_path().as_ref();
-                self.running_instances.remove(&path);
+                self.instance_statuses.remove(&path);
 
                 // Re-scan the instance to update the playtime field from the disk if we just wrote it
                 // We sync the total duration to instance.cfg for Prism compatibility,
@@ -3956,17 +4010,18 @@ impl SimpleComponent for AppModel {
 
                     self.config.total_playtime += duration;
                     let _ = self.config.save();
-                    self.rebuild_overview();
                 }
+                self.rebuild_overview();
 
                 if is_active {
                     let inst = self.instances.get(self.selected_instance.unwrap()).cloned();
                     self.instance_summary
-                        .emit(SummaryInput::Update(inst, false));
-                    self.instance_console.emit(ConsoleInput::Update(
-                        self.get_active_console_buffer(),
-                        false,
-                    ));
+                        .emit(SummaryInput::Update(inst, InstanceStatus::NotRunning));
+                    self.instance_console.emit(ConsoleInput::Update {
+                        buffer: self.get_active_console_buffer(),
+                        status: InstanceStatus::NotRunning,
+                        has_any_logs: self.get_active_instance_has_logs(),
+                    });
 
                     // Re-scan single instance to make sure we're fully in sync
                     let sender_clone = _sender.input_sender().clone();
@@ -3984,32 +4039,22 @@ impl SimpleComponent for AppModel {
                 }
                 self.rebuild_console_buffer(&path);
                 if Some(&path) == self.get_active_instance_path().as_ref() {
-                    self.instance_console.emit(ConsoleInput::Update(
-                        self.get_active_console_buffer(),
-                        self.is_active_instance_running(),
-                    ));
+                    self.instance_console.emit(ConsoleInput::Update {
+                        buffer: self.get_active_console_buffer(),
+                        status: self.get_active_instance_status(),
+                        has_any_logs: self.get_active_instance_has_logs(),
+                    });
                 }
             }
-            AppMsg::ClearActiveConsole => {
-                if let Some(path) = self.get_active_instance_path() {
-                    if let Some(logs) = self.instance_logs.get_mut(&path) {
-                        logs.clear();
-                    }
-                    self.rebuild_console_buffer(&path);
-                    self.instance_console.emit(ConsoleInput::Update(
-                        self.get_active_console_buffer(),
-                        self.is_active_instance_running(),
-                    ));
-                }
-            }
-            AppMsg::SetConsoleFilter(filter) => {
-                self.console_filter = filter;
+            AppMsg::SetConsoleSearchQuery(query) => {
+                self.console_search_query = query;
                 if let Some(path) = self.get_active_instance_path() {
                     self.rebuild_console_buffer(&path);
-                    self.instance_console.emit(ConsoleInput::Update(
-                        self.get_active_console_buffer(),
-                        self.is_active_instance_running(),
-                    ));
+                    self.instance_console.emit(ConsoleInput::Update {
+                        buffer: self.get_active_console_buffer(),
+                        status: self.get_active_instance_status(),
+                        has_any_logs: self.get_active_instance_has_logs(),
+                    });
                 }
             }
             AppMsg::InstanceCreated(_version, path) => {
@@ -4295,9 +4340,15 @@ impl AppModel {
     }
 
     fn rebuild_overview(&self) {
+        let mut statuses = HashMap::new();
+        for inst in &self.instances {
+            let status = self.get_instance_status(&inst.path);
+            statuses.insert(inst.path.clone(), status);
+        }
         self.overview_grid.emit(OverviewInput::Rebuild(
             self.instances.clone(),
             self.groups.clone(),
+            statuses,
         ));
     }
 

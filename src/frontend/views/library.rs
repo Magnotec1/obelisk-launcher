@@ -2,6 +2,7 @@ use crate::backend::instance::groups::InstanceGroups;
 use crate::backend::instance::manager::Instance;
 use crate::config::SortBy;
 use crate::frontend::views::instance::helpers::{self, ContextMenuOutput};
+use crate::frontend::app::InstanceStatus;
 use adw::prelude::*;
 use relm4::prelude::*;
 use std::collections::HashMap;
@@ -69,7 +70,7 @@ fn build_badges_box(inst: &Instance) -> gtk::Box {
 #[derive(Debug)]
 pub enum OverviewInput {
     /// Full rebuild (called whenever instances or groups change).
-    Rebuild(Vec<Instance>, InstanceGroups),
+    Rebuild(Vec<Instance>, InstanceGroups, HashMap<PathBuf, InstanceStatus>),
     /// Navigate into a group.
     SwitchToGroup(String),
     /// Navigate back to root.
@@ -116,6 +117,10 @@ pub enum OverviewOutput {
     LayoutModeChanged(LayoutMode),
     /// Notify that the active group folder has changed.
     FolderChanged(Option<String>),
+    /// Launch instance by index.
+    LaunchInstance(usize),
+    /// Kill instance by index.
+    KillInstance(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +152,7 @@ pub struct OverviewGrid {
     loading: bool,
     popovers: std::cell::RefCell<Vec<gtk::Popover>>,
     texture_cache: std::cell::RefCell<HashMap<PathBuf, gtk::gdk::Texture>>,
+    statuses: HashMap<PathBuf, InstanceStatus>,
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -379,25 +385,27 @@ impl SimpleComponent for OverviewGrid {
             loading: true,
             popovers: std::cell::RefCell::new(Vec::new()),
             texture_cache: std::cell::RefCell::new(HashMap::new()),
+            statuses: HashMap::new(),
         };
 
         let widgets = view_output!();
         ComponentParts { model, widgets }
-    }
-
-    fn update(&mut self, msg: OverviewInput, sender: ComponentSender<Self>) {
-        match msg {
-            OverviewInput::Rebuild(instances, groups) => {
-                self.instances = instances;
-                self.groups = groups;
-                self.loading = false;
-                if let GridView::Group(ref gname) = self.current_view {
-                    if !self.groups.groups.contains_key(gname.as_str()) {
-                        self.current_view = GridView::Root;
-                    }
-                }
-                self.rebuild_grid(&sender);
-            }
+     }
+ 
+     fn update(&mut self, msg: OverviewInput, sender: ComponentSender<Self>) {
+         match msg {
+             OverviewInput::Rebuild(instances, groups, statuses) => {
+                 self.instances = instances;
+                 self.groups = groups;
+                 self.statuses = statuses;
+                 self.loading = false;
+                 if let GridView::Group(ref gname) = self.current_view {
+                     if !self.groups.groups.contains_key(gname.as_str()) {
+                         self.current_view = GridView::Root;
+                     }
+                 }
+                 self.rebuild_grid(&sender);
+             }
             OverviewInput::SwitchToGroup(name) => {
                 self.current_view = GridView::Group(name);
                 self.rebuild_grid(&sender);
@@ -647,6 +655,7 @@ impl OverviewGrid {
                 .css_classes(vec!["flat"])
                 .valign(gtk::Align::Center)
                 .margin_end(8)
+                .tooltip_text("Options")
                 .build();
             card.append(&menu_btn);
 
@@ -709,6 +718,7 @@ impl OverviewGrid {
             .halign(gtk::Align::End)
             .margin_top(4)
             .margin_end(4)
+            .tooltip_text("Options")
             .build();
         card.add_overlay(&menu_btn);
 
@@ -779,9 +789,57 @@ impl OverviewGrid {
                 .icon_name("view-more-symbolic")
                 .css_classes(vec!["flat"])
                 .valign(gtk::Align::Center)
-                .margin_end(8)
+                .margin_end(4)
+                .tooltip_text("Options")
                 .build();
             card.append(&menu_btn);
+
+            let status = self.statuses.get(&inst.path).copied().unwrap_or(InstanceStatus::NotRunning);
+            match status {
+                InstanceStatus::NotRunning => {
+                    let launch_btn = gtk::Button::builder()
+                        .icon_name("media-playback-start-symbolic")
+                        .css_classes(vec!["flat", "circular"])
+                        .valign(gtk::Align::Center)
+                        .margin_end(8)
+                        .tooltip_text("Launch")
+                        .build();
+                    let s_clone = sender.clone();
+                    launch_btn.connect_clicked(move |_| {
+                        s_clone.output(OverviewOutput::LaunchInstance(flat_idx)).ok();
+                    });
+                    card.append(&launch_btn);
+                }
+                InstanceStatus::Loading => {
+                    let loading_btn = gtk::Button::builder()
+                        .css_classes(vec!["flat", "circular"])
+                        .valign(gtk::Align::Center)
+                        .margin_end(8)
+                        .sensitive(false)
+                        .tooltip_text("Loading…")
+                        .build();
+                    let spinner = adw::Spinner::builder()
+                        .width_request(16)
+                        .height_request(16)
+                        .build();
+                    loading_btn.set_child(Some(&spinner));
+                    card.append(&loading_btn);
+                }
+                InstanceStatus::Running => {
+                    let stop_btn = gtk::Button::builder()
+                        .icon_name("media-playback-stop-symbolic")
+                        .css_classes(vec!["flat", "circular", "destructive-action"])
+                        .valign(gtk::Align::Center)
+                        .margin_end(8)
+                        .tooltip_text("Stop")
+                        .build();
+                    let s_clone = sender.clone();
+                    stop_btn.connect_clicked(move |_| {
+                        s_clone.output(OverviewOutput::KillInstance(flat_idx)).ok();
+                    });
+                    card.append(&stop_btn);
+                }
+            }
 
             self.attach_instance_context_menu(&child, Some(&menu_btn), flat_idx, inst, sender);
             child.set_child(Some(&card));
@@ -858,8 +916,62 @@ impl OverviewGrid {
             .halign(gtk::Align::End)
             .margin_top(4)
             .margin_end(4)
+            .tooltip_text("Options")
             .build();
         card.add_overlay(&menu_btn);
+
+        let status = self.statuses.get(&inst.path).copied().unwrap_or(InstanceStatus::NotRunning);
+        match status {
+            InstanceStatus::NotRunning => {
+                let launch_btn = gtk::Button::builder()
+                    .icon_name("media-playback-start-symbolic")
+                    .css_classes(vec!["flat", "circular"])
+                    .valign(gtk::Align::Start)
+                    .halign(gtk::Align::Start)
+                    .margin_top(4)
+                    .margin_start(4)
+                    .tooltip_text("Launch")
+                    .build();
+                let s_clone = sender.clone();
+                launch_btn.connect_clicked(move |_| {
+                    s_clone.output(OverviewOutput::LaunchInstance(flat_idx)).ok();
+                });
+                card.add_overlay(&launch_btn);
+            }
+            InstanceStatus::Loading => {
+                let loading_btn = gtk::Button::builder()
+                    .css_classes(vec!["flat", "circular"])
+                    .valign(gtk::Align::Start)
+                    .halign(gtk::Align::Start)
+                    .margin_top(4)
+                    .margin_start(4)
+                    .sensitive(false)
+                    .tooltip_text("Loading…")
+                    .build();
+                let spinner = adw::Spinner::builder()
+                    .width_request(16)
+                    .height_request(16)
+                    .build();
+                loading_btn.set_child(Some(&spinner));
+                card.add_overlay(&loading_btn);
+            }
+            InstanceStatus::Running => {
+                let stop_btn = gtk::Button::builder()
+                    .icon_name("media-playback-stop-symbolic")
+                    .css_classes(vec!["flat", "circular", "destructive-action"])
+                    .valign(gtk::Align::Start)
+                    .halign(gtk::Align::Start)
+                    .margin_top(4)
+                    .margin_start(4)
+                    .tooltip_text("Stop")
+                    .build();
+                let s_clone = sender.clone();
+                stop_btn.connect_clicked(move |_| {
+                    s_clone.output(OverviewOutput::KillInstance(flat_idx)).ok();
+                });
+                card.add_overlay(&stop_btn);
+            }
+        }
 
         self.attach_instance_context_menu(&child, Some(&menu_btn), flat_idx, inst, sender);
 

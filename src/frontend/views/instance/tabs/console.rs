@@ -1,66 +1,33 @@
+use crate::frontend::app::InstanceStatus;
 use adw::prelude::*;
 use relm4::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    All,
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    pub fn from_line(line: &str) -> Self {
-        let line_upper = line.to_uppercase();
-        if line_upper.contains("/ERROR")
-            || line_upper.contains(" ERROR ")
-            || line_upper.contains("[ERROR]")
-        {
-            LogLevel::Error
-        } else if line_upper.contains("/WARN")
-            || line_upper.contains(" WARN ")
-            || line_upper.contains("[WARN]")
-        {
-            LogLevel::Warn
-        } else if line_upper.contains("/INFO")
-            || line_upper.contains(" INFO ")
-            || line_upper.contains("[INFO]")
-        {
-            LogLevel::Info
-        } else {
-            LogLevel::Info // Default to Info for simplicity
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct LogLine {
-    pub level: LogLevel,
-    pub content: String,
-}
-
 pub struct InstanceConsole {
     pub buffer: gtk::TextBuffer,
-    pub is_running: bool,
+    pub status: InstanceStatus,
+    pub has_any_logs: bool,
 }
 
 #[derive(Debug)]
 pub enum ConsoleInput {
-    Update(gtk::TextBuffer, bool),
+    Update {
+        buffer: gtk::TextBuffer,
+        status: InstanceStatus,
+        has_any_logs: bool,
+    },
 }
 
 #[derive(Debug)]
 pub enum ConsoleOutput {
     Launch,
     Kill,
-    Clear,
-    SetFilter(LogLevel),
+    Search(String),
 }
 
 #[relm4::component(pub)]
 #[allow(unused_assignments)]
 impl SimpleComponent for InstanceConsole {
-    type Init = (gtk::TextBuffer, bool);
+    type Init = (gtk::TextBuffer, InstanceStatus, bool);
     type Input = ConsoleInput;
     type Output = ConsoleOutput;
 
@@ -69,28 +36,16 @@ impl SimpleComponent for InstanceConsole {
             set_orientation: gtk::Orientation::Vertical,
             set_spacing: 0,
 
-            // Toolbar row: filter toggle group on the left, clear button on the right
-            gtk::Box {
-                set_orientation: gtk::Orientation::Horizontal,
+            gtk::SearchEntry {
+                set_placeholder_text: Some("Search logs..."),
                 set_margin_top: 12,
                 set_margin_bottom: 8,
                 set_margin_start: 16,
                 set_margin_end: 16,
-                set_spacing: 8,
-
-                #[name = "console_filter_box"]
-                gtk::Box {
-                    set_hexpand: true,
-                },
-
-                // Clear button on the far right
-                gtk::Button {
-                    set_icon_name: "edit-clear-all-symbolic",
-                    set_tooltip_text: Some("Clear Console"),
-                    set_css_classes: &["flat"],
-                    connect_clicked[sender] => move |_| {
-                        sender.output(ConsoleOutput::Clear).unwrap();
-                    },
+                #[watch]
+                set_visible: model.has_any_logs,
+                connect_search_changed[sender] => move |entry| {
+                    sender.output(ConsoleOutput::Search(entry.text().to_string())).unwrap();
                 },
             },
 
@@ -102,6 +57,12 @@ impl SimpleComponent for InstanceConsole {
                     set_title: "No Logs Yet",
                     set_description: Some("Launch an instance to see the console output here."),
                     set_icon_name: Some("utilities-terminal-symbolic"),
+                },
+
+                add_titled[Some("no_matches"), "No Matches"] = &adw::StatusPage {
+                    set_title: "No Results Found",
+                    set_description: Some("Try searching for something else."),
+                    set_icon_name: Some("system-search-symbolic"),
                 },
 
                 #[name = "console_scrolled"]
@@ -130,7 +91,13 @@ impl SimpleComponent for InstanceConsole {
 
                 // Must come after add_titled so children exist on first render
                 #[watch]
-                set_visible_child_name: if model.buffer.char_count() == 0 { "empty" } else { "logs" },
+                set_visible_child_name: if !model.has_any_logs {
+                    "empty"
+                } else if model.buffer.char_count() == 0 {
+                    "no_matches"
+                } else {
+                    "logs"
+                },
             },
 
             // Bottom Action Row
@@ -143,7 +110,7 @@ impl SimpleComponent for InstanceConsole {
 
                 gtk::Button {
                     #[watch]
-                    set_visible: !model.is_running,
+                    set_visible: model.status == InstanceStatus::NotRunning,
                     set_css_classes: &["suggested-action", "pill"],
                     connect_clicked[sender] => move |_| {
                         sender.output(ConsoleOutput::Launch).unwrap();
@@ -160,7 +127,25 @@ impl SimpleComponent for InstanceConsole {
 
                 gtk::Button {
                     #[watch]
-                    set_visible: model.is_running,
+                    set_visible: model.status == InstanceStatus::Loading,
+                    set_css_classes: &["pill"],
+                    set_sensitive: false,
+                    #[wrap(Some)]
+                    set_child = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 8,
+                        set_halign: gtk::Align::Center,
+                        adw::Spinner {
+                            set_width_request: 16,
+                            set_height_request: 16,
+                        },
+                        gtk::Label { set_label: "Loading Game…" }
+                    }
+                },
+
+                gtk::Button {
+                    #[watch]
+                    set_visible: model.status == InstanceStatus::Running,
                     set_css_classes: &["destructive-action", "pill"],
                     connect_clicked[sender] => move |_| {
                         sender.output(ConsoleOutput::Kill).unwrap();
@@ -185,55 +170,22 @@ impl SimpleComponent for InstanceConsole {
     ) -> ComponentParts<Self> {
         let model = InstanceConsole {
             buffer: init.0,
-            is_running: init.1,
+            status: init.1,
+            has_any_logs: init.2,
         };
 
         let widgets = view_output!();
 
         widgets
             .console_stack
-            .set_visible_child_name(if model.buffer.char_count() == 0 {
+            .set_visible_child_name(if !model.has_any_logs {
                 "empty"
+            } else if model.buffer.char_count() == 0 {
+                "no_matches"
             } else {
                 "logs"
             });
 
-        // Set up the console filter ToggleGroup
-        {
-            let toggle_group = adw::ToggleGroup::new();
-
-            let toggle_all = adw::Toggle::builder().name("all").label("All").build();
-            let toggle_info = adw::Toggle::builder().name("info").label("Info").build();
-            let toggle_warn = adw::Toggle::builder()
-                .name("warn")
-                .label("Warnings")
-                .build();
-            let toggle_error = adw::Toggle::builder().name("error").label("Errors").build();
-
-            toggle_group.add(toggle_all);
-            toggle_group.add(toggle_info);
-            toggle_group.add(toggle_warn);
-            toggle_group.add(toggle_error);
-
-            toggle_group.set_active_name(Some("all"));
-
-            let sender_clone = sender.clone();
-            toggle_group.connect_active_name_notify(move |group| {
-                if let Some(name) = group.active_name() {
-                    let level = match name.as_str() {
-                        "info" => LogLevel::Info,
-                        "warn" => LogLevel::Warn,
-                        "error" => LogLevel::Error,
-                        _ => LogLevel::All,
-                    };
-                    sender_clone
-                        .output(ConsoleOutput::SetFilter(level))
-                        .unwrap();
-                }
-            });
-
-            widgets.console_filter_box.append(&toggle_group);
-        }
 
         // Auto-scroll console
         let adj = widgets.console_scrolled.vadjustment();
@@ -246,9 +198,14 @@ impl SimpleComponent for InstanceConsole {
 
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
         match msg {
-            ConsoleInput::Update(buffer, running) => {
+            ConsoleInput::Update {
+                buffer,
+                status,
+                has_any_logs,
+            } => {
                 self.buffer = buffer;
-                self.is_running = running;
+                self.status = status;
+                self.has_any_logs = has_any_logs;
             }
         }
     }

@@ -1,4 +1,5 @@
 use crate::backend::instance::manager::Instance;
+use crate::frontend::app::InstanceStatus;
 use adw::prelude::*;
 use relm4::prelude::*;
 
@@ -18,7 +19,7 @@ impl ImageExt for gtk::Image {
 
 pub struct InstanceSummary {
     pub instance: Option<Instance>,
-    pub is_running: bool,
+    pub status: InstanceStatus,
     pub is_narrow: bool,
     pub sharing_loading: bool,
     pub verifying_loading: bool,
@@ -26,7 +27,7 @@ pub struct InstanceSummary {
 
 #[derive(Debug)]
 pub enum SummaryInput {
-    Update(Option<Instance>, bool),
+    Update(Option<Instance>, InstanceStatus),
     SetNarrow(bool),
     SetSharingLoading(bool),
     SetVerifyingLoading(bool),
@@ -44,7 +45,7 @@ pub enum SummaryOutput {
 
 #[relm4::component(pub)]
 impl SimpleComponent for InstanceSummary {
-    type Init = (Option<Instance>, bool);
+    type Init = (Option<Instance>, InstanceStatus);
     type Input = SummaryInput;
     type Output = SummaryOutput;
 
@@ -141,7 +142,7 @@ impl SimpleComponent for InstanceSummary {
 
                         gtk::Button {
                             #[watch]
-                            set_visible: !model.is_running,
+                            set_visible: model.status == InstanceStatus::NotRunning,
                             set_tooltip_text: Some("Launch Game"),
                             set_css_classes: &["suggested-action", "pill"],
                             #[wrap(Some)]
@@ -157,7 +158,27 @@ impl SimpleComponent for InstanceSummary {
 
                         gtk::Button {
                             #[watch]
-                            set_visible: model.is_running,
+                            set_visible: model.status == InstanceStatus::Loading,
+                            set_css_classes: &["pill"],
+                            set_sensitive: false,
+                            #[wrap(Some)]
+                            set_child = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 6,
+                                adw::Spinner {
+                                    set_width_request: 16,
+                                    set_height_request: 16,
+                                },
+                                gtk::Label {
+                                    #[watch]
+                                    set_label: if model.is_narrow { "" } else { "Loading…" },
+                                }
+                            }
+                        },
+
+                        gtk::Button {
+                            #[watch]
+                            set_visible: model.status == InstanceStatus::Running,
                             set_tooltip_text: Some("Stop Game"),
                             set_css_classes: &["destructive-action", "pill"],
                             #[wrap(Some)]
@@ -176,7 +197,7 @@ impl SimpleComponent for InstanceSummary {
                             set_tooltip_text: Some("Verify Instance"),
                             set_css_classes: &["circular"],
                             #[watch]
-                            set_sensitive: !model.verifying_loading && !model.is_running && model.instance.is_some(),
+                            set_sensitive: !model.verifying_loading && model.status == InstanceStatus::NotRunning && model.instance.is_some(),
                             connect_clicked[sender] => move |_| {
                                 sender.output(SummaryOutput::Verify).unwrap();
                             },
@@ -187,7 +208,7 @@ impl SimpleComponent for InstanceSummary {
                             set_tooltip_text: Some("Share Instance"),
                             set_css_classes: &["circular"],
                             #[watch]
-                            set_sensitive: !model.sharing_loading && !model.is_running && model.instance.is_some(),
+                            set_sensitive: !model.sharing_loading && model.status == InstanceStatus::NotRunning && model.instance.is_some(),
                             connect_clicked[sender] => move |_| {
                                 sender.output(SummaryOutput::Share).unwrap();
                             },
@@ -206,7 +227,7 @@ impl SimpleComponent for InstanceSummary {
     ) -> ComponentParts<Self> {
         let model = InstanceSummary {
             instance: init.0,
-            is_running: init.1,
+            status: init.1,
             is_narrow: false,
             sharing_loading: false,
             verifying_loading: false,
@@ -218,9 +239,9 @@ impl SimpleComponent for InstanceSummary {
 
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
         match msg {
-            SummaryInput::Update(inst, running) => {
+            SummaryInput::Update(inst, status) => {
                 self.instance = inst;
-                self.is_running = running;
+                self.status = status;
             }
             SummaryInput::SetNarrow(narrow) => {
                 self.is_narrow = narrow;
