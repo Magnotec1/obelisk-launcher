@@ -49,6 +49,11 @@ pub enum NetworkTask {
         loader: ModLoader,
         mods_dir: PathBuf,
     },
+    ModrinthModpackDownload {
+        name: String,
+        download_url: String,
+        instances_path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -281,6 +286,22 @@ impl NetworkQueue {
                             move |msg, progress| {
                                 callback(msg, progress);
                             },
+                        )
+                        .map(|_| ())
+                    }
+                    NetworkTask::ModrinthModpackDownload {
+                        name,
+                        download_url,
+                        instances_path,
+                    } => {
+                        let callback = status_update.clone();
+                        crate::backend::instance::modpack::install_mrpack(
+                            name,
+                            download_url,
+                            instances_path,
+                            Box::new(move |msg, progress| {
+                                callback(msg, progress);
+                            }),
                         )
                         .map(|_| ())
                     }

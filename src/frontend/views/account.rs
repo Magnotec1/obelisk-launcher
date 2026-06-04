@@ -167,7 +167,7 @@ impl Component for AccountView {
                 set_hscrollbar_policy: gtk::PolicyType::Never,
 
                 adw::Clamp {
-                    set_maximum_size: 600,
+                    set_maximum_size: 1024,
                     set_tightening_threshold: 400,
 
                     gtk::Box {

@@ -158,12 +158,92 @@ fn main() {
             transition: background-color 200ms ease;
         }
 
+        .overview-card:hover {
+            background-color: mix(@card_bg_color, @window_fg_color, 0.05);
+        }
+
+        .overview-card:active {
+            background-color: mix(@card_bg_color, @accent_color, 0.15);
+        }
+
         .overview-grid-mode flowboxchild:hover .overview-card {
             background-color: mix(@card_bg_color, @window_fg_color, 0.05);
         }
 
         .overview-grid-mode flowboxchild:selected .overview-card {
             background-color: mix(@card_bg_color, @accent_color, 0.15);
+        }
+
+        /* Prevent double backgrounds on Discover flowbox items */
+        .overview-grid flowboxchild {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            padding: 0;
+            margin: 0;
+        }
+        .overview-grid flowboxchild:hover {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+        .overview-grid flowboxchild:selected {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* Featured Carousel Container & Items */
+        .featured-carousel-container {
+            background-color: @card_bg_color;
+            border-radius: 12px;
+            border: none;
+            transition: background-color 300ms ease;
+        }
+
+        .featured-carousel-item {
+            background-color: transparent;
+            background-image: none;
+            border: none;
+            box-shadow: none;
+            border-radius: 12px;
+            border-radius: 0px;
+            transition: background-color 200ms ease;
+        }
+        .featured-carousel-item:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+            background-image: none;
+            border: none;
+            box-shadow: none;
+        }
+        .featured-carousel-item:active {
+            background-color: rgba(255, 255, 255, 0.08);
+            background-image: none;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* Carousel Navigation Overlay Buttons */
+        .carousel-nav-btn {
+            background-color: transparent;
+            color: #ffffff;
+            border-radius: 999px;
+            padding: 4px;
+            margin: 0 12px;
+            min-width: 28px;
+            min-height: 28px;
+            transition: background-color 200ms, opacity 200ms;
+            opacity: 0.7;
+        }
+        .carousel-nav-btn:hover {
+            background-color: rgba(255, 255, 255, 0.15);
+            color: #ffffff;
+            opacity: 1.0;
+        }
+        .carousel-nav-btn:active {
+            background-color: rgba(255, 255, 255, 0.25);
+            color: #ffffff;
+            opacity: 1.0;
         }
 
         .overview-card-title {
@@ -175,6 +255,14 @@ fn main() {
         .overview-card-subtitle {
             font-size: 12px;
             opacity: 0.55;
+        }
+
+        .overview-card-icon {
+            border-radius: 8px;
+        }
+
+        .screenshot-img {
+            border-radius: 8px;
         }
 
         .overview-card-stats {
@@ -324,7 +412,7 @@ fn main() {
 
         /* ── Nautilus-style Floating OSD bubble ─────────────────────── */
         .floating-bar {
-            background-color: @card_bg_color;
+            background-color: @popover_bg_color;
             border-radius: 12px;
             padding: 4px 12px;
             margin: 2px;

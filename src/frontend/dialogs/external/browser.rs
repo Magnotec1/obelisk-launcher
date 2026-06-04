@@ -3,16 +3,17 @@
 use crate::backend::download::manager::{
     clear_modrinth_caches as clear_caches, fetch_modrinth_project as get_project,
     fetch_modrinth_versions as get_project_versions, search_modrinth_mods as search_mods,
-    ModProject as ModrinthProject, ModSearchResult as ModrinthSearchResult,
-    ModVersion as ModrinthVersion,
+    ModProject as ModrinthProject, ModVersion as ModrinthVersion,
 };
 use crate::backend::instance::manager::ModLoader;
+use crate::frontend::dialogs::instance::editor::EditorType;
 use adw::prelude::*;
 use gtk::gdk;
 use gtk::glib;
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::thread;
 
 fn escape(text: &str) -> String {
@@ -26,6 +27,171 @@ fn format_downloads(n: u64) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic Browser Models
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct BrowserProject {
+    pub project_id: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub description: String,
+    pub icon_url: Option<String>,
+    pub downloads: u64,
+    pub follows: u64,
+    pub source_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub discord_url: Option<String>,
+    pub license_name: Option<String>,
+    pub screenshots: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BrowserVersion {
+    pub id: String,
+    pub name: String,
+    pub version_number: String,
+    pub version_type: String,
+    pub game_versions: Vec<String>,
+    pub downloads: u64,
+    pub files: Vec<BrowserFile>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BrowserFile {
+    pub filename: String,
+    pub url: String,
+    pub primary: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BrowserSearchResult {
+    pub hits: Vec<BrowserProject>,
+    pub offset: u32,
+    pub limit: u32,
+    pub total_hits: u32,
+}
+
+impl From<ModrinthProject> for BrowserProject {
+    fn from(p: ModrinthProject) -> Self {
+        Self {
+            project_id: p.project_id,
+            title: p.title,
+            author: p.author,
+            description: p.description,
+            icon_url: p.icon_url,
+            downloads: p.downloads,
+            follows: p.follows,
+            source_url: p.source_url,
+            wiki_url: p.wiki_url,
+            discord_url: p.discord_url,
+            license_name: p.license_name,
+            screenshots: p.gallery.unwrap_or_default().into_iter().map(|img| img.url).collect(),
+        }
+    }
+}
+
+impl From<ModrinthVersion> for BrowserVersion {
+    fn from(v: ModrinthVersion) -> Self {
+        Self {
+            id: v.id,
+            name: v.name,
+            version_number: v.version_number,
+            version_type: v.version_type,
+            game_versions: v.game_versions,
+            downloads: v.downloads,
+            files: v.files.into_iter().map(|f| BrowserFile {
+                filename: f.filename,
+                url: f.url,
+                primary: f.primary,
+            }).collect(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sourcing Abstraction Trait
+// ---------------------------------------------------------------------------
+
+pub trait BrowserSource: Send + Sync + 'static {
+    fn name(&self) -> &str;
+
+    fn search(
+        &self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+        game_version: &str,
+        loader: ModLoader,
+        editor_type: &EditorType,
+    ) -> Result<BrowserSearchResult, String>;
+
+    fn get_project(&self, id: &str) -> Result<BrowserProject, String>;
+
+    fn get_project_versions(
+        &self,
+        id: &str,
+        game_version: &str,
+        loader: ModLoader,
+    ) -> Result<Vec<BrowserVersion>, String>;
+}
+
+pub struct ModrinthSource;
+
+impl BrowserSource for ModrinthSource {
+    fn name(&self) -> &str {
+        "Modrinth"
+    }
+
+    fn search(
+        &self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+        game_version: &str,
+        loader: ModLoader,
+        editor_type: &EditorType,
+    ) -> Result<BrowserSearchResult, String> {
+        let project_type = match editor_type {
+            EditorType::Mods => "mod",
+            EditorType::ResourcePacks => "resourcepack",
+            EditorType::ShaderPacks => "shader",
+            EditorType::Worlds => "world",
+            _ => "mod",
+        };
+
+        let effective_loader = if matches!(editor_type, EditorType::Mods) {
+            loader
+        } else {
+            ModLoader::None
+        };
+
+        let res = search_mods(query, limit, offset, Some(game_version), Some(effective_loader), Some(project_type))?;
+        Ok(BrowserSearchResult {
+            hits: res.hits.into_iter().map(BrowserProject::from).collect(),
+            offset: res.offset,
+            limit: res.limit,
+            total_hits: res.total_hits,
+        })
+    }
+
+    fn get_project(&self, id: &str) -> Result<BrowserProject, String> {
+        let p = get_project(id)?;
+        Ok(BrowserProject::from(p))
+    }
+
+    fn get_project_versions(
+        &self,
+        id: &str,
+        game_version: &str,
+        loader: ModLoader,
+    ) -> Result<Vec<BrowserVersion>, String> {
+        let versions = get_project_versions(id, Some(game_version), Some(loader))?;
+        Ok(versions.into_iter().map(BrowserVersion::from).collect())
     }
 }
 
@@ -47,7 +213,7 @@ pub struct QueueItem {
 
 #[derive(Debug)]
 pub struct ProjectRow {
-    pub project: ModrinthProject,
+    pub project: BrowserProject,
     pub in_queue: bool,
     pub icon: Option<gdk::Texture>,
 }
@@ -66,7 +232,7 @@ pub enum ProjectRowOutput {
 
 #[relm4::factory(pub)]
 impl FactoryComponent for ProjectRow {
-    type Init = (ModrinthProject, bool, Option<gdk::Texture>);
+    type Init = (BrowserProject, bool, Option<gdk::Texture>);
     type Input = ProjectRowInput;
     type Output = ProjectRowOutput;
     type CommandOutput = ();
@@ -76,12 +242,14 @@ impl FactoryComponent for ProjectRow {
         adw::ActionRow {
             #[watch]
             set_title: &escape(&self.project.title),
+            set_title_lines: 1,
             #[watch]
             set_subtitle: &{
                 let author = self.project.author.as_deref().unwrap_or("Unknown");
                 let dls = format_downloads(self.project.downloads);
                 escape(&format!("by {} \u{b7} {} downloads", author, dls))
             },
+            set_subtitle_lines: 1,
             set_activatable: true,
             set_use_markup: true,
 
@@ -150,7 +318,7 @@ impl FactoryComponent for ProjectRow {
 
 #[derive(Debug)]
 pub struct VersionRow {
-    pub version: ModrinthVersion,
+    pub version: BrowserVersion,
     pub project_id: String,
 }
 
@@ -162,7 +330,7 @@ pub enum VersionRowOutput {
 
 #[relm4::factory(pub)]
 impl FactoryComponent for VersionRow {
-    type Init = (ModrinthVersion, String);
+    type Init = (BrowserVersion, String);
     type Input = ();
     type Output = VersionRowOutput;
     type CommandOutput = ();
@@ -171,6 +339,8 @@ impl FactoryComponent for VersionRow {
     view! {
         adw::ActionRow {
             set_title: &escape(&self.version.name),
+            set_title_lines: 1,
+            set_subtitle_lines: 1,
             set_subtitle: &escape(&format!(
                 "{} · {} · {}",
                 self.version.version_number,
@@ -210,24 +380,16 @@ impl FactoryComponent for VersionRow {
     fn update(&mut self, _msg: Self::Input, _sender: FactorySender<Self>) {}
 }
 
-// ---------------------------------------------------------------------------
-// Queue Row factory (for the bottom sheet)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Queue Row
-// ---------------------------------------------------------------------------
-
 pub struct QueueRow {
     pub project_id: String,
     pub item: QueueItem,
-    pub versions: Vec<ModrinthVersion>,
+    pub versions: Vec<BrowserVersion>,
     pub string_list: gtk::StringList,
 }
 
 #[derive(Debug)]
 pub enum QueueRowInput {
-    SetVersions(Vec<ModrinthVersion>),
+    SetVersions(Vec<BrowserVersion>),
     Select(u32),
 }
 
@@ -240,7 +402,7 @@ pub enum QueueRowOutput {
 
 #[relm4::factory(pub)]
 impl FactoryComponent for QueueRow {
-    type Init = (String, QueueItem, Vec<ModrinthVersion>);
+    type Init = (String, QueueItem, Vec<BrowserVersion>);
     type Input = QueueRowInput;
     type Output = QueueRowOutput;
     type CommandOutput = ();
@@ -346,21 +508,57 @@ impl QueueRow {
     }
 }
 
+pub struct ScreenshotCard {
+    pub texture: gdk::Texture,
+}
+
+#[relm4::factory(pub)]
+impl FactoryComponent for ScreenshotCard {
+    type Init = gdk::Texture;
+    type Input = ();
+    type Output = ();
+    type CommandOutput = ();
+    type ParentWidget = adw::Carousel;
+
+    view! {
+        #[root]
+        gtk::Picture {
+            set_paintable: Some(&self.texture),
+            set_can_shrink: true,
+            set_valign: gtk::Align::Center,
+            set_halign: gtk::Align::Center,
+            set_hexpand: true,
+            set_vexpand: true,
+            add_css_class: "screenshot-img",
+        }
+    }
+
+    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+        Self { texture: init }
+    }
+
+    fn update(&mut self, _msg: Self::Input, _sender: FactorySender<Self>) {}
+}
+
 // ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub enum BrowserInput {
-    Open(String, ModLoader),
+    Open {
+        game_version: String,
+        loader: ModLoader,
+        editor_type: EditorType,
+    },
     Close,
 
     GoBack,
     StartSearch(String),
     Search(String),
-    SearchDone(Result<ModrinthSearchResult, String>),
+    SearchDone(Result<BrowserSearchResult, String>),
     LoadMore,
-    LoadMoreDone(Result<ModrinthSearchResult, String>),
+    LoadMoreDone(Result<BrowserSearchResult, String>),
     Refresh,
 
     ClearQueue,
@@ -371,24 +569,32 @@ pub enum BrowserInput {
     ToggleQueueFromDetails,
     ShowDetails(String),
     ShowList,
-    DetailsLoaded(Result<(ModrinthProject, Vec<ModrinthVersion>), String>),
+    DetailsLoaded(Result<(BrowserProject, Vec<BrowserVersion>), String>),
 
     ToggleQueueItem(String, String),
 
     OpenProjectDetails(String),
     FetchVersions(String),
-    VersionsFetched(String, Result<Vec<ModrinthVersion>, String>),
+    VersionsFetched(String, Result<Vec<BrowserVersion>, String>),
     ApplyVersionToQueue(String, String, String, String),
     InstallProject(String, String),
     AddVersionToQueue(String, String, String, String),
     IconLoaded(String, gdk::Texture),
+    ScreenshotLoaded(String, gdk::Texture),
     RemoveQueueItem(String),
     ShowToast(String),
+
+    SetCollapsed(bool),
+    ToggleSidebar,
+    OpenUrl(String),
 }
 
 #[derive(Debug)]
 pub enum BrowserOutput {
-    InstallMods(Vec<(String, String)>),
+    InstallItems {
+        editor_type: EditorType,
+        installs: Vec<(String, String)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,10 +604,12 @@ pub enum BrowserView {
     Details,
 }
 
-pub struct ModrinthBrowser {
+pub struct UnifiedBrowser {
     visible: bool,
     game_version: String,
     loader: ModLoader,
+    editor_type: EditorType,
+    source: Arc<dyn BrowserSource + Send + Sync>,
 
     search_query: String,
     loading: bool,
@@ -412,9 +620,10 @@ pub struct ModrinthBrowser {
 
     download_queue: HashMap<String, QueueItem>,
     icon_cache: HashMap<String, gdk::Texture>,
+    screenshot_cache: HashMap<String, gdk::Texture>,
     author_cache: HashMap<String, String>,
 
-    selected_project: Option<ModrinthProject>,
+    selected_project: Option<BrowserProject>,
     loading_details: bool,
 
     view_state: BrowserView,
@@ -423,12 +632,14 @@ pub struct ModrinthBrowser {
 
     projects: FactoryVecDeque<ProjectRow>,
     versions: FactoryVecDeque<VersionRow>,
+    screenshot_cards: FactoryVecDeque<ScreenshotCard>,
+
+    collapsed: bool,
+    show_sidebar: bool,
 }
 
-impl ModrinthBrowser {}
-
 #[relm4::component(pub)]
-impl Component for ModrinthBrowser {
+impl Component for UnifiedBrowser {
     type Init = ();
     type Input = BrowserInput;
     type Output = BrowserOutput;
@@ -436,9 +647,18 @@ impl Component for ModrinthBrowser {
 
     view! {
         adw::Dialog {
-            set_title: "Browse Mods",
+            #[watch]
+            set_title: match model.editor_type {
+                EditorType::Mods => "Browse Mods",
+                EditorType::ResourcePacks => "Browse Resource Packs",
+                EditorType::ShaderPacks => "Browse Shader Packs",
+                EditorType::Worlds => "Browse Worlds",
+                _ => "Browse Resources",
+            },
             set_content_width: 950,
             set_content_height: 700,
+            set_width_request: 360,
+            set_height_request: 320,
             set_can_close: true,
 
             #[name = "toast_overlay"]
@@ -446,24 +666,36 @@ impl Component for ModrinthBrowser {
             set_child = &adw::ToastOverlay {
                 adw::ToolbarView {
                     #[wrap(Some)]
+                    #[name = "split_view"]
                     set_content = &adw::NavigationSplitView {
                         #[watch]
-                        set_show_content: model.view_state == BrowserView::Details || model.view_state == BrowserView::Overview,
+                        set_show_content: !model.show_sidebar,
                         set_vexpand: true,
-                        set_min_sidebar_width: 350.0,
+                        set_min_sidebar_width: 260.0,
                         set_max_sidebar_width: 500.0,
+                        connect_collapsed_notify[sender] => move |split| {
+                            sender.input(BrowserInput::SetCollapsed(split.is_collapsed()));
+                        },
 
                     #[wrap(Some)]
                     set_sidebar = &adw::NavigationPage {
-                        set_title: "Modrinth Browser",
+                        set_title: "Browser",
                         #[wrap(Some)]
                         set_child = &adw::ToolbarView {
                             add_top_bar = &adw::HeaderBar {
                                 set_css_classes: &["flat"],
+                                #[wrap(Some)]
+                                set_title_widget = &adw::WindowTitle {
+                                    set_title: "Browser",
+                                    #[watch]
+                                    set_subtitle: model.source.name(),
+                                },
                                 pack_end = &gtk::Button {
                                     set_icon_name: "view-refresh-symbolic",
                                     set_tooltip_text: Some("Refresh (clear cache)"),
                                     connect_clicked => BrowserInput::Refresh,
+                                    #[watch]
+                                    set_visible: model.collapsed,
                                 },
                             },
 
@@ -473,7 +705,8 @@ impl Component for ModrinthBrowser {
 
                                 gtk::SearchEntry {
                                     set_margin_all: 8,
-                                    set_placeholder_text: Some("Search Modrinth..."),
+                                    #[watch]
+                                    set_placeholder_text: Some(&format!("Search {}...", model.source.name())),
                                     #[watch]
                                     set_text: &model.search_query,
                                     connect_activate[sender] => move |entry| {
@@ -564,257 +797,389 @@ impl Component for ModrinthBrowser {
                         #[watch]
                         set_title: match model.view_state {
                             BrowserView::Details => "Details",
-                            _ => "Modrinth Browser",
+                            _ => "Browser Overview",
                         },
                         #[wrap(Some)]
-                        set_child = &gtk::Stack {
-                            set_transition_type: gtk::StackTransitionType::SlideLeftRight,
-
-                            // --- 1. Overview Page (Icon + Title) ---
-                            add_named[Some("overview")] = &adw::NavigationPage {
-                                set_title: "Overview",
-                                #[wrap(Some)]
-                                set_child = &adw::ToolbarView {
-                                    add_top_bar = &adw::HeaderBar {
-                                        set_css_classes: &["flat"],
-                                        set_show_title: false,
+                        set_child = &adw::ToolbarView {
+                            add_top_bar = &adw::HeaderBar {
+                                set_css_classes: &["flat"],
+                                set_show_title: false,
+                                set_show_back_button: false,
+                                pack_start = &gtk::Box {
+                                    set_orientation: gtk::Orientation::Horizontal,
+                                    set_spacing: 6,
+                                    gtk::Button {
+                                        set_icon_name: "go-previous-symbolic",
+                                        set_tooltip_text: Some("Back"),
+                                        connect_clicked => BrowserInput::GoBack,
+                                        #[watch]
+                                        set_visible: model.view_state == BrowserView::Details,
                                     },
-
-                                    #[wrap(Some)]
-                                    set_content = &adw::StatusPage {
-                                        set_vexpand: true,
-                                        set_title: "Modrinth Mod Browser",
-                                        set_description: Some("Search and discover mods for your instance from Modrinth."),
-                                        set_icon_name: Some("web-browser-symbolic"),
-                                    }
-                                }
-                            },
-
-                            // --- 2. Details Page ---
-                            add_named[Some("details")] = &adw::NavigationPage {
-                                #[watch]
-                                set_title: model.selected_project.as_ref().map(|p| p.title.as_str()).unwrap_or("Details"),
-                                #[wrap(Some)]
-                                set_child = &gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-
-                                    adw::HeaderBar {
-                                        pack_start = &gtk::Button {
-                                            set_icon_name: "go-previous-symbolic",
-                                            connect_clicked => BrowserInput::GoBack,
-                                        },
-                                    },
-
-                                    gtk::ScrolledWindow {
-                                        set_vexpand: true,
-                                        set_hscrollbar_policy: gtk::PolicyType::Never,
-
-                                        gtk::Box {
-                                            set_orientation: gtk::Orientation::Vertical,
-                                            set_spacing: 24,
-                                            set_margin_all: 32,
-
-                                            adw::StatusPage {
-                                                #[watch]
-                                                set_visible: model.loading_details,
-                                                set_title: "Loading Details...",
-                                                #[wrap(Some)]
-                                                set_child = &gtk::Spinner {
-                                                    set_spinning: true,
-                                                    set_halign: gtk::Align::Center,
-                                                }
-                                            },
-
-                                            // --- Detail content ---
-                                            gtk::Box {
-                                                #[watch]
-                                                set_visible: !model.loading_details && model.selected_project.is_some(),
-                                                set_orientation: gtk::Orientation::Vertical,
-                                                set_spacing: 24,
-
-                                                // Header: icon + title + author + add-to-queue
-                                                gtk::Box {
-                                                    set_spacing: 20,
-                                                    gtk::Stack {
-                                                        set_hhomogeneous: true,
-                                                        set_vhomogeneous: true,
-
-                                                        add_named[Some("icon")] = &gtk::Image {
-                                                            #[watch]
-                                                            set_paintable: model.selected_project.as_ref().and_then(|p| p.icon_url.as_ref()).and_then(|url| model.icon_cache.get(url)).map(|t| t as &gdk::Texture),
-                                                            set_pixel_size: 96,
-                                                            set_css_classes: &["icon-dropshadow"],
-                                                        },
-
-                                                        add_named[Some("fallback")] = &gtk::Image {
-                                                            set_icon_name: Some("package-x-generic-symbolic"),
-                                                            set_pixel_size: 96,
-                                                            set_css_classes: &["icon-dropshadow"],
-                                                        },
-
-                                                        // Must come after add_named so children exist on first render
-                                                        #[watch]
-                                                        set_visible_child_name: if model.selected_project.as_ref().and_then(|p| p.icon_url.as_ref()).and_then(|url| model.icon_cache.get(url)).is_some() { "icon" } else { "fallback" },
-                                                    },
-                                                    gtk::Box {
-                                                        set_orientation: gtk::Orientation::Vertical,
-                                                        set_valign: gtk::Align::Center,
-                                                        set_spacing: 4,
-                                                        gtk::Label {
-                                                            #[watch]
-                                                            set_label: &escape(model.selected_project.as_ref().map(|p| p.title.as_str()).unwrap_or("")),
-                                                            set_css_classes: &["title-1"],
-                                                            set_halign: gtk::Align::Start,
-                                                            set_use_markup: true,
-                                                        },
-                                                        gtk::Label {
-                                                            #[watch]
-                                                            set_label: &{
-                                                                let pid = model.selected_project.as_ref().map(|p| p.project_id.as_str()).unwrap_or("");
-                                                                let author = model.selected_project.as_ref()
-                                                                    .and_then(|p| p.author.as_deref())
-                                                                    .or_else(|| model.author_cache.get(pid).map(|s| s.as_str()))
-                                                                    .unwrap_or("Unknown author");
-                                                                format!("by {}", escape(author))
-                                                            },
-                                                            set_css_classes: &["dim-label"],
-                                                            set_halign: gtk::Align::Start,
-                                                            set_use_markup: true,
-                                                        }
-                                                    },
-                                                    gtk::Box { set_hexpand: true },
-
-                                                    gtk::Button {
-                                                        #[watch]
-                                                        set_label: if model.selected_project.as_ref().map(|p| model.download_queue.contains_key(&p.project_id)).unwrap_or(false) { "Remove from Queue" } else { "Add to Queue" },
-                                                        #[watch]
-                                                        set_icon_name: if model.selected_project.as_ref().map(|p| model.download_queue.contains_key(&p.project_id)).unwrap_or(false) { "list-remove-symbolic" } else { "list-add-symbolic" },
-                                                        set_valign: gtk::Align::Center,
-                                                        set_css_classes: &["pill"],
-                                                        connect_clicked => BrowserInput::ToggleQueueFromDetails,
-                                                    }
-                                                },
-
-                                                // Stats pills row
-                                                gtk::Box {
-                                                    set_spacing: 8,
-                                                    set_halign: gtk::Align::Start,
-
-                                                    gtk::Label {
-                                                        #[watch]
-                                                        set_label: &format!("⬇ {}", format_downloads(model.selected_project.as_ref().map(|p| p.downloads).unwrap_or(0))),
-                                                        set_css_classes: &["pill-badge"],
-                                                    },
-                                                    gtk::Label {
-                                                        #[watch]
-                                                        set_label: &format!("♥ {}", format_downloads(model.selected_project.as_ref().map(|p| p.follows).unwrap_or(0))),
-                                                        set_css_classes: &["pill-badge"],
-                                                    },
-                                                },
-
-                                                // Description
-                                                adw::PreferencesGroup {
-                                                    set_title: "Description",
-                                                    gtk::ScrolledWindow {
-                                                        set_hscrollbar_policy: gtk::PolicyType::Never,
-                                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
-                                                        set_min_content_height: 100,
-                                                        set_max_content_height: 250,
-                                                        set_propagate_natural_height: true,
-                                                        set_hexpand: true,
-                                                        set_halign: gtk::Align::Fill,
-
-                                                        gtk::Label {
-                                                            #[watch]
-                                                            set_label: &escape(model.selected_project.as_ref().map(|p| p.description.as_str()).unwrap_or("")),
-                                                            set_wrap: true,
-                                                            set_halign: gtk::Align::Fill,
-                                                            set_valign: gtk::Align::Fill,
-                                                            set_hexpand: true,
-                                                            set_xalign: 0.0,
-                                                            set_yalign: 0.0,
-                                                            set_margin_all: 12,
-                                                            set_use_markup: true,
-                                                        },
-                                                    }
-                                                },
-
-                                                // Links section
-                                                adw::PreferencesGroup {
-                                                    set_title: "Links",
-                                                    #[watch]
-                                                    set_visible: model.selected_project.as_ref().map(|p| {
-                                                        p.source_url.is_some() || p.wiki_url.is_some() || p.discord_url.is_some()
-                                                    }).unwrap_or(false),
-
-                                                    adw::ActionRow {
-                                                        set_title: "Source Code",
-                                                        add_prefix = &gtk::Image { set_icon_name: Some("text-editor-symbolic"), set_pixel_size: 16 },
-                                                        #[watch]
-                                                        set_visible: model.selected_project.as_ref().and_then(|p| p.source_url.as_ref()).is_some(),
-                                                        #[watch]
-                                                        set_subtitle: &escape(model.selected_project.as_ref().and_then(|p| p.source_url.as_deref()).unwrap_or("")),
-                                                        set_activatable: true,
-                                                    },
-                                                    adw::ActionRow {
-                                                        set_title: "Wiki / Docs",
-                                                        add_prefix = &gtk::Image { set_icon_name: Some("accessories-dictionary-symbolic"), set_pixel_size: 16 },
-                                                        #[watch]
-                                                        set_visible: model.selected_project.as_ref().and_then(|p| p.wiki_url.as_ref()).is_some(),
-                                                        #[watch]
-                                                        set_subtitle: &escape(model.selected_project.as_ref().and_then(|p| p.wiki_url.as_deref()).unwrap_or("")),
-                                                        set_activatable: true,
-                                                    },
-                                                    adw::ActionRow {
-                                                        set_title: "Discord",
-                                                        add_prefix = &gtk::Image { set_icon_name: Some("chat-message-new-symbolic"), set_pixel_size: 16 },
-                                                        #[watch]
-                                                        set_visible: model.selected_project.as_ref().and_then(|p| p.discord_url.as_ref()).is_some(),
-                                                        #[watch]
-                                                        set_subtitle: &escape(model.selected_project.as_ref().and_then(|p| p.discord_url.as_deref()).unwrap_or("")),
-                                                        set_activatable: true,
-                                                    },
-                                                },
-
-                                                // Versions
-                                                adw::PreferencesGroup {
-                                                    set_title: "Available Versions",
-                                                    #[local_ref]
-                                                    versions_list -> gtk::ListBox {
-                                                        set_selection_mode: gtk::SelectionMode::None,
-                                                        set_css_classes: &["boxed-list"],
-                                                    }
-                                                },
-
-                                                // License footer (centered)
-                                                gtk::Label {
-                                                    #[watch]
-                                                    set_label: &{
-                                                        model.selected_project.as_ref()
-                                                            .and_then(|p| p.license_name())
-                                                            .map(|l| format!("Licensed under {}", l))
-                                                            .unwrap_or_default()
-                                                    },
-                                                    #[watch]
-                                                    set_visible: model.selected_project.as_ref().and_then(|p| p.license_name()).is_some(),
-                                                    set_halign: gtk::Align::Center,
-                                                    set_css_classes: &["dim-label", "caption"],
-                                                    set_margin_top: 8,
-                                                    set_margin_bottom: 16,
-                                                },
-                                            },
-                                        },
-                                    }
+                                },
+                                pack_end = &gtk::Button {
+                                    set_icon_name: "view-refresh-symbolic",
+                                    set_tooltip_text: Some("Refresh (clear cache)"),
+                                    connect_clicked => BrowserInput::Refresh,
                                 },
                             },
+                            #[wrap(Some)]
+                            set_content = &gtk::Stack {
+                                set_transition_type: gtk::StackTransitionType::SlideLeftRight,
+                                // --- 1. Overview Page ---
+                                add_named[Some("overview")] = &adw::NavigationPage {
+                                    set_title: "Overview",
+                                    #[wrap(Some)]
+                                    set_child = &adw::ToolbarView {
 
-                            #[watch]
-                            set_visible_child_name: match model.view_state {
-                                BrowserView::Details => "details",
-                                _ => "overview",
-                            },
+                                        #[wrap(Some)]
+                                        set_content = &gtk::ScrolledWindow {
+                                            set_hscrollbar_policy: gtk::PolicyType::Never,
+                                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                                            adw::StatusPage {
+                                                set_vexpand: true,
+                                                #[watch]
+                                                set_title: match model.editor_type {
+                                                    EditorType::Mods => "Mod Browser",
+                                                    EditorType::ResourcePacks => "Resource Pack Browser",
+                                                    EditorType::ShaderPacks => "Shader Pack Browser",
+                                                    EditorType::Worlds => "World Browser",
+                                                    _ => "Resource Browser",
+                                                },
+                                                #[watch]
+                                                set_description: Some(&format!("Search and discover content for your instance from {}.", model.source.name())),
+                                                set_icon_name: Some("web-browser-symbolic"),
+                                            }
+                                        }
+                                    }
+                                },
+
+                                // --- 2. Details Page ---
+                                add_named[Some("details")] = &adw::NavigationPage {
+                                    #[watch]
+                                    set_title: model.selected_project.as_ref().map(|p| p.title.as_str()).unwrap_or("Details"),
+                                    #[wrap(Some)]
+                                    set_child = &gtk::Box {
+                                        set_orientation: gtk::Orientation::Vertical,
+
+                                        gtk::ScrolledWindow {
+                                            set_vexpand: true,
+                                            set_hscrollbar_policy: gtk::PolicyType::Never,
+
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_spacing: 24,
+                                                set_margin_all: 20,
+
+                                                adw::StatusPage {
+                                                    #[watch]
+                                                    set_visible: model.loading_details,
+                                                    set_title: "Loading Details...",
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Spinner {
+                                                        set_spinning: true,
+                                                        set_halign: gtk::Align::Center,
+                                                    }
+                                                },
+
+                                                // --- Detail content ---
+                                                gtk::Box {
+                                                    #[watch]
+                                                    set_visible: !model.loading_details && model.selected_project.is_some(),
+                                                    set_orientation: gtk::Orientation::Vertical,
+                                                    set_spacing: 24,
+
+                                                    // Header: icon + title + author + add-to-queue
+                                                    gtk::Box {
+                                                        set_spacing: 20,
+                                                        gtk::Stack {
+                                                            set_hhomogeneous: true,
+                                                            set_vhomogeneous: true,
+
+                                                            add_named[Some("icon")] = &gtk::Image {
+                                                                #[watch]
+                                                                set_paintable: model.selected_project.as_ref().and_then(|p| p.icon_url.as_ref()).and_then(|url| model.icon_cache.get(url)).map(|t| t as &gdk::Texture),
+                                                                set_pixel_size: 96,
+                                                                set_css_classes: &["icon-dropshadow"],
+                                                            },
+
+                                                            add_named[Some("fallback")] = &gtk::Image {
+                                                                set_icon_name: Some("package-x-generic-symbolic"),
+                                                                set_pixel_size: 96,
+                                                                set_css_classes: &["icon-dropshadow"],
+                                                            },
+
+                                                            // Must come after add_named so children exist on first render
+                                                            #[watch]
+                                                            set_visible_child_name: if model.selected_project.as_ref().and_then(|p| p.icon_url.as_ref()).and_then(|url| model.icon_cache.get(url)).is_some() { "icon" } else { "fallback" },
+                                                        },
+                                                        gtk::Box {
+                                                            set_orientation: gtk::Orientation::Vertical,
+                                                            set_valign: gtk::Align::Center,
+                                                            set_spacing: 4,
+                                                            set_hexpand: true,
+                                                            gtk::Label {
+                                                                #[watch]
+                                                                set_label: &escape(model.selected_project.as_ref().map(|p| p.title.as_str()).unwrap_or("")),
+                                                                set_css_classes: &["title-1"],
+                                                                set_halign: gtk::Align::Start,
+                                                                set_use_markup: true,
+                                                                set_wrap: true,
+                                                                set_wrap_mode: gtk::pango::WrapMode::WordChar,
+                                                            },
+                                                            gtk::Label {
+                                                                #[watch]
+                                                                set_label: &{
+                                                                    let pid = model.selected_project.as_ref().map(|p| p.project_id.as_str()).unwrap_or("");
+                                                                    let author = model.selected_project.as_ref()
+                                                                        .and_then(|p| p.author.as_deref())
+                                                                        .or_else(|| model.author_cache.get(pid).map(|s| s.as_str()))
+                                                                        .unwrap_or("Unknown author");
+                                                                    format!("by {}", escape(author))
+                                                                },
+                                                                set_css_classes: &["dim-label"],
+                                                                set_halign: gtk::Align::Start,
+                                                                set_use_markup: true,
+                                                                set_wrap: true,
+                                                                set_wrap_mode: gtk::pango::WrapMode::WordChar,
+                                                            }
+                                                        },
+
+                                                        gtk::Button {
+                                                            #[watch]
+                                                            set_icon_name: if model.selected_project.as_ref().map(|p| model.download_queue.contains_key(&p.project_id)).unwrap_or(false) { "list-remove-symbolic" } else { "list-add-symbolic" },
+                                                            #[watch]
+                                                            set_tooltip_text: Some(if model.selected_project.as_ref().map(|p| model.download_queue.contains_key(&p.project_id)).unwrap_or(false) { "Remove from Queue" } else { "Add to Queue" }),
+                                                            set_valign: gtk::Align::Center,
+                                                            set_css_classes: &["pill"],
+                                                            connect_clicked => BrowserInput::ToggleQueueFromDetails,
+                                                        }
+                                                    },
+
+                                                    // Stats pills row
+                                                    gtk::Box {
+                                                        set_spacing: 8,
+                                                        set_halign: gtk::Align::Start,
+
+                                                        gtk::Label {
+                                                            #[watch]
+                                                            set_label: &format!("⬇ {}", format_downloads(model.selected_project.as_ref().map(|p| p.downloads).unwrap_or(0))),
+                                                            set_css_classes: &["pill-badge"],
+                                                        },
+                                                        gtk::Label {
+                                                            #[watch]
+                                                            set_label: &format!("♥ {}", format_downloads(model.selected_project.as_ref().map(|p| p.follows).unwrap_or(0))),
+                                                            set_css_classes: &["pill-badge"],
+                                                        },
+                                                    },
+
+                                                    // Screenshot Gallery Carousel
+                                                    gtk::Box {
+                                                        set_orientation: gtk::Orientation::Vertical,
+                                                        set_spacing: 6,
+                                                        #[watch]
+                                                        set_visible: !model.screenshot_cards.is_empty(),
+
+                                                        gtk::Overlay {
+                                                            #[local_ref]
+                                                            screenshot_carousel -> adw::Carousel {
+                                                                set_height_request: 240,
+                                                                set_hexpand: true,
+                                                                set_allow_scroll_wheel: false,
+                                                            },
+
+                                                            add_overlay = &gtk::Button {
+                                                                set_css_classes: &["circular", "flat", "carousel-nav-btn"],
+                                                                set_halign: gtk::Align::Start,
+                                                                set_valign: gtk::Align::Center,
+                                                                set_margin_start: 8,
+
+                                                                gtk::Image {
+                                                                    set_icon_name: Some("go-previous-symbolic"),
+                                                                    set_pixel_size: 16,
+                                                                },
+                                                                connect_clicked[screenshot_carousel] => move |_| {
+                                                                    let page = screenshot_carousel.position().round() as u32;
+                                                                    if page > 0 {
+                                                                        let widget = screenshot_carousel.nth_page(page - 1);
+                                                                        screenshot_carousel.scroll_to(&widget, true);
+                                                                    }
+                                                                }
+                                                            },
+
+                                                            add_overlay = &gtk::Button {
+                                                                set_css_classes: &["circular", "flat", "carousel-nav-btn"],
+                                                                set_halign: gtk::Align::End,
+                                                                set_valign: gtk::Align::Center,
+                                                                set_margin_end: 8,
+
+                                                                gtk::Image {
+                                                                    set_icon_name: Some("go-next-symbolic"),
+                                                                    set_pixel_size: 16,
+                                                                },
+                                                                connect_clicked[screenshot_carousel] => move |_| {
+                                                                    let page = screenshot_carousel.position().round() as u32;
+                                                                    let n_pages = screenshot_carousel.n_pages();
+                                                                    if page + 1 < n_pages {
+                                                                        let widget = screenshot_carousel.nth_page(page + 1);
+                                                                        screenshot_carousel.scroll_to(&widget, true);
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+
+                                                        adw::CarouselIndicatorDots {
+                                                            set_carousel: Some(&screenshot_carousel),
+                                                            set_halign: gtk::Align::Center,
+                                                        }
+                                                    },
+
+                                                    // Description
+                                                    adw::PreferencesGroup {
+                                                        set_title: "Description",
+                                                        gtk::ScrolledWindow {
+                                                            set_hscrollbar_policy: gtk::PolicyType::Never,
+                                                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                                                            set_min_content_height: 100,
+                                                            set_max_content_height: 250,
+                                                            set_propagate_natural_height: true,
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Fill,
+
+                                                            gtk::Label {
+                                                                #[watch]
+                                                                set_label: &escape(model.selected_project.as_ref().map(|p| p.description.as_str()).unwrap_or("")),
+                                                                set_wrap: true,
+                                                                set_halign: gtk::Align::Fill,
+                                                                set_valign: gtk::Align::Fill,
+                                                                set_hexpand: true,
+                                                                set_xalign: 0.0,
+                                                                set_yalign: 0.0,
+                                                                set_margin_all: 12,
+                                                                set_use_markup: true,
+                                                            },
+                                                        }
+                                                    },
+
+                                                    // Links section
+                                                    adw::PreferencesGroup {
+                                                        set_title: "Links",
+                                                        #[watch]
+                                                        set_visible: model.selected_project.is_some(),
+
+                                                        adw::ActionRow {
+                                                            #[watch]
+                                                            set_title: &format!("{} Page", model.source.name()),
+                                                            add_prefix = &gtk::Image { set_icon_name: Some("web-browser-symbolic"), set_pixel_size: 16 },
+                                                            #[watch]
+                                                            set_subtitle: &model.selected_project.as_ref().map(|p| format!("https://modrinth.com/project/{}", p.project_id)).unwrap_or_default(),
+                                                            set_subtitle_lines: 1,
+                                                            set_activatable: true,
+                                                            connect_activated[sender] => move |row| {
+                                                                if let Some(subtitle) = row.subtitle() {
+                                                                    let url = subtitle.to_string();
+                                                                    if !url.is_empty() {
+                                                                        sender.input(BrowserInput::OpenUrl(url));
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                        adw::ActionRow {
+                                                            set_title: "Source Code",
+                                                            add_prefix = &gtk::Image { set_icon_name: Some("text-editor-symbolic"), set_pixel_size: 16 },
+                                                            #[watch]
+                                                            set_visible: model.selected_project.as_ref().and_then(|p| p.source_url.as_ref()).is_some(),
+                                                            #[watch]
+                                                            set_subtitle: &model.selected_project.as_ref().and_then(|p| p.source_url.clone()).unwrap_or_default(),
+                                                            set_subtitle_lines: 1,
+                                                            set_activatable: true,
+                                                            connect_activated[sender] => move |row| {
+                                                                if let Some(subtitle) = row.subtitle() {
+                                                                    let url = subtitle.to_string();
+                                                                    if !url.is_empty() {
+                                                                        sender.input(BrowserInput::OpenUrl(url));
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                        adw::ActionRow {
+                                                            set_title: "Wiki / Docs",
+                                                            add_prefix = &gtk::Image { set_icon_name: Some("accessories-dictionary-symbolic"), set_pixel_size: 16 },
+                                                            #[watch]
+                                                            set_visible: model.selected_project.as_ref().and_then(|p| p.wiki_url.as_ref()).is_some(),
+                                                            #[watch]
+                                                            set_subtitle: &model.selected_project.as_ref().and_then(|p| p.wiki_url.clone()).unwrap_or_default(),
+                                                            set_subtitle_lines: 1,
+                                                            set_activatable: true,
+                                                            connect_activated[sender] => move |row| {
+                                                                if let Some(subtitle) = row.subtitle() {
+                                                                    let url = subtitle.to_string();
+                                                                    if !url.is_empty() {
+                                                                        sender.input(BrowserInput::OpenUrl(url));
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                        adw::ActionRow {
+                                                            set_title: "Discord",
+                                                            add_prefix = &gtk::Image { set_icon_name: Some("chat-message-new-symbolic"), set_pixel_size: 16 },
+                                                            #[watch]
+                                                            set_visible: model.selected_project.as_ref().and_then(|p| p.discord_url.as_ref()).is_some(),
+                                                            #[watch]
+                                                            set_subtitle: &model.selected_project.as_ref().and_then(|p| p.discord_url.clone()).unwrap_or_default(),
+                                                            set_subtitle_lines: 1,
+                                                            set_activatable: true,
+                                                            connect_activated[sender] => move |row| {
+                                                                if let Some(subtitle) = row.subtitle() {
+                                                                    let url = subtitle.to_string();
+                                                                    if !url.is_empty() {
+                                                                        sender.input(BrowserInput::OpenUrl(url));
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                    },
+
+                                                    // Versions
+                                                    adw::PreferencesGroup {
+                                                        set_title: "Available Versions",
+                                                        #[local_ref]
+                                                        versions_list -> gtk::ListBox {
+                                                            set_selection_mode: gtk::SelectionMode::None,
+                                                            set_css_classes: &["boxed-list"],
+                                                        }
+                                                    },
+
+                                                    // License footer (centered)
+                                                    gtk::Label {
+                                                        #[watch]
+                                                        set_label: &{
+                                                            model.selected_project.as_ref()
+                                                                .and_then(|p| p.license_name.clone())
+                                                                .map(|l| format!("Licensed under {}", l))
+                                                                .unwrap_or_default()
+                                                        },
+                                                        #[watch]
+                                                        set_visible: model.selected_project.as_ref().and_then(|p| p.license_name.as_ref()).is_some(),
+                                                        set_halign: gtk::Align::Center,
+                                                        set_css_classes: &["dim-label", "caption"],
+                                                        set_margin_top: 8,
+                                                        set_margin_bottom: 16,
+                                                    },
+                                                },
+                                            },
+                                        }
+                                    },
+                                },
+
+                                #[watch]
+                                set_visible_child_name: match model.view_state {
+                                    BrowserView::Details => "details",
+                                    _ => "overview",
+                                },
+                            }
                         }
-                    }
+                    },
                 },
 
                 add_bottom_bar = &gtk::Revealer {
@@ -868,6 +1233,10 @@ impl Component for ModrinthBrowser {
                 }
             });
 
+        let screenshot_cards = FactoryVecDeque::builder()
+            .launch(adw::Carousel::new())
+            .forward(sender.input_sender(), |_| BrowserInput::GoBack); // dummy
+
         let queue_dialog = QueueDialog::builder().launch(()).forward(
             sender.input_sender(),
             |output| match output {
@@ -881,10 +1250,12 @@ impl Component for ModrinthBrowser {
             },
         );
 
-        let mut model = ModrinthBrowser {
+        let mut model = UnifiedBrowser {
             visible: false,
             game_version: String::new(),
             loader: ModLoader::None,
+            editor_type: EditorType::Mods,
+            source: Arc::new(ModrinthSource),
             search_query: String::new(),
             loading: false,
             loading_more: false,
@@ -893,36 +1264,64 @@ impl Component for ModrinthBrowser {
             error: None,
             download_queue: HashMap::new(),
             icon_cache: HashMap::new(),
+            screenshot_cache: HashMap::new(),
             author_cache: HashMap::new(),
             selected_project: None,
             loading_details: false,
             view_state: BrowserView::Overview,
             projects,
             versions,
+            screenshot_cards,
             queue_dialog,
             toast_overlay: adw::ToastOverlay::new(),
+            collapsed: false,
+            show_sidebar: true,
         };
 
         let projects_list = model.projects.widget();
         let versions_list = model.versions.widget();
+        let screenshot_carousel = model.screenshot_cards.widget();
         let widgets = view_output!();
 
         model.toast_overlay = widgets.toast_overlay.clone();
+
+        let bp_condition = adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            600.0,
+            adw::LengthUnit::Sp,
+        );
+        let bp = adw::Breakpoint::new(bp_condition);
+        {
+            let split = widgets.split_view.clone();
+            bp.connect_apply(move |_| {
+                split.set_collapsed(true);
+            });
+        }
+        {
+            let split = widgets.split_view.clone();
+            bp.connect_unapply(move |_| {
+                split.set_collapsed(false);
+            });
+        }
+        root.add_breakpoint(bp);
 
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
-            BrowserInput::Open(game_version, loader) => {
+            BrowserInput::Open { game_version, loader, editor_type } => {
                 self.visible = true;
                 self.game_version = game_version;
                 self.loader = loader;
+                self.editor_type = editor_type;
                 self.view_state = BrowserView::Overview;
+                self.show_sidebar = true;
                 self.error = None;
                 self.download_queue.clear();
                 self.projects.guard().clear();
                 self.versions.guard().clear();
+                self.screenshot_cards.guard().clear();
                 self.search_query.clear();
                 self.queue_dialog.emit(QueueDialogInput::ClearCache);
 
@@ -935,14 +1334,23 @@ impl Component for ModrinthBrowser {
             }
             BrowserInput::GoBack => match self.view_state {
                 BrowserView::Details | BrowserView::Results => {
-                    self.view_state = BrowserView::Overview
+                    self.view_state = BrowserView::Overview;
+                    if self.collapsed {
+                        self.show_sidebar = true;
+                    }
                 }
                 BrowserView::Overview => {}
             },
             BrowserInput::Refresh => {
                 clear_caches();
-                if !self.search_query.is_empty() || self.view_state == BrowserView::Results {
+                if !self.search_query.is_empty() || self.view_state == BrowserView::Results || self.view_state == BrowserView::Details {
                     sender.input(BrowserInput::Search(self.search_query.clone()));
+                }
+                if self.view_state == BrowserView::Details {
+                    if let Some(project) = &self.selected_project {
+                        let id = project.project_id.clone();
+                        sender.input(BrowserInput::ShowDetails(id));
+                    }
                 }
             }
             BrowserInput::StartSearch(query) => {
@@ -959,10 +1367,12 @@ impl Component for ModrinthBrowser {
 
                 let gv = self.game_version.clone();
                 let l = self.loader.clone();
+                let et = self.editor_type.clone();
                 let s_clone = sender.input_sender().clone();
+                let source = self.source.clone();
 
                 std::thread::spawn(move || {
-                    let result = search_mods(&query, 20, 0, Some(&gv), Some(l), Some("mod"));
+                    let result = source.search(&query, 20, 0, &gv, l, &et);
                     s_clone.send(BrowserInput::SearchDone(result)).ok();
                 });
             }
@@ -1012,12 +1422,13 @@ impl Component for ModrinthBrowser {
                 let query = self.search_query.clone();
                 let gv = self.game_version.clone();
                 let l = self.loader.clone();
+                let et = self.editor_type.clone();
                 let s_clone = sender.input_sender().clone();
                 let next_offset = self.offset + 20;
+                let source = self.source.clone();
 
                 std::thread::spawn(move || {
-                    let result =
-                        search_mods(&query, 20, next_offset, Some(&gv), Some(l), Some("mod"));
+                    let result = source.search(&query, 20, next_offset, &gv, l, &et);
                     s_clone.send(BrowserInput::LoadMoreDone(result)).ok();
                 });
             }
@@ -1141,18 +1552,23 @@ impl Component for ModrinthBrowser {
             }
             BrowserInput::ShowDetails(id) => {
                 self.view_state = BrowserView::Details;
+                if self.collapsed {
+                    self.show_sidebar = false;
+                }
                 self.loading_details = true;
                 self.selected_project = None;
                 self.versions.guard().clear();
+                self.screenshot_cards.guard().clear();
 
                 let gv = self.game_version.clone();
                 let l = self.loader.clone();
                 let id_clone = id.clone();
+                let source = self.source.clone();
 
                 std::thread::spawn(move || {
                     let result = (|| {
-                        let project = get_project(&id_clone)?;
-                        let versions = get_project_versions(&id_clone, Some(&gv), Some(l))?;
+                        let project = source.get_project(&id_clone)?;
+                        let versions = source.get_project_versions(&id_clone, &gv, l)?;
                         Ok((project, versions))
                     })();
                     sender.input(BrowserInput::DetailsLoaded(result));
@@ -1167,6 +1583,15 @@ impl Component for ModrinthBrowser {
                         if row.project.icon_url.as_ref() == Some(&url) {
                             row.icon = Some(texture.clone());
                         }
+                    }
+                }
+            }
+            BrowserInput::ScreenshotLoaded(url, texture) => {
+                self.screenshot_cache.insert(url.clone(), texture.clone());
+
+                if let Some(ref project) = self.selected_project {
+                    if project.screenshots.contains(&url) {
+                        self.screenshot_cards.guard().push_back(texture);
                     }
                 }
             }
@@ -1188,6 +1613,41 @@ impl Component for ModrinthBrowser {
                         if let Some(url) = &project.icon_url {
                             if !self.icon_cache.contains_key(url) {
                                 fetch_icon(url.clone(), sender.input_sender().clone());
+                            }
+                        }
+
+                        // Load screenshots
+                        let mut scr_guard = self.screenshot_cards.guard();
+                        scr_guard.clear();
+                        for url in &project.screenshots {
+                            if let Some(tex) = self.screenshot_cache.get(url) {
+                                scr_guard.push_back(tex.clone());
+                            } else {
+                                let url_clone = url.clone();
+                                let s_input = sender.input_sender().clone();
+                                thread::spawn(move || {
+                                    use crate::backend::instance::modpack::HTTP_CLIENT;
+                                    if let Ok(res) = HTTP_CLIENT.get(&url_clone).send() {
+                                        if res.status().is_success() {
+                                            if let Ok(bytes) = res.bytes() {
+                                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                                    let width = img.width() as i32;
+                                                    let height = img.height() as i32;
+                                                    let gbytes = glib::Bytes::from(&img.to_rgba8().into_raw());
+                                                    let texture = gdk::MemoryTexture::new(
+                                                        width,
+                                                        height,
+                                                        gdk::MemoryFormat::R8g8b8a8,
+                                                        &gbytes,
+                                                        (width * 4) as usize,
+                                                    );
+                                                    let texture: gdk::Texture = texture.upcast();
+                                                    s_input.send(BrowserInput::ScreenshotLoaded(url_clone, texture)).ok();
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
                             }
                         }
 
@@ -1256,7 +1716,10 @@ impl Component for ModrinthBrowser {
                 for (id, item) in &self.download_queue {
                     installs.push((id.clone(), item.version_id.clone().unwrap_or_default()));
                 }
-                sender.output(BrowserOutput::InstallMods(installs)).ok();
+                sender.output(BrowserOutput::InstallItems {
+                    editor_type: self.editor_type.clone(),
+                    installs,
+                }).ok();
                 self.visible = false;
                 self.queue_dialog.emit(QueueDialogInput::Close);
                 sender.input(BrowserInput::ClearQueue);
@@ -1264,7 +1727,10 @@ impl Component for ModrinthBrowser {
             }
             BrowserInput::InstallProject(pid, vid) => {
                 sender
-                    .output(BrowserOutput::InstallMods(vec![(pid, vid)]))
+                    .output(BrowserOutput::InstallItems {
+                        editor_type: self.editor_type.clone(),
+                        installs: vec![(pid, vid)],
+                    })
                     .ok();
                 self.visible = false;
                 root.close();
@@ -1274,9 +1740,10 @@ impl Component for ModrinthBrowser {
                 let l = self.loader.clone();
                 let s_clone = sender.input_sender().clone();
                 let id_clone = id.clone();
+                let source = self.source.clone();
 
                 std::thread::spawn(move || {
-                    let result = get_project_versions(&id_clone, Some(&gv), Some(l));
+                    let result = source.get_project_versions(&id_clone, &gv, l);
                     s_clone
                         .send(BrowserInput::VersionsFetched(id_clone, result))
                         .ok();
@@ -1299,16 +1766,37 @@ impl Component for ModrinthBrowser {
                         item.version_name = Some(vname);
                         item.filename = Some(fname);
                     }
-                    // We don't call Open here anymore to avoid redundant list rebuilding and churn.
-                    // The dialog will update the row in-place if it's already open.
                 }
             }
             BrowserInput::ShowToast(msg) => {
                 self.toast_overlay.add_toast(adw::Toast::new(&msg));
             }
+            BrowserInput::SetCollapsed(collapsed) => {
+                self.collapsed = collapsed;
+                if collapsed {
+                    if self.view_state == BrowserView::Details {
+                        self.show_sidebar = false;
+                    } else {
+                        self.show_sidebar = true;
+                    }
+                } else {
+                    self.show_sidebar = true;
+                }
+            }
+            BrowserInput::ToggleSidebar => {
+                if self.collapsed {
+                    self.show_sidebar = true;
+                } else {
+                    self.show_sidebar = !self.show_sidebar;
+                }
+            }
+            BrowserInput::OpenUrl(url) => {
+                crate::frontend::utils::open_url(&url);
+            }
         }
     }
 }
+
 // ---------------------------------------------------------------------------
 // Queue Dialog component
 // ---------------------------------------------------------------------------
@@ -1322,7 +1810,7 @@ pub enum QueueDialogInput {
     ClearCache,
     Install,
     Close,
-    SetVersions(String, Vec<ModrinthVersion>),
+    SetVersions(String, Vec<BrowserVersion>),
     SelectVersion(String, String, String, String),
     FetchVersions(String),
 }
@@ -1340,7 +1828,7 @@ pub struct QueueDialog {
     visible: bool,
     search_query: String,
     all_items: HashMap<String, QueueItem>,
-    version_cache: HashMap<String, Vec<ModrinthVersion>>,
+    version_cache: HashMap<String, Vec<BrowserVersion>>,
     queue_rows: FactoryVecDeque<QueueRow>,
 }
 
@@ -1567,7 +2055,7 @@ fn fetch_icon(url: String, sender: relm4::Sender<BrowserInput>) {
         match client.get(&url).send() {
             Ok(response) => {
                 if !response.status().is_success() {
-                    eprintln!("[modrinth-icon] HTTP {} for {}", response.status(), url);
+                    eprintln!("[browser-icon] HTTP {} for {}", response.status(), url);
                     return;
                 }
                 match response.bytes() {
@@ -1579,19 +2067,19 @@ fn fetch_icon(url: String, sender: relm4::Sender<BrowserInput>) {
                             }
                             Err(e) => {
                                 eprintln!(
-                                    "[modrinth-icon] Texture decode error for {}: {}",
+                                    "[browser-icon] Texture decode error for {}: {}",
                                     url, e
                                 );
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("[modrinth-icon] Body read error for {}: {}", url, e);
+                        eprintln!("[browser-icon] Body read error for {}: {}", url, e);
                     }
                 }
             }
             Err(e) => {
-                eprintln!("[modrinth-icon] Request error for {}: {}", url, e);
+                eprintln!("[browser-icon] Request error for {}: {}", url, e);
             }
         }
     });

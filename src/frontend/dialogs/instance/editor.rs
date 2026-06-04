@@ -77,9 +77,12 @@ pub enum EditorInput {
     RenameWorld(usize, String),
     MoveItemRequest(usize),
     CopyItemRequest(usize),
+    SetCollapsed(bool),
+    GoBack,
     MoveSelectedRequest,
     CopySelectedRequest,
     ShowContextMenu(usize, f64, f64),
+    OpenUrl(String),
 }
 
 #[derive(Debug)]
@@ -138,6 +141,8 @@ pub struct InstanceEditorDialog {
 
     context_menu: gtk::Popover,
     toast_overlay: adw::ToastOverlay,
+    split_view: adw::NavigationSplitView,
+    collapsed: bool,
 }
 
 impl InstanceEditorDialog {
@@ -195,8 +200,6 @@ impl InstanceEditorDialog {
     /// Update the detail panel to show the currently focused item.
     fn update_detail_panel(&self) {
         if let Some(item) = self.focused_item() {
-            self.detail_placeholder.set_visible(false);
-            self.detail_box.set_visible(true);
 
             // Icon — use cached texture if available
             if let Some(icon_path) = &item.icon_path {
@@ -299,8 +302,9 @@ impl InstanceEditorDialog {
                 self.detail_toggle_enabled_btn.set_visible(false);
             }
         } else {
-            self.detail_placeholder.set_visible(true);
-            self.detail_box.set_visible(false);
+            if self.collapsed {
+                self.split_view.set_show_content(false);
+            }
         }
     }
 
@@ -601,6 +605,8 @@ impl SimpleComponent for InstanceEditorDialog {
             set_title: &model.title,
             set_content_width: 850,
             set_content_height: 550,
+            set_width_request: 360,
+            set_height_request: 320,
             set_can_close: true,
 
             #[name = "toast_overlay"]
@@ -608,148 +614,18 @@ impl SimpleComponent for InstanceEditorDialog {
             set_child = &adw::ToastOverlay {
                 adw::ToolbarView {
                     #[wrap(Some)]
-                    set_content = &gtk::Overlay {
+                    #[name = "split_view"]
+                    set_content = &adw::NavigationSplitView {
                         set_vexpand: true,
-
-                        #[wrap(Some)]
-                        set_child = &adw::NavigationSplitView {
-                            set_vexpand: true,
-                            set_sidebar_position: gtk::PackType::Start,
                         set_min_sidebar_width: 280.0,
                         set_max_sidebar_width: 400.0,
+                            connect_collapsed_notify[sender] => move |split| {
+                                sender.input(EditorInput::SetCollapsed(split.is_collapsed()));
+                            },
 
-                        // Sidebar: detail panel
+                        // Sidebar: item list (page 1 when collapsed)
                         #[wrap(Some)]
                         set_sidebar = &adw::NavigationPage {
-                            set_title: "Details",
-
-                            #[wrap(Some)]
-                            set_child = &adw::ToolbarView {
-                                add_top_bar = &adw::HeaderBar {
-                                },
-
-                                #[wrap(Some)]
-                                set_content = &gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-
-                                    // No selection placeholder
-                                    #[local_ref]
-                                    detail_placeholder_ref -> adw::StatusPage {
-                                        set_visible: true,
-                                        set_vexpand: true,
-                                        set_icon_name: Some("find-location-symbolic"),
-                                        set_title: "Select an Item",
-                                        set_description: Some("Click an item to view its details."),
-                                    },
-
-                                    // Detail view (imperatively updated)
-                                    #[local_ref]
-                                    detail_box_ref -> gtk::Box {
-                                        set_orientation: gtk::Orientation::Vertical,
-                                        set_visible: false,
-                                        set_margin_all: 24,
-                                        set_spacing: 16,
-                                        set_vexpand: true,
-
-                                        // Icon + title centered
-                                        gtk::Box {
-                                            set_orientation: gtk::Orientation::Vertical,
-                                            set_spacing: 8,
-                                            set_halign: gtk::Align::Center,
-                                            set_margin_top: 16,
-
-                                            #[local_ref]
-                                            detail_icon_ref -> gtk::Image {
-                                                set_pixel_size: 64,
-                                                set_css_classes: &["dim-label"],
-                                            },
-
-                                            #[local_ref]
-                                            detail_name_ref -> gtk::Label {
-                                                set_css_classes: &["title-3"],
-                                                set_wrap: true,
-                                                set_wrap_mode: gtk::pango::WrapMode::WordChar,
-                                                set_justify: gtk::Justification::Center,
-                                                set_max_width_chars: 30,
-                                            },
-                                        },
-
-                                        // Info rows
-                                        adw::PreferencesGroup {
-                                            #[local_ref]
-                                            detail_version_row_ref -> adw::ActionRow {
-                                                set_title: "Version",
-                                            },
-
-                                            #[local_ref]
-                                            detail_filename_row_ref -> adw::ActionRow {
-                                                set_title: "Filename",
-                                            },
-
-                                            #[local_ref]
-                                            detail_homepage_row_ref -> adw::ActionRow {
-                                                set_title: "Homepage",
-                                            },
-
-                                            #[local_ref]
-                                            detail_size_row_ref -> adw::ActionRow {
-                                                set_title: "Size",
-                                            },
-
-                                            #[local_ref]
-                                            detail_seed_row_ref -> adw::ActionRow {
-                                                set_title: "Seed",
-                                            },
-
-                                            #[local_ref]
-                                            detail_last_played_row_ref -> adw::ActionRow {
-                                                set_title: "Last Played",
-                                            },
-                                        },
-
-                                        // Description
-                                        #[local_ref]
-                                        detail_description_ref -> gtk::Label {
-                                            set_visible: false,
-                                            set_wrap: true,
-                                            set_halign: gtk::Align::Start,
-                                            set_css_classes: &["dim-label", "body"],
-                                            set_margin_top: 4,
-                                        },
-
-                                        gtk::Box { set_vexpand: true },
-
-                                        gtk::Box {
-                                            set_orientation: gtk::Orientation::Horizontal,
-                                            set_spacing: 8,
-                                            set_halign: gtk::Align::Center,
-                                            set_margin_bottom: 12,
-
-                                            #[local_ref]
-                                            detail_toggle_enabled_btn_ref -> gtk::Button {
-                                                set_label: "Disable",
-                                                set_icon_name: "list-remove-symbolic",
-                                                set_css_classes: &["pill"],
-                                                set_visible: false,
-                                                connect_clicked => EditorInput::ToggleFocusedModEnabled,
-                                            },
-
-                                            #[local_ref]
-                                            detail_remove_btn_ref -> gtk::Button {
-                                                set_label: "Remove",
-                                                set_css_classes: &["destructive-action", "pill"],
-                                                set_visible: false,
-                                                connect_clicked => EditorInput::RemoveRequest(None),
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-
-                        // Content: item list
-                        #[wrap(Some)]
-                        set_content = &adw::NavigationPage {
                             set_title: "Items",
 
                             #[wrap(Some)]
@@ -778,11 +654,11 @@ impl SimpleComponent for InstanceEditorDialog {
                                         set_spacing: 4,
                                         set_orientation: gtk::Orientation::Horizontal,
                                         gtk::Button {
-                                        set_icon_name: "list-add-symbolic",
-                                        set_tooltip_text: Some("Add..."),
-                                        #[watch]
-                                        set_visible: !matches!(model.editor_type, EditorType::Components),
-                                        connect_clicked => EditorInput::AddItemsRequest,
+                                            set_icon_name: "list-add-symbolic",
+                                            set_tooltip_text: Some("Add..."),
+                                            #[watch]
+                                            set_visible: !matches!(model.editor_type, EditorType::Components),
+                                            connect_clicked => EditorInput::AddItemsRequest,
                                         },
                                         gtk::Button {
                                             set_icon_name: "folder-open-symbolic",
@@ -807,69 +683,248 @@ impl SimpleComponent for InstanceEditorDialog {
                                         },
                                     },
 
-                                    // Empty state
-                                    adw::StatusPage {
+                                    gtk::ScrolledWindow {
                                         #[watch]
                                         set_visible: model.items.is_empty(),
                                         set_vexpand: true,
-                                        #[watch]
-                                        set_icon_name: Some(model.type_icon()),
-                                        #[watch]
-                                        set_title: match model.editor_type {
-                                            EditorType::Mods => "No Mods",
-                                            EditorType::Components => "No Components",
-                                            EditorType::ResourcePacks => "No Resource Packs",
-                                            EditorType::ShaderPacks => "No Shader Packs",
-                                            EditorType::Worlds => "No Worlds",
+                                        set_hscrollbar_policy: gtk::PolicyType::Never,
+                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                                        adw::StatusPage {
+                                            set_vexpand: true,
+                                            #[watch]
+                                            set_icon_name: Some(model.type_icon()),
+                                            #[watch]
+                                            set_title: match model.editor_type {
+                                                EditorType::Mods => "No Mods",
+                                                EditorType::Components => "No Components",
+                                                EditorType::ResourcePacks => "No Resource Packs",
+                                                EditorType::ShaderPacks => "No Shader Packs",
+                                                EditorType::Worlds => "No Worlds",
+                                            },
+                                            #[watch]
+                                            set_description: Some(match model.editor_type {
+                                                EditorType::Components => "This instance has no extra components.",
+                                                _ => "Drag &amp; drop files here or click + to add.",
+                                            }),
                                         },
-                                        #[watch]
-                                        set_description: Some(match model.editor_type {
-                                            EditorType::Components => "This instance has no extra components.",
-                                            _ => "Drag &amp; drop files here or click + to add.",
-                                        }),
                                     },
 
-                                #[local_ref]
-                                sidebar_scroll_ref -> gtk::ScrolledWindow {
-                                    set_vexpand: true,
-                                    #[watch]
-                                    set_visible: !model.items.is_empty(),
-                                    set_hscrollbar_policy: gtk::PolicyType::Never,
-
-                                    #[local_ref]
-                                    list_box_ref -> gtk::ListBox {
+                                    gtk::Overlay {
+                                        set_vexpand: true,
                                         #[watch]
-                                        set_selection_mode: gtk::SelectionMode::Single,
-                                        set_css_classes: &["navigation-sidebar"],
-                                        set_margin_start: 6,
-                                        set_margin_end: 6,
-                                        set_margin_bottom: 6,
-                                    }
+                                        set_visible: !model.items.is_empty(),
+
+                                        #[wrap(Some)]
+                                        #[local_ref]
+                                        set_child = sidebar_scroll_ref -> gtk::ScrolledWindow {
+                                            set_vexpand: true,
+                                            set_hscrollbar_policy: gtk::PolicyType::Never,
+
+                                            #[local_ref]
+                                            list_box_ref -> gtk::ListBox {
+                                                #[watch]
+                                                set_selection_mode: gtk::SelectionMode::Single,
+                                                set_css_classes: &["navigation-sidebar"],
+                                                set_margin_start: 6,
+                                                set_margin_end: 6,
+                                                set_margin_bottom: 6,
+                                            }
+                                        },
+
+                                        add_overlay = &gtk::Box {
+                                            set_halign: gtk::Align::End,
+                                            set_valign: gtk::Align::End,
+                                            set_margin_bottom: 8,
+                                            set_margin_end: 8,
+                                            set_css_classes: &["floating-bar"],
+                                            #[watch]
+                                            set_visible: model.checked_count() > 0,
+
+                                            gtk::Label {
+                                                #[watch]
+                                                set_label: &model.selection_status_text(),
+                                            }
+                                        }
+                                    },
                                 },
                             },
                         },
-                    },
-                },
 
-                    // Nautilus-style Floating OSD bubble in the bottom right corner of the split view
-                    add_overlay = &gtk::Box {
-                        set_halign: gtk::Align::End,
-                        set_valign: gtk::Align::End,
-                        set_margin_bottom: 4,
-                        set_margin_end: 4,
-                        set_css_classes: &["floating-bar"],
-                        #[watch]
-                        set_visible: model.checked_count() > 0,
+                        // Content: detail panel (page 2 when collapsed)
+                        #[wrap(Some)]
+                        set_content = &adw::NavigationPage {
+                            set_title: "Details",
 
-                        gtk::Label {
-                            #[watch]
-                            set_label: &model.selection_status_text(),
-                        }
+                            #[wrap(Some)]
+                            set_child = &adw::ToolbarView {
+                                add_top_bar = &adw::HeaderBar {
+                                    set_show_back_button: false,
+                                    pack_start = &gtk::Button {
+                                        set_icon_name: "go-previous-symbolic",
+                                        set_tooltip_text: Some("Back"),
+                                        connect_clicked => EditorInput::GoBack,
+                                        #[watch]
+                                        set_visible: model.focused_index.is_some(),
+                                    },
+                                },
+
+                                #[wrap(Some)]
+                                set_content = &gtk::Stack {
+                                    set_transition_type: gtk::StackTransitionType::SlideLeftRight,
+
+                                    // No-selection placeholder
+                                    add_named[Some("placeholder")] = &gtk::ScrolledWindow {
+                                        set_hscrollbar_policy: gtk::PolicyType::Never,
+                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                                        #[wrap(Some)]
+                                        #[local_ref]
+                                        set_child = detail_placeholder_ref -> adw::StatusPage {
+                                            set_vexpand: true,
+                                            set_icon_name: Some("find-location-symbolic"),
+                                            set_title: "Select an Item",
+                                            set_description: Some("Click an item to view its details."),
+                                        },
+                                    },
+
+                                    // Detail view
+                                    add_named[Some("details")] = &gtk::ScrolledWindow {
+                                        set_hscrollbar_policy: gtk::PolicyType::Never,
+                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                                        #[wrap(Some)]
+                                        #[local_ref]
+                                        set_child = detail_box_ref -> gtk::Box {
+                                            set_orientation: gtk::Orientation::Vertical,
+                                            set_margin_all: 24,
+                                            set_spacing: 16,
+                                            set_vexpand: true,
+
+                                            // Icon + title centered
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_spacing: 8,
+                                                set_halign: gtk::Align::Center,
+                                                set_margin_top: 16,
+
+                                                #[local_ref]
+                                                detail_icon_ref -> gtk::Image {
+                                                    set_pixel_size: 64,
+                                                    set_css_classes: &["dim-label"],
+                                                },
+
+                                                #[local_ref]
+                                                detail_name_ref -> gtk::Label {
+                                                    set_css_classes: &["title-3"],
+                                                    set_wrap: true,
+                                                    set_wrap_mode: gtk::pango::WrapMode::WordChar,
+                                                    set_justify: gtk::Justification::Center,
+                                                    set_max_width_chars: 30,
+                                                },
+                                            },
+
+                                            // Info rows
+                                            adw::PreferencesGroup {
+                                                #[local_ref]
+                                                detail_version_row_ref -> adw::ActionRow {
+                                                    set_title: "Version",
+                                                },
+
+                                                #[local_ref]
+                                                detail_filename_row_ref -> adw::ActionRow {
+                                                    set_title: "Filename",
+                                                },
+
+                                                #[local_ref]
+                                                detail_homepage_row_ref -> adw::ActionRow {
+                                                    set_title: "Homepage",
+                                                    set_activatable: true,
+                                                    connect_activated[sender] => move |row| {
+                                                        if let Some(subtitle) = row.subtitle() {
+                                                            let url = subtitle.to_string();
+                                                            if !url.is_empty() {
+                                                                sender.input(EditorInput::OpenUrl(url));
+                                                            }
+                                                        }
+                                                    }
+                                                },
+
+                                                #[local_ref]
+                                                detail_size_row_ref -> adw::ActionRow {
+                                                    set_title: "Size",
+                                                },
+
+                                                #[local_ref]
+                                                detail_seed_row_ref -> adw::ActionRow {
+                                                    set_title: "Seed",
+                                                },
+
+                                                #[local_ref]
+                                                detail_last_played_row_ref -> adw::ActionRow {
+                                                    set_title: "Last Played",
+                                                },
+                                            },
+
+                                            // Description
+                                            gtk::ScrolledWindow {
+                                                set_hscrollbar_policy: gtk::PolicyType::Never,
+                                                set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                                                set_min_content_height: 60,
+                                                set_max_content_height: 150,
+                                                set_propagate_natural_height: true,
+                                                #[watch]
+                                                set_visible: model.focused_item().and_then(|i| i.description.as_ref()).is_some(),
+
+                                                #[wrap(Some)]
+                                                #[local_ref]
+                                                set_child = detail_description_ref -> gtk::Label {
+                                                    set_wrap: true,
+                                                    set_halign: gtk::Align::Start,
+                                                    set_valign: gtk::Align::Start,
+                                                    set_xalign: 0.0,
+                                                    set_yalign: 0.0,
+                                                    set_css_classes: &["dim-label", "body"],
+                                                },
+                                            },
+
+                                            gtk::Box { set_vexpand: true },
+
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Horizontal,
+                                                set_spacing: 8,
+                                                set_halign: gtk::Align::Center,
+                                                set_margin_bottom: 12,
+
+                                                #[local_ref]
+                                                detail_toggle_enabled_btn_ref -> gtk::Button {
+                                                    set_label: "Disable",
+                                                    set_icon_name: "list-remove-symbolic",
+                                                    set_css_classes: &["pill"],
+                                                    set_visible: false,
+                                                    connect_clicked => EditorInput::ToggleFocusedModEnabled,
+                                                },
+
+                                                #[local_ref]
+                                                detail_remove_btn_ref -> gtk::Button {
+                                                    set_label: "Remove",
+                                                    set_css_classes: &["destructive-action", "pill"],
+                                                    set_visible: false,
+                                                    connect_clicked => EditorInput::RemoveRequest(None),
+                                                },
+                                            },
+                                        },
+                                    },
+
+                                    #[watch]
+                                    set_visible_child_name: if model.focused_index.is_some() { "details" } else { "placeholder" },
+                                },
+                            },
+                        },
                     }
                 }
             }
         }
-    }
     }
 
     fn init(
@@ -924,6 +979,8 @@ impl SimpleComponent for InstanceEditorDialog {
             detail_placeholder: detail_placeholder.clone(),
             context_menu: context_menu.clone(),
             toast_overlay: adw::ToastOverlay::new(),
+            split_view: adw::NavigationSplitView::new(),
+            collapsed: false,
         };
 
         let list_box_ref = &model.list_box;
@@ -1007,12 +1064,53 @@ impl SimpleComponent for InstanceEditorDialog {
         root.add_controller(drop_target);
 
         model.toast_overlay = widgets.toast_overlay.clone();
+        model.split_view = widgets.split_view.clone();
+
+        let bp_condition = adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            760.0,
+            adw::LengthUnit::Sp,
+        );
+        let bp = adw::Breakpoint::new(bp_condition);
+        {
+            let split = model.split_view.clone();
+            bp.connect_apply(move |_| {
+                split.set_collapsed(true);
+            });
+        }
+        {
+            let split = model.split_view.clone();
+            bp.connect_unapply(move |_| {
+                split.set_collapsed(false);
+            });
+        }
+        root.add_breakpoint(bp);
 
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
+            EditorInput::SetCollapsed(b) => {
+                self.collapsed = b;
+                if b {
+                    self.split_view.set_show_content(self.focused_index.is_some());
+                } else {
+                    // When returning to wide mode, show the detail content pane
+                    self.split_view.set_show_content(true);
+                }
+            }
+            EditorInput::OpenUrl(url) => {
+                crate::frontend::utils::open_url(&url);
+            }
+            EditorInput::GoBack => {
+                self.focused_index = None;
+                self.update_detail_panel();
+                self.rebuild_list(&sender);
+                if self.collapsed {
+                    self.split_view.set_show_content(false);
+                }
+            }
             EditorInput::Open(editor_type, title, items) => {
                 self.visible = true;
                 self.editor_type = editor_type;
@@ -1134,6 +1232,11 @@ impl SimpleComponent for InstanceEditorDialog {
                 // Update details and rebuild the list to show new selection backgrounds
                 self.update_detail_panel();
                 self.rebuild_list(&sender);
+
+                // When collapsed, navigate forward to the detail page
+                if self.collapsed {
+                    self.split_view.set_show_content(true);
+                }
 
                 // Sync list view selection for keyboard/focus highlight
                 if let Some(pos) = self.visible_indices.iter().position(|&i| i == item_idx) {

@@ -17,7 +17,7 @@ use crate::frontend::dialogs::external::download::{
     DownloadDialog, DownloadDialogInput, DownloadDialogOutput, DownloadState, DownloadStatusBar,
     DownloadStatusBarInput, DownloadStatusBarOutput,
 };
-use crate::frontend::dialogs::external::modrinth::{BrowserInput, BrowserOutput, ModrinthBrowser};
+use crate::frontend::dialogs::external::browser::{BrowserInput, BrowserOutput, UnifiedBrowser};
 use crate::frontend::dialogs::instance::add::{
     AddInstanceDialog, AddInstanceInput, AddInstanceOutput,
 };
@@ -49,6 +49,7 @@ use crate::frontend::dialogs::system::setup::{SetupDialog, SetupInput, SetupOutp
 use crate::frontend::dialogs::system::shortcuts::ShortcutsDialog;
 use crate::frontend::views::account::{AccountInput, AccountView};
 use crate::frontend::views::assets::{AssetInput, AssetManagerView, AssetOutput};
+use crate::frontend::views::discover::{DiscoverOutput, DiscoverView};
 // Log levels removed as logs are filtered via search only now
 use crate::frontend::views::instance::{
     ConsoleInput, ConsoleOutput, EditorTabInput, EditorTabOutput, InstanceConsole,
@@ -90,7 +91,7 @@ pub struct AppModel {
     java_selector: Controller<JavaSelectorDialog>,
     component_editor: Controller<ComponentEditorDialog>,
     mod_loader_dialog: Controller<ModLoaderDialog>,
-    modrinth_browser: Controller<ModrinthBrowser>,
+    browser_dialog: Controller<UnifiedBrowser>,
 
     sharer_dialog: Controller<InstanceSharerDialog>,
     import_dialog: Controller<ImportDialog>,
@@ -110,6 +111,7 @@ pub struct AppModel {
     instance_settings_tab: Controller<InstanceSettingsTab>,
     account_view: Controller<AccountView>,
     asset_view: Controller<AssetManagerView>,
+    discover_view: Controller<DiscoverView>,
     settings_dialog: Controller<SettingsDialog>,
     setup_dialog: Controller<SetupDialog>,
     download_status_bar: Controller<DownloadStatusBar>,
@@ -141,7 +143,10 @@ pub struct AppModel {
     sharing_loading: bool,
     import_loading: bool,
     verifying_loading: bool,
+    installing_modpack: bool,
     active_asset_subpage: Option<String>,
+    discover_details_open: bool,
+    discover_details_title: String,
 }
 
 #[derive(Debug)]
@@ -184,7 +189,7 @@ pub enum AppMsg {
     SelectModLoaderRequest,
     ModLoaderOutput(ModLoaderDialogOutput),
     ComponentEditorOutput(ComponentEditorOutput),
-    InstallModrinthMods(Vec<(String, String)>), // (Project ID, Version ID)
+    InstallBrowserItems(EditorType, Vec<(String, String)>), // (EditorType, (Project ID, Version ID))
     ModrinthInstallResult(Result<usize, String>), // Number of mods installed or error
 
     // Instance management
@@ -203,6 +208,7 @@ pub enum AppMsg {
 
     // Sidebar / group management
     SidebarEvent(SidebarOutput),
+    DiscoverEvent(DiscoverOutput),
     OverviewEvent(OverviewOutput),
     OverviewBack,
     GoBack,
@@ -653,24 +659,27 @@ impl SimpleComponent for AppModel {
                                     },
 
                                     pack_start = &gtk::Button {
-                                         set_icon_name: "go-previous-symbolic",
-                                         #[watch]
-                                         set_tooltip_text: Some(if model.active_sidebar_page == SidebarPage::InstanceDetails {
-                                             "Back to library"
-                                         } else if model.active_sidebar_page == SidebarPage::Assets {
-                                             "Back to categories"
-                                         } else {
-                                             "Back to all instances"
-                                         }),
-                                         set_has_frame: false,
-                                         #[watch]
-                                         set_visible: (model.active_sidebar_page == SidebarPage::Library && model.current_folder.is_some())
-                                             || model.active_sidebar_page == SidebarPage::InstanceDetails
-                                             || (model.active_sidebar_page == SidebarPage::Assets && model.active_asset_subpage.is_some()),
-                                         connect_clicked[sender] => move |_| {
-                                             sender.input(AppMsg::GoBack);
-                                         },
-                                     },
+                                        set_icon_name: "go-previous-symbolic",
+                                        #[watch]
+                                        set_tooltip_text: Some(if model.active_sidebar_page == SidebarPage::InstanceDetails {
+                                            "Back to library"
+                                        } else if model.active_sidebar_page == SidebarPage::Assets {
+                                            "Back to categories"
+                                        } else if model.active_sidebar_page == SidebarPage::Discover {
+                                            "Back to browse"
+                                        } else {
+                                            "Back to all instances"
+                                        }),
+                                        set_has_frame: false,
+                                        #[watch]
+                                        set_visible: (model.active_sidebar_page == SidebarPage::Library && model.current_folder.is_some())
+                                            || model.active_sidebar_page == SidebarPage::InstanceDetails
+                                            || (model.active_sidebar_page == SidebarPage::Assets && model.active_asset_subpage.is_some())
+                                            || (model.active_sidebar_page == SidebarPage::Discover && model.discover_details_open),
+                                        connect_clicked[sender] => move |_| {
+                                            sender.input(AppMsg::GoBack);
+                                        },
+                                    },
 
                                     #[wrap(Some)]
                                     #[name = "title_widget"]
@@ -679,6 +688,20 @@ impl SimpleComponent for AppModel {
                                             set_title: "Library",
                                             #[watch]
                                             set_subtitle: model.current_folder.as_deref().unwrap_or(""),
+                                        },
+                                        add_named[Some("discover")] = &adw::WindowTitle {
+                                            #[watch]
+                                            set_title: if model.discover_details_open {
+                                                &model.discover_details_title
+                                            } else {
+                                                "Discover"
+                                            },
+                                            #[watch]
+                                            set_subtitle: if model.discover_details_open {
+                                                "Modpack Details"
+                                            } else {
+                                                ""
+                                            },
                                         },
                                         add_named[Some("accounts")] = &adw::WindowTitle {
                                             set_title: "Accounts",
@@ -710,6 +733,7 @@ impl SimpleComponent for AppModel {
                                         #[watch]
                                         set_visible_child_name: match model.active_sidebar_page {
                                             SidebarPage::Library => "library",
+                                            SidebarPage::Discover => "discover",
                                             SidebarPage::Accounts => "accounts",
                                             SidebarPage::Playtime => "playtime",
                                             SidebarPage::Assets => "assets",
@@ -1029,6 +1053,8 @@ impl SimpleComponent for AppModel {
 
                                         add_named[Some("library")] = model.overview_grid.widget(),
 
+                                        add_named[Some("discover")] = model.discover_view.widget(),
+
                                         add_named[Some("accounts")] = model.account_view.widget(),
 
                                         add_named[Some("playtime")] = model.playtime_view.widget(),
@@ -1104,6 +1130,7 @@ impl SimpleComponent for AppModel {
                                         #[watch]
                                         set_visible_child_name: match model.active_sidebar_page {
                                             SidebarPage::Library => "library",
+                                            SidebarPage::Discover => "discover",
                                             SidebarPage::Accounts => "accounts",
                                             SidebarPage::Playtime => "playtime",
                                             SidebarPage::Assets => "assets",
@@ -1225,12 +1252,17 @@ impl SimpleComponent for AppModel {
             InstanceGroups::default()
         };
 
-        let modrinth_browser =
-            ModrinthBrowser::builder()
+        let browser_dialog =
+            UnifiedBrowser::builder()
                 .launch(())
                 .forward(sender.input_sender(), |output| match output {
-                    BrowserOutput::InstallMods(installs) => AppMsg::InstallModrinthMods(installs),
+                    BrowserOutput::InstallItems { editor_type, installs } => AppMsg::InstallBrowserItems(editor_type, installs),
                 });
+
+        let discover_view =
+            DiscoverView::builder()
+                .launch(())
+                .forward(sender.input_sender(), AppMsg::DiscoverEvent);
 
         // Build sidebar and overview controllers
         let sidebar = SidebarList::builder()
@@ -1265,7 +1297,7 @@ impl SimpleComponent for AppModel {
             java_selector,
             component_editor,
             mod_loader_dialog,
-            modrinth_browser,
+            browser_dialog,
 
             sharer_dialog,
             import_dialog,
@@ -1275,6 +1307,7 @@ impl SimpleComponent for AppModel {
             instance_sidebar,
             overview_grid,
             asset_view,
+            discover_view,
             settings_dialog,
             setup_dialog,
             active_sidebar_page: SidebarPage::Library,
@@ -1332,7 +1365,10 @@ impl SimpleComponent for AppModel {
             sharing_loading: false,
             import_loading: false,
             verifying_loading: false,
+            installing_modpack: false,
             active_asset_subpage: None,
+            discover_details_open: false,
+            discover_details_title: String::new(),
         };
 
         let widgets = view_output!();
@@ -1346,12 +1382,10 @@ impl SimpleComponent for AppModel {
             .sync_create()
             .build();
 
-        // Single breakpoint at 700sp: collapses sidebar and enables narrow mode.
-        // Using one breakpoint avoids dual-breakpoint conflicts that can cause
-        // the sidebar to uncollapse when the window shrinks further.
+        // Single breakpoint at 600sp: collapses sidebar and enables narrow mode.
         let bp_condition = adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
-            560.0,
+            600.0,
             adw::LengthUnit::Sp,
         );
         let bp = adw::Breakpoint::new(bp_condition);
@@ -1463,6 +1497,7 @@ impl SimpleComponent for AppModel {
 
                     match page {
                         SidebarPage::Library => self.selected_instance = None,
+                        SidebarPage::Discover => self.selected_instance = None,
                         SidebarPage::Assets => _sender.input(AppMsg::RefreshAssets),
                         SidebarPage::Playtime => _sender.input(AppMsg::RefreshPlaytime),
                         _ => {}
@@ -1505,6 +1540,80 @@ impl SimpleComponent for AppModel {
                     self.current_folder = folder_opt;
                 }
             },
+            AppMsg::DiscoverEvent(out) => match out {
+                DiscoverOutput::InstallModpack(name, version_info, _provider) => {
+                    self.installing_modpack = true;
+                    self.download_status_bar.emit(DownloadStatusBarInput::Update(
+                        DownloadState::Starting,
+                        true,
+                    ));
+                    self.download_dialog.emit(DownloadDialogInput::UpdateState(
+                        DownloadState::Starting,
+                    ));
+
+                    let sender_clone = _sender.input_sender().clone();
+                    let instances_path = self.config.instances_path.clone();
+
+                    if let Some(path) = instances_path {
+                        let job = crate::backend::download::manager::NetworkJob {
+                            id: format!("modpack-{}", version_info.id),
+                            title: format!("Installing Modpack {}", name),
+                            tasks: vec![
+                                crate::backend::download::manager::NetworkTask::ModrinthModpackDownload {
+                                    name: name.clone(),
+                                    download_url: version_info.download_url.clone(),
+                                    instances_path: path.clone(),
+                                }
+                            ],
+                            status: crate::backend::download::manager::NetworkJobStatus::Pending,
+                            log: Vec::new(),
+                        };
+
+                        let (tx, rx) = std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
+
+                        crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
+
+                        thread::spawn(move || {
+                            while let Ok(msg) = rx.recv() {
+                                let is_finished = matches!(
+                                    msg,
+                                    crate::backend::download::manager::DownloadMsg::Finished
+                                );
+                                let is_err = matches!(
+                                    msg,
+                                    crate::backend::download::manager::DownloadMsg::Error(_)
+                                );
+
+                                if sender_clone.send(AppMsg::DownloadProgress(msg)).is_err() {
+                                    break;
+                                }
+                                if is_finished {
+                                    let _ = sender_clone.send(AppMsg::RefreshInstances);
+                                    break;
+                                }
+                                if is_err {
+                                    break;
+                                }
+                            }
+                        });
+                    } else {
+                        self.toast_overlay
+                            .add_toast(adw::Toast::new("No instances directory configured"));
+                    }
+                }
+                DiscoverOutput::DetailsOpened => {
+                    self.discover_details_open = true;
+                    if let Some(ref d) = self.discover_view.model().selected_details {
+                        self.discover_details_title = d.info.title.clone();
+                    } else {
+                        self.discover_details_title = "Modpack Details".to_string();
+                    }
+                }
+                DiscoverOutput::DetailsClosed => {
+                    self.discover_details_open = false;
+                    self.discover_details_title = String::new();
+                }
+            },
             AppMsg::OverviewBack => {
                 self.overview_grid.emit(OverviewInput::GoBack);
             }
@@ -1515,6 +1624,8 @@ impl SimpleComponent for AppModel {
                     _sender.input(AppMsg::OverviewBack);
                 } else if self.active_sidebar_page == SidebarPage::Assets {
                     self.asset_view.emit(AssetInput::ShowCategoriesPage);
+                } else if self.active_sidebar_page == SidebarPage::Discover {
+                    self.discover_view.emit(crate::frontend::views::discover::DiscoverInput::CloseDetails);
                 }
             }
             AppMsg::ShowOverview => {
@@ -2822,17 +2933,19 @@ impl SimpleComponent for AppModel {
                     let _ = Command::new("xdg-open").arg(&inst.path).spawn();
                 }
             }
-            AppMsg::BrowseModrinth(_editor_type) => {
+
+            AppMsg::BrowseModrinth(editor_type) => {
                 if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
                     let (loader, _) = inst.get_loader_info();
-                    self.modrinth_browser.emit(BrowserInput::Open(
-                        inst.minecraft_version.clone().unwrap_or_default(),
+                    self.browser_dialog.emit(BrowserInput::Open {
+                        game_version: inst.minecraft_version.clone().unwrap_or_default(),
                         loader,
-                    ));
-                    self.modrinth_browser.widget().present(Some(&self.window));
+                        editor_type,
+                    });
+                    self.browser_dialog.widget().present(Some(&self.window));
                 }
             }
-            AppMsg::InstallModrinthMods(installs) => {
+            AppMsg::InstallBrowserItems(editor_type, installs) => {
                 if let Some(index) = self.selected_instance {
                     if let Some(inst) = self.instances.get(index) {
                         let gv = inst
@@ -2844,9 +2957,15 @@ impl SimpleComponent for AppModel {
                         let minecraft_dir = inst.minecraft_dir.clone();
                         let sender_clone = _sender.input_sender().clone();
 
-                        let mods_dir = minecraft_dir.join("mods");
-                        if !mods_dir.exists() {
-                            let _ = std::fs::create_dir_all(&mods_dir);
+                        let target_dir = match editor_type {
+                            EditorType::Mods => minecraft_dir.join("mods"),
+                            EditorType::ResourcePacks => minecraft_dir.join("resourcepacks"),
+                            EditorType::ShaderPacks => minecraft_dir.join("shaderpacks"),
+                            EditorType::Worlds => minecraft_dir.join("saves"),
+                            _ => minecraft_dir.join("mods"),
+                        };
+                        if !target_dir.exists() {
+                            let _ = std::fs::create_dir_all(&target_dir);
                         }
 
                         // Only show non-intrusive status bar starting progress
@@ -2868,15 +2987,23 @@ impl SimpleComponent for AppModel {
                                         Some(version_id)
                                     },
                                     game_version: gv.clone(),
-                                    loader: loader.clone(),
-                                    mods_dir: mods_dir.clone(),
+                                    loader: if matches!(editor_type, EditorType::Mods) { loader.clone() } else { ModLoader::None },
+                                    mods_dir: target_dir.clone(),
                                 },
                             );
                         }
 
+                        let item_label = match editor_type {
+                            EditorType::Mods => "Mods",
+                            EditorType::ResourcePacks => "Resource Packs",
+                            EditorType::ShaderPacks => "Shader Packs",
+                            EditorType::Worlds => "Worlds",
+                            _ => "Items",
+                        };
+
                         let job = crate::backend::download::manager::NetworkJob {
-                            id: format!("mods-{}", uuid::Uuid::new_v4()),
-                            title: format!("Mods for {}", inst.name),
+                            id: format!("browser-{}-{}", item_label.to_lowercase().replace(' ', "-"), uuid::Uuid::new_v4()),
+                            title: format!("{} for {}", item_label, inst.name),
                             tasks,
                             status: crate::backend::download::manager::NetworkJobStatus::Pending,
                             log: Vec::new(),
@@ -4193,6 +4320,12 @@ impl SimpleComponent for AppModel {
                         "Instance verification completed successfully!",
                     ));
                 }
+                if self.installing_modpack {
+                    self.toast_overlay.add_toast(adw::Toast::new(
+                        "Modpack installed successfully!",
+                    ));
+                    self.installing_modpack = false;
+                }
                 self.verifying_loading = false;
                 self.instance_summary
                     .emit(SummaryInput::SetVerifyingLoading(false));
@@ -4213,6 +4346,7 @@ impl SimpleComponent for AppModel {
             AppMsg::DownloadError(err) => {
                 self.launch_after_download = false;
                 self.verifying_loading = false;
+                self.installing_modpack = false;
                 self.instance_summary
                     .emit(SummaryInput::SetVerifyingLoading(false));
 

@@ -25,5 +25,7 @@ flate2 = "1.1.9"
 hex = "0.4.3"
 walkdir = "2.5"
 fastnbt = "2.6.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
 
 

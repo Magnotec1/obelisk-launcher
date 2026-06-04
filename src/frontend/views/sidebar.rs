@@ -13,6 +13,7 @@ pub enum SidebarInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SidebarPage {
     Library,
+    Discover,
     Accounts,
     Playtime,
     Assets,
@@ -99,6 +100,11 @@ impl SidebarList {
             self.create_nav_row(SidebarPage::Library, "My Library", "folder-open-symbolic");
         self.list_box.append(&library_row);
         self.rows.insert(SidebarPage::Library, library_row);
+
+        let discover_row =
+            self.create_nav_row(SidebarPage::Discover, "Discover", "system-search-symbolic");
+        self.list_box.append(&discover_row);
+        self.rows.insert(SidebarPage::Discover, discover_row);
 
         // 2. Management Group
         let accounts_row = self.create_nav_row(

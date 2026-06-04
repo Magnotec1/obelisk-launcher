@@ -642,21 +642,6 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
         }
     }
 
-    // Fallback mod loader detection
-    if mod_loader.is_none() {
-        if let Ok(content) = fs::read_to_string(&cfg_path) {
-            if content.contains("Fabric") {
-                mod_loader = Some("Fabric".to_string());
-            } else if content.contains("NeoForge") {
-                mod_loader = Some("NeoForge".to_string());
-            } else if content.contains("Forge") {
-                mod_loader = Some("Forge".to_string());
-            } else if content.contains("Quilt") {
-                mod_loader = Some("Quilt".to_string());
-            }
-        }
-    }
-
     // Scan folders
     let mut mods = Vec::new();
     let mut resource_packs = Vec::new();

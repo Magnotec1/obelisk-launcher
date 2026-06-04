@@ -54,7 +54,7 @@ impl SimpleComponent for InstanceSummary {
             set_hscrollbar_policy: gtk::PolicyType::Never,
             #[wrap(Some)]
             set_child = &adw::Clamp {
-                set_maximum_size: 600,
+                set_maximum_size: 1024,
                 set_tightening_threshold: 400,
 
                 #[wrap(Some)]

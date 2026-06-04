@@ -47,6 +47,15 @@ pub fn clear_caches() {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GalleryImage {
+    pub url: String,
+    pub featured: bool,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub created: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModProject {
     pub project_id: String,
     pub slug: String,
@@ -74,6 +83,7 @@ pub struct ModProject {
     pub discord_url: Option<String>,
     pub published: Option<String>,
     pub updated: Option<String>,
+    pub gallery: Option<Vec<GalleryImage>>,
 }
 
 impl ModProject {
@@ -138,16 +148,17 @@ struct RawProject {
     slug: String,
     author: Option<String>,
     title: String,
-    description: String,
-    categories: Vec<String>,
+    description: Option<String>,
+    #[serde(default)]
+    categories: Option<Vec<String>>,
     #[serde(default)]
     display_categories: Option<Vec<String>>,
-    client_side: String,
-    server_side: String,
+    client_side: Option<String>,
+    server_side: Option<String>,
     body: Option<String>,
     icon_url: Option<String>,
-    project_type: String,
-    downloads: u64,
+    project_type: Option<String>,
+    downloads: Option<u64>,
     followers: Option<u64>,
     follows: Option<u64>,
     date_created: Option<String>,
@@ -165,6 +176,8 @@ struct RawProject {
     discord_url: Option<String>,
     published: Option<String>,
     updated: Option<String>,
+    #[serde(default)]
+    gallery: Option<Vec<GalleryImage>>,
 }
 
 impl RawProject {
@@ -183,15 +196,15 @@ impl RawProject {
             slug: self.slug,
             author: self.author,
             title: self.title,
-            description: self.description,
-            categories: self.categories,
+            description: self.description.unwrap_or_default(),
+            categories: self.categories.unwrap_or_default(),
             display_categories: self.display_categories,
-            client_side: self.client_side,
-            server_side: self.server_side,
+            client_side: self.client_side.unwrap_or_else(|| "optional".to_string()),
+            server_side: self.server_side.unwrap_or_else(|| "optional".to_string()),
             body: self.body,
             icon_url: self.icon_url,
-            project_type: self.project_type,
-            downloads: self.downloads,
+            project_type: self.project_type.unwrap_or_else(|| "mod".to_string()),
+            downloads: self.downloads.unwrap_or(0),
             follows: self.follows.or(self.followers).unwrap_or(0),
             date_created: self.date_created,
             date_modified: self.date_modified,
@@ -205,13 +218,108 @@ impl RawProject {
             discord_url: self.discord_url,
             published: self.published,
             updated: self.updated,
+            gallery: self.gallery,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct RawSearchProject {
+    #[serde(alias = "project_id")]
+    id: String,
+    slug: String,
+    author: Option<String>,
+    title: String,
+    description: Option<String>,
+    #[serde(default)]
+    categories: Option<Vec<String>>,
+    #[serde(default)]
+    display_categories: Option<Vec<String>>,
+    client_side: Option<String>,
+    server_side: Option<String>,
+    body: Option<String>,
+    icon_url: Option<String>,
+    project_type: Option<String>,
+    downloads: Option<u64>,
+    followers: Option<u64>,
+    follows: Option<u64>,
+    date_created: Option<String>,
+    date_modified: Option<String>,
+    latest_version: Option<String>,
+    #[serde(default)]
+    license: Option<serde_json::Value>,
+    color: Option<u32>,
+    #[serde(default)]
+    loaders: Option<Vec<String>>,
+    #[serde(default)]
+    game_versions: Option<Vec<String>>,
+    source_url: Option<String>,
+    wiki_url: Option<String>,
+    discord_url: Option<String>,
+    published: Option<String>,
+    updated: Option<String>,
+    #[serde(default)]
+    gallery: Option<Vec<String>>,
+}
+
+impl RawSearchProject {
+    fn into_clean(self) -> ModProject {
+        let license_name = match &self.license {
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            Some(serde_json::Value::Object(obj)) => obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            _ => None,
+        };
+
+        let gallery = self.gallery.map(|urls| {
+            urls.into_iter()
+                .map(|url| GalleryImage {
+                    url,
+                    featured: false,
+                    title: None,
+                    description: None,
+                    created: String::new(),
+                })
+                .collect()
+        });
+
+        ModProject {
+            project_id: self.id,
+            slug: self.slug,
+            author: self.author,
+            title: self.title,
+            description: self.description.unwrap_or_default(),
+            categories: self.categories.unwrap_or_default(),
+            display_categories: self.display_categories,
+            client_side: self.client_side.unwrap_or_else(|| "optional".to_string()),
+            server_side: self.server_side.unwrap_or_else(|| "optional".to_string()),
+            body: self.body,
+            icon_url: self.icon_url,
+            project_type: self.project_type.unwrap_or_else(|| "mod".to_string()),
+            downloads: self.downloads.unwrap_or(0),
+            follows: self.follows.or(self.followers).unwrap_or(0),
+            date_created: self.date_created,
+            date_modified: self.date_modified,
+            latest_version: self.latest_version,
+            license_name,
+            color: self.color,
+            loaders: self.loaders,
+            game_versions: self.game_versions,
+            source_url: self.source_url,
+            wiki_url: self.wiki_url,
+            discord_url: self.discord_url,
+            published: self.published,
+            updated: self.updated,
+            gallery,
         }
     }
 }
 
 #[derive(Deserialize, Debug)]
 struct RawSearchResult {
-    hits: Vec<RawProject>,
+    hits: Vec<RawSearchProject>,
     offset: u32,
     limit: u32,
     total_hits: u32,
