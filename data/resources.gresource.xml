@@ -10,5 +10,16 @@
     preprocess="xml-stripblanks">icons/arrow4-down-symbolic.svg</file>
     <file alias="search-global-symbolic.svg"
     preprocess="xml-stripblanks">icons/search-global-symbolic.svg</file>
+    <file alias="external-link-symbolic.svg"
+    preprocess="xml-stripblanks">icons/external-link-symbolic.svg</file>
+    <file alias="chat-bubbles-text-symbolic.svg"
+    preprocess="xml-stripblanks">icons/chat-bubbles-text-symbolic.svg</file>
+    <file alias="code-symbolic.svg"
+    preprocess="xml-stripblanks">icons/code-symbolic.svg</file>
+    <file alias="open-book-symbolic.svg"
+    preprocess="xml-stripblanks">icons/open-book-symbolic.svg</file>
+    <file alias="tag-outline-symbolic.svg"
+    preprocess="xml-stripblanks">icons/tag-outline-symbolic.svg</file>
+    
   </gresource>
 </gresources>

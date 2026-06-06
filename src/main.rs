@@ -127,6 +127,10 @@ fn main() {
             font-variant-numeric: tabular-nums;
         }
 
+        .button-more-description {
+            padding: 0px 16px;
+        }
+
         /* ── Overview Grid ────────────────────────────────────────────── */
 
         .overview-root {
@@ -226,7 +230,7 @@ fn main() {
         /* Carousel Navigation Overlay Buttons */
         .carousel-nav-btn {
             background-color: transparent;
-            color: #ffffff;
+            color: @window_fg_color;
             border-radius: 999px;
             padding: 4px;
             margin: 0 12px;
@@ -236,13 +240,13 @@ fn main() {
             opacity: 0.7;
         }
         .carousel-nav-btn:hover {
-            background-color: rgba(255, 255, 255, 0.15);
-            color: #ffffff;
+            background-color: alpha(@window_fg_color, 0.15);
+            color: @window_fg_color;
             opacity: 1.0;
         }
         .carousel-nav-btn:active {
-            background-color: rgba(255, 255, 255, 0.25);
-            color: #ffffff;
+            background-color: alpha(@window_fg_color, 0.25);
+            color: @window_fg_color;
             opacity: 1.0;
         }
 
@@ -429,6 +433,15 @@ fn main() {
         .download-progress-circle {
             color: @accent_bg_color;
             transform: scale(1.25);
+        }
+
+        .single-carousel-dot {
+            background-color: @window_fg_color;
+            border-radius: 999px;
+            min-width: 6px;
+            min-height: 6px;
+            margin: 6px 0;
+            opacity: 0.85;
         }
     ",
     );

@@ -145,6 +145,8 @@ pub struct AppModel {
     verifying_loading: bool,
     installing_modpack: bool,
     active_asset_subpage: Option<String>,
+    discover_search_visible: bool,
+    discover_search_query: String,
     discover_details_open: bool,
     discover_details_title: String,
 }
@@ -205,6 +207,10 @@ pub enum AppMsg {
     ApplyDefaultIcon(usize),
     /// Apply a specific icon file to an instance (e.g. from recents).
     ApplyIconPath(usize, PathBuf),
+
+    ToggleDiscoverSearch,
+    DiscoverSearchChanged(String),
+    RefreshDiscover,
 
     // Sidebar / group management
     SidebarEvent(SidebarOutput),
@@ -658,6 +664,19 @@ impl SimpleComponent for AppModel {
                                         },
                                     },
 
+                                    pack_start = &gtk::ToggleButton {
+                                        set_icon_name: "system-search-symbolic",
+                                        set_tooltip_text: Some("Search Modpacks"),
+                                        set_css_classes: &["flat"],
+                                        #[watch]
+                                        set_visible: model.active_sidebar_page == SidebarPage::Discover && !model.discover_details_open,
+                                        #[watch]
+                                        set_active: model.discover_search_visible,
+                                        connect_clicked[sender] => move |_| {
+                                            sender.input(AppMsg::ToggleDiscoverSearch);
+                                        },
+                                    },
+
                                     pack_start = &gtk::Button {
                                         set_icon_name: "go-previous-symbolic",
                                         #[watch]
@@ -1018,12 +1037,25 @@ impl SimpleComponent for AppModel {
                                             },
                                         },
 
+                                        add_named[Some("discover")] = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 4,
+
+                                            gtk::Button {
+                                                set_icon_name: "view-refresh-symbolic",
+                                                set_tooltip_text: Some("Refresh Modpacks"),
+                                                set_css_classes: &["flat"],
+                                                connect_clicked => AppMsg::RefreshDiscover,
+                                            },
+                                        },
+
                                         add_named[Some("empty")] = &gtk::Box {},
 
                                         // Must come after add_named so children exist on first render
                                         #[watch]
                                         set_visible_child_name: match model.active_sidebar_page {
                                             SidebarPage::Library => "library",
+                                            SidebarPage::Discover => "discover",
                                             SidebarPage::Accounts => "accounts",
                                             SidebarPage::Playtime => "playtime",
                                             SidebarPage::Assets => "assets",
@@ -1037,13 +1069,41 @@ impl SimpleComponent for AppModel {
                                     set_orientation: gtk::Orientation::Vertical,
                                     set_vexpand: true,
 
-                                adw::Banner {
+                                    adw::Banner {
                                         set_title: "Warning! Both 'minecraft' and '.minecraft' folders exist.",
                                         set_button_label: Some("Open Instance Folder"),
                                         set_use_markup: false,
                                         #[watch]
                                         set_revealed: model.has_selected_mismatch(),
                                         connect_button_clicked => AppMsg::OpenInstanceFolder,
+                                    },
+
+                                    gtk::Revealer {
+                                        set_transition_type: gtk::RevealerTransitionType::SlideDown,
+                                        #[watch]
+                                        set_reveal_child: model.discover_search_visible && model.active_sidebar_page == SidebarPage::Discover && !model.discover_details_open,
+
+                                        adw::Clamp {
+                                            set_maximum_size: 480,
+                                            set_tightening_threshold: 400,
+
+                                            gtk::Box {
+                                                set_orientation: gtk::Orientation::Horizontal,
+                                                set_margin_top: 8,
+                                                set_margin_bottom: 8,
+                                                set_spacing: 6,
+                                                set_css_classes: &["search-bar-container"],
+
+                                                gtk::SearchEntry {
+                                                    set_hexpand: true,
+                                                    set_placeholder_text: Some("Search Modrinth modpacks..."),
+                                                    set_text: &model.discover_search_query,
+                                                    connect_search_changed[sender] => move |entry| {
+                                                        sender.input(AppMsg::DiscoverSearchChanged(entry.text().to_string()));
+                                                    }
+                                                }
+                                            }
+                                        }
                                     },
 
                                     gtk::Stack {
@@ -1367,6 +1427,8 @@ impl SimpleComponent for AppModel {
             verifying_loading: false,
             installing_modpack: false,
             active_asset_subpage: None,
+            discover_search_visible: false,
+            discover_search_query: String::new(),
             discover_details_open: false,
             discover_details_title: String::new(),
         };
@@ -1494,6 +1556,7 @@ impl SimpleComponent for AppModel {
                 SidebarOutput::Navigate(page) => {
                     self.active_sidebar_page = page;
                     self.sidebar.emit(SidebarInput::SetSelected(page));
+                    self.discover_search_visible = false;
 
                     match page {
                         SidebarPage::Library => self.selected_instance = None,
@@ -1616,6 +1679,13 @@ impl SimpleComponent for AppModel {
             },
             AppMsg::OverviewBack => {
                 self.overview_grid.emit(OverviewInput::GoBack);
+            }
+            AppMsg::ToggleDiscoverSearch => {
+                self.discover_search_visible = !self.discover_search_visible;
+            }
+            AppMsg::DiscoverSearchChanged(query) => {
+                self.discover_search_query = query.clone();
+                self.discover_view.emit(crate::frontend::views::discover::DiscoverInput::Search(query));
             }
             AppMsg::GoBack => {
                 if self.active_sidebar_page == SidebarPage::InstanceDetails {
@@ -1922,6 +1992,9 @@ impl SimpleComponent for AppModel {
                     );
                     let _ = sender_clone.send(AppMsg::AssetsReady(result));
                 });
+            }
+            AppMsg::RefreshDiscover => {
+                self.discover_view.emit(crate::frontend::views::discover::DiscoverInput::Refresh);
             }
             AppMsg::AssetsReady(result) => {
                 self.asset_view.emit(AssetInput::UpdateData(

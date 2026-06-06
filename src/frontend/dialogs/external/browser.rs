@@ -40,6 +40,7 @@ pub struct BrowserProject {
     pub title: String,
     pub author: Option<String>,
     pub description: String,
+    pub body: Option<String>,
     pub icon_url: Option<String>,
     pub downloads: u64,
     pub follows: u64,
@@ -48,6 +49,7 @@ pub struct BrowserProject {
     pub discord_url: Option<String>,
     pub license_name: Option<String>,
     pub screenshots: Vec<String>,
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +85,7 @@ impl From<ModrinthProject> for BrowserProject {
             title: p.title,
             author: p.author,
             description: p.description,
+            body: p.body,
             icon_url: p.icon_url,
             downloads: p.downloads,
             follows: p.follows,
@@ -91,6 +94,7 @@ impl From<ModrinthProject> for BrowserProject {
             discord_url: p.discord_url,
             license_name: p.license_name,
             screenshots: p.gallery.unwrap_or_default().into_iter().map(|img| img.url).collect(),
+            categories: p.categories,
         }
     }
 }
@@ -587,6 +591,8 @@ pub enum BrowserInput {
     SetCollapsed(bool),
     ToggleSidebar,
     OpenUrl(String),
+    ScreenshotScroll(f64),
+    ShowFullDescription,
 }
 
 #[derive(Debug)]
@@ -628,6 +634,7 @@ pub struct UnifiedBrowser {
 
     view_state: BrowserView,
     queue_dialog: Controller<QueueDialog>,
+    description_dialog: Controller<DescriptionDialog>,
     toast_overlay: adw::ToastOverlay,
 
     projects: FactoryVecDeque<ProjectRow>,
@@ -963,12 +970,12 @@ impl Component for UnifiedBrowser {
 
                                                         gtk::Label {
                                                             #[watch]
-                                                            set_label: &format!("⬇ {}", format_downloads(model.selected_project.as_ref().map(|p| p.downloads).unwrap_or(0))),
+                                                            set_label: &format!("{} downloads", format_downloads(model.selected_project.as_ref().map(|p| p.downloads).unwrap_or(0))),
                                                             set_css_classes: &["pill-badge"],
                                                         },
                                                         gtk::Label {
                                                             #[watch]
-                                                            set_label: &format!("♥ {}", format_downloads(model.selected_project.as_ref().map(|p| p.follows).unwrap_or(0))),
+                                                            set_label: &format!("{} likes", format_downloads(model.selected_project.as_ref().map(|p| p.follows).unwrap_or(0))),
                                                             set_css_classes: &["pill-badge"],
                                                         },
                                                     },
@@ -1104,7 +1111,7 @@ impl Component for UnifiedBrowser {
                                                         },
                                                         adw::ActionRow {
                                                             set_title: "Wiki / Docs",
-                                                            add_prefix = &gtk::Image { set_icon_name: Some("accessories-dictionary-symbolic"), set_pixel_size: 16 },
+                                                            add_prefix = &gtk::Image { set_icon_name: Some("open-book-symbolic"), set_pixel_size: 16 },
                                                             #[watch]
                                                             set_visible: model.selected_project.as_ref().and_then(|p| p.wiki_url.as_ref()).is_some(),
                                                             #[watch]
@@ -1250,6 +1257,10 @@ impl Component for UnifiedBrowser {
             },
         );
 
+        let description_dialog = DescriptionDialog::builder()
+            .launch(())
+            .forward(sender.input_sender(), |_| unreachable!());
+
         let mut model = UnifiedBrowser {
             visible: false,
             game_version: String::new(),
@@ -1273,6 +1284,7 @@ impl Component for UnifiedBrowser {
             versions,
             screenshot_cards,
             queue_dialog,
+            description_dialog,
             toast_overlay: adw::ToastOverlay::new(),
             collapsed: false,
             show_sidebar: true,
@@ -1793,6 +1805,18 @@ impl Component for UnifiedBrowser {
             BrowserInput::OpenUrl(url) => {
                 crate::frontend::utils::open_url(&url);
             }
+            BrowserInput::ScreenshotScroll(_pos) => {}
+            BrowserInput::ShowFullDescription => {
+                if let Some(ref project) = self.selected_project {
+                    let body = project.body.clone().unwrap_or_else(|| project.description.clone());
+                    self.description_dialog.emit(DescriptionDialogInput::Show {
+                        title: project.title.clone(),
+                        body,
+                    });
+                    let parent = relm4::main_application().active_window();
+                    self.description_dialog.widget().present(parent.as_ref());
+                }
+            }
         }
     }
 }
@@ -2083,4 +2107,464 @@ fn fetch_icon(url: String, sender: relm4::Sender<BrowserInput>) {
             }
         }
     });
+}
+
+struct TagBalancer {
+    stack: Vec<String>,
+}
+
+impl TagBalancer {
+    fn new() -> Self {
+        TagBalancer { stack: Vec::new() }
+    }
+
+    fn open(&mut self, tag: &str) -> String {
+        self.stack.push(tag.to_string());
+        format!("<{}>", tag)
+    }
+
+    fn close(&mut self, tag_name: &str) -> String {
+        let tag_name_lower = tag_name.to_lowercase();
+        if let Some(pos) = self.stack.iter().rposition(|t| {
+            let name = t.split_whitespace().next().unwrap_or(t);
+            name.to_lowercase() == tag_name_lower
+        }) {
+            let mut result = String::new();
+            let mut to_reopen = Vec::new();
+            while self.stack.len() > pos {
+                let tag = self.stack.pop().unwrap();
+                let name = tag.split_whitespace().next().unwrap_or(&tag);
+                result.push_str(&format!("</{}>", name));
+                if name.to_lowercase() != tag_name_lower {
+                    to_reopen.push(tag);
+                }
+            }
+            for tag in to_reopen.into_iter().rev() {
+                result.push_str(&self.open(&tag));
+            }
+            result
+        } else {
+            String::new()
+        }
+    }
+
+    fn close_all(&mut self) -> String {
+        let mut result = String::new();
+        while let Some(tag) = self.stack.pop() {
+            let name = tag.split_whitespace().next().unwrap_or(&tag);
+            result.push_str(&format!("</{}>", name));
+        }
+        result
+    }
+}
+
+enum TagAction {
+    Open(String),
+    Close(String),
+    Text(String),
+    None,
+}
+
+fn process_html_tag_action(tag: &str) -> TagAction {
+    let lower = tag.to_lowercase();
+    let trimmed = lower.trim_start_matches('<').trim_end_matches('>').trim();
+
+    if trimmed.starts_with("br") {
+        return TagAction::Text("\n".to_string());
+    }
+    if trimmed.starts_with("p") && !trimmed.starts_with("/p") {
+        return TagAction::Text("\n".to_string());
+    }
+    if trimmed.starts_with("/p") {
+        return TagAction::Text("\n".to_string());
+    }
+    if trimmed.starts_with("strong") || trimmed.starts_with("b") {
+        if trimmed.starts_with("/") {
+            return TagAction::Close("b".to_string());
+        } else {
+            return TagAction::Open("b".to_string());
+        }
+    }
+    if trimmed.starts_with("em") || trimmed.starts_with("i") {
+        if trimmed.starts_with("/") {
+            return TagAction::Close("i".to_string());
+        } else {
+            return TagAction::Open("i".to_string());
+        }
+    }
+    if trimmed.starts_with("code") {
+        if trimmed.starts_with("/") {
+            return TagAction::Close("span".to_string());
+        } else {
+            return TagAction::Open("span font_family=\"monospace\" background=\"#282c34\" color=\"#e06c75\"".to_string());
+        }
+    }
+    if trimmed.starts_with("li") {
+        return TagAction::Text("  • ".to_string());
+    }
+    if trimmed.starts_with("/li") {
+        return TagAction::Text("\n".to_string());
+    }
+
+    if trimmed.starts_with("a ") {
+        if let Some(href_idx) = lower.find("href=") {
+            let rest = &tag[href_idx + 5..];
+            let quote_char = rest.chars().next().unwrap_or('"');
+            if quote_char == '"' || quote_char == '\'' {
+                let rest_after_quote = &rest[1..];
+                if let Some(end_quote_idx) = rest_after_quote.find(quote_char) {
+                    let url = &rest_after_quote[..end_quote_idx];
+                    let escaped_url = glib::markup_escape_text(url).to_string();
+                    return TagAction::Open(format!("a href=\"{}\"", escaped_url));
+                }
+            }
+        }
+        return TagAction::Open("a".to_string());
+    }
+    if trimmed.starts_with("/a") {
+        return TagAction::Close("a".to_string());
+    }
+
+    TagAction::None
+}
+
+fn markdown_to_pango(md: &str) -> String {
+    let mut balancer = TagBalancer::new();
+    let mut block_parsed = String::new();
+    let mut in_code_block = false;
+    let mut code_block_content = String::new();
+
+    for line in md.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("```") {
+            if in_code_block {
+                let escaped_code = glib::markup_escape_text(&code_block_content).to_string();
+                block_parsed.push_str(&format!(
+                    "<span font_family=\"monospace\" background=\"#282c34\" color=\"#abb2bf\">\n{}\n</span>\n",
+                    escaped_code
+                ));
+                code_block_content.clear();
+                in_code_block = false;
+            } else {
+                in_code_block = true;
+            }
+            continue;
+        }
+
+        if in_code_block {
+            code_block_content.push_str(line);
+            code_block_content.push('\n');
+            continue;
+        }
+
+        // Headers
+        if trimmed.starts_with("# ") {
+            let content = trimmed[2..].trim();
+            block_parsed.push_str(&format!(
+                "\n<span size=\"xx-large\" weight=\"bold\">{}</span>\n\n",
+                content
+            ));
+        } else if trimmed.starts_with("## ") {
+            let content = trimmed[3..].trim();
+            block_parsed.push_str(&format!(
+                "\n<span size=\"x-large\" weight=\"bold\">{}</span>\n\n",
+                content
+            ));
+        } else if trimmed.starts_with("### ") {
+            let content = trimmed[4..].trim();
+            block_parsed.push_str(&format!(
+                "\n<span size=\"large\" weight=\"bold\">{}</span>\n\n",
+                content
+            ));
+        } else if trimmed.starts_with("#### ") {
+            let content = trimmed[5..].trim();
+            block_parsed.push_str(&format!(
+                "\n<span weight=\"bold\">{}</span>\n\n",
+                content
+            ));
+        } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            block_parsed.push_str("\n<span color=\"#555555\">────────────────────────────────────────────────</span>\n\n");
+        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+            let content = trimmed[2..].trim();
+            block_parsed.push_str(&format!("  • {}\n", content));
+        } else if trimmed.is_empty() {
+            block_parsed.push('\n');
+        } else {
+            block_parsed.push_str(line);
+            block_parsed.push('\n');
+        }
+    }
+
+    if in_code_block && !code_block_content.is_empty() {
+        let escaped_code = glib::markup_escape_text(&code_block_content).to_string();
+        block_parsed.push_str(&format!(
+            "<span font_family=\"monospace\" background=\"#282c34\" color=\"#abb2bf\">\n{}\n</span>\n",
+            escaped_code
+        ));
+    }
+
+    let mut parsed = parse_html_and_inline(&block_parsed, &mut balancer);
+    parsed.push_str(&balancer.close_all());
+    parsed
+}
+
+fn parse_html_and_inline(text: &str, balancer: &mut TagBalancer) -> String {
+    let mut result = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '<' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j] != '>' {
+                j += 1;
+            }
+            if j < chars.len() {
+                let tag: String = chars[i..=j].iter().collect();
+                match process_html_tag_action(&tag) {
+                    TagAction::Open(t) => result.push_str(&balancer.open(&t)),
+                    TagAction::Close(t) => result.push_str(&balancer.close(&t)),
+                    TagAction::Text(txt) => result.push_str(&txt),
+                    TagAction::None => {}
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+
+        let mut j = i + 1;
+        while j < chars.len() && chars[j] != '<' {
+            j += 1;
+        }
+        let segment: String = chars[i..j].iter().collect();
+        result.push_str(&parse_inline(&segment, balancer));
+        i = j;
+    }
+
+    result
+}
+
+fn parse_inline(text: &str, balancer: &mut TagBalancer) -> String {
+    let escaped = glib::markup_escape_text(text).to_string();
+    let chars: Vec<char> = escaped.chars().collect();
+    let mut result = String::new();
+    let mut i = 0;
+
+    let mut in_bold = false;
+    let mut in_italic = false;
+    let mut in_code = false;
+
+    while i < chars.len() {
+        if chars[i] == '`' {
+            if in_code {
+                result.push_str(&balancer.close("span"));
+            } else {
+                result.push_str(&balancer.open("span font_family=\"monospace\" background=\"#282c34\" color=\"#e06c75\""));
+            }
+            in_code = !in_code;
+            i += 1;
+            continue;
+        }
+
+        if in_code {
+            result.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        if chars[i] == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            if in_bold {
+                result.push_str(&balancer.close("b"));
+            } else {
+                result.push_str(&balancer.open("b"));
+            }
+            in_bold = !in_bold;
+            i += 2;
+            continue;
+        }
+
+        if chars[i] == '*' {
+            if in_italic {
+                result.push_str(&balancer.close("i"));
+            } else {
+                result.push_str(&balancer.open("i"));
+            }
+            in_italic = !in_italic;
+            i += 1;
+            continue;
+        }
+
+        if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '[' {
+            let mut j = i + 2;
+            let mut bracket_count = 1;
+            while j < chars.len() {
+                if chars[j] == '[' {
+                    bracket_count += 1;
+                } else if chars[j] == ']' {
+                    bracket_count -= 1;
+                    if bracket_count == 0 {
+                        break;
+                    }
+                }
+                j += 1;
+            }
+            if j < chars.len() && j + 1 < chars.len() && chars[j + 1] == '(' {
+                let mut k = j + 2;
+                while k < chars.len() && chars[k] != ')' {
+                    k += 1;
+                }
+                if k < chars.len() {
+                    let alt: String = chars[i + 2..j].iter().collect();
+                    let url: String = chars[j + 2..k].iter().collect();
+                    let alt_text = if alt.is_empty() { "Image" } else { &alt };
+
+                    result.push_str(&balancer.open(&format!("a href=\"{}\"", url)));
+                    result.push_str(&format!("🖼️ {}", alt_text));
+                    result.push_str(&balancer.close("a"));
+
+                    i = k + 1;
+                    continue;
+                }
+            }
+        }
+
+        if chars[i] == '[' {
+            let mut j = i + 1;
+            let mut bracket_count = 1;
+            while j < chars.len() {
+                if chars[j] == '[' {
+                    bracket_count += 1;
+                } else if chars[j] == ']' {
+                    bracket_count -= 1;
+                    if bracket_count == 0 {
+                        break;
+                    }
+                }
+                j += 1;
+            }
+            if j < chars.len() && j + 1 < chars.len() && chars[j + 1] == '(' {
+                let mut k = j + 2;
+                while k < chars.len() && chars[k] != ')' {
+                    k += 1;
+                }
+                if k < chars.len() {
+                    let text: String = chars[i + 1..j].iter().collect();
+                    let url: String = chars[j + 2..k].iter().collect();
+
+                    result.push_str(&balancer.open(&format!("a href=\"{}\"", url)));
+                    result.push_str(&parse_inline(&text, balancer));
+                    result.push_str(&balancer.close("a"));
+
+                    i = k + 1;
+                    continue;
+                }
+            }
+        }
+
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    if in_bold {
+        result.push_str(&balancer.close("b"));
+    }
+    if in_italic {
+        result.push_str(&balancer.close("i"));
+    }
+    if in_code {
+        result.push_str(&balancer.close("span"));
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Description Dialog component
+// ---------------------------------------------------------------------------
+
+pub struct DescriptionDialog {
+    title: String,
+    body: String,
+}
+
+#[derive(Debug)]
+pub enum DescriptionDialogInput {
+    Show { title: String, body: String },
+    Close,
+}
+
+#[relm4::component(pub)]
+impl Component for DescriptionDialog {
+    type Init = ();
+    type Input = DescriptionDialogInput;
+    type Output = ();
+    type CommandOutput = ();
+
+    view! {
+        adw::Dialog {
+            #[watch]
+            set_title: &model.title,
+            set_content_width: 700,
+            set_content_height: 550,
+            set_can_close: true,
+
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {
+                    #[wrap(Some)]
+                    set_title_widget = &adw::WindowTitle {
+                        #[watch]
+                        set_title: &model.title,
+                        set_subtitle: "Detailed Description",
+                    },
+                },
+
+                #[wrap(Some)]
+                set_content = &gtk::ScrolledWindow {
+                    set_hscrollbar_policy: gtk::PolicyType::Never,
+                    set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_margin_all: 20,
+
+                        gtk::Label {
+                            #[watch]
+                            set_label: &markdown_to_pango(&model.body),
+                            set_wrap: true,
+                            set_halign: gtk::Align::Start,
+                            set_valign: gtk::Align::Start,
+                            set_xalign: 0.0,
+                            set_yalign: 0.0,
+                            set_selectable: true,
+                            set_use_markup: true,
+                            set_can_focus: false,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn init(_init: (), root: Self::Root, _sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        let model = DescriptionDialog {
+            title: String::new(),
+            body: String::new(),
+        };
+        let widgets = view_output!();
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>, root: &Self::Root) {
+        match msg {
+            DescriptionDialogInput::Show { title, body } => {
+                self.title = title;
+                self.body = body;
+            }
+            DescriptionDialogInput::Close => {
+                root.close();
+            }
+        }
+    }
 }

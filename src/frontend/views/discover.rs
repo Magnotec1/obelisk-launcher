@@ -1,6 +1,7 @@
 use crate::backend::instance::modpack::{
     ModpackDetails, ModpackInfo, ModpackSource, ModpackVersionInfo, ModrinthSource,
 };
+use crate::frontend::dialogs::external::browser::{DescriptionDialog, DescriptionDialogInput};
 use adw::prelude::*;
 use gtk::gdk;
 use gtk::glib;
@@ -509,8 +510,11 @@ pub enum DiscoverInput {
     CancelInstall,
     PerformInstall,
     CarouselScroll(f64),
+    ScreenshotScroll(f64),
+    Refresh,
     OpenVersionDialog,
     OpenUrl(String),
+    ShowFullDescription,
 }
 
 #[derive(Debug)]
@@ -549,6 +553,7 @@ pub struct DiscoverView {
     install_name_entry: Option<gtk::Entry>,
 
     version_dialog: Controller<ModpackVersionDialog>,
+    description_dialog: Controller<DescriptionDialog>,
 }
 
 impl DiscoverView {
@@ -617,13 +622,7 @@ impl SimpleComponent for DiscoverView {
                         set_spacing: 20,
                         set_margin_all: 24,
 
-                        // Search bar
-                        gtk::SearchEntry {
-                            set_placeholder_text: Some("Search Modrinth modpacks..."),
-                            connect_search_changed[sender] => move |entry| {
-                                sender.input(DiscoverInput::Search(entry.text().to_string()));
-                            }
-                        },
+
 
                         // Loading spinner
                         gtk::Spinner {
@@ -702,7 +701,13 @@ impl SimpleComponent for DiscoverView {
                                                 let widget = featured_carousel.nth_page(page - 1);
                                                 featured_carousel.scroll_to(&widget, true);
                                             }
-                                        }
+                                        },
+                                        #[watch]
+                                        set_sensitive: {
+                                            let pos = featured_carousel.position();
+                                            let n = featured_carousel.n_pages();
+                                            n > 1 && pos.round() > 0.0
+                                        },
                                     },
 
                                     add_overlay = &gtk::Button {
@@ -722,16 +727,34 @@ impl SimpleComponent for DiscoverView {
                                                 let widget = featured_carousel.nth_page(page + 1);
                                                 featured_carousel.scroll_to(&widget, true);
                                             }
-                                        }
+                                        },
+                                        #[watch]
+                                        set_sensitive: {
+                                            let pos = featured_carousel.position();
+                                            let n = featured_carousel.n_pages();
+                                            n > 1 && pos.round() < (n as f64 - 1.0)
+                                        },
                                     }
                                 },
                             },
 
-                            adw::CarouselIndicatorDots {
-                                set_carousel: Some(&featured_carousel),
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
                                 set_halign: gtk::Align::Center,
                                 set_margin_top: 8,
                                 set_margin_bottom: 8,
+
+                                adw::CarouselIndicatorDots {
+                                    set_carousel: Some(&featured_carousel),
+                                    #[watch]
+                                    set_visible: featured_carousel.n_pages() > 1,
+                                },
+
+                                gtk::Box {
+                                    set_css_classes: &["single-carousel-dot"],
+                                    #[watch]
+                                    set_visible: featured_carousel.n_pages() == 1,
+                                }
                             },
 
                             gtk::Label {
@@ -870,12 +893,12 @@ impl SimpleComponent for DiscoverView {
 
                                         gtk::Label {
                                             #[watch]
-                                            set_label: &format!("⬇ {}", format_downloads(model.selected_details.as_ref().map(|d| d.info.downloads).unwrap_or(0))),
+                                            set_label: &format!("{} downloads", format_downloads(model.selected_details.as_ref().map(|d| d.info.downloads).unwrap_or(0))),
                                             set_css_classes: &["pill-badge"],
                                         },
                                         gtk::Label {
                                             #[watch]
-                                            set_label: &format!("♥ {}", format_downloads(model.selected_details.as_ref().map(|d| d.info.follows).unwrap_or(0))),
+                                            set_label: &format!("{} likes", format_downloads(model.selected_details.as_ref().map(|d| d.info.follows).unwrap_or(0))),
                                             set_css_classes: &["pill-badge"],
                                         },
                                     },
@@ -899,6 +922,9 @@ impl SimpleComponent for DiscoverView {
                                             set_height_request: 240,
                                             set_hexpand: true,
                                             set_allow_scroll_wheel: false,
+                                            connect_position_notify[sender] => move |carousel| {
+                                                sender.input(DiscoverInput::ScreenshotScroll(carousel.position()));
+                                            }
                                         },
 
                                         add_overlay = &gtk::Button {
@@ -917,7 +943,13 @@ impl SimpleComponent for DiscoverView {
                                                     let widget = screenshot_carousel.nth_page(page - 1);
                                                     screenshot_carousel.scroll_to(&widget, true);
                                                 }
-                                            }
+                                            },
+                                            #[watch]
+                                            set_sensitive: {
+                                                let pos = screenshot_carousel.position();
+                                                let n = screenshot_carousel.n_pages();
+                                                n > 1 && pos.round() > 0.0
+                                            },
                                         },
 
                                         add_overlay = &gtk::Button {
@@ -937,13 +969,33 @@ impl SimpleComponent for DiscoverView {
                                                     let widget = screenshot_carousel.nth_page(page + 1);
                                                     screenshot_carousel.scroll_to(&widget, true);
                                                 }
-                                            }
+                                            },
+                                            #[watch]
+                                            set_sensitive: {
+                                                let pos = screenshot_carousel.position();
+                                                let n = screenshot_carousel.n_pages();
+                                                n > 1 && pos.round() < (n as f64 - 1.0)
+                                            },
                                         }
                                     },
 
-                                    adw::CarouselIndicatorDots {
-                                        set_carousel: Some(&screenshot_carousel),
+                                    gtk::Box {
+                                        set_orientation: gtk::Orientation::Horizontal,
                                         set_halign: gtk::Align::Center,
+                                        set_margin_top: 6,
+                                        set_margin_bottom: 6,
+
+                                        adw::CarouselIndicatorDots {
+                                            set_carousel: Some(&screenshot_carousel),
+                                            #[watch]
+                                            set_visible: screenshot_carousel.n_pages() > 1,
+                                        },
+
+                                        gtk::Box {
+                                            set_css_classes: &["single-carousel-dot"],
+                                            #[watch]
+                                            set_visible: screenshot_carousel.n_pages() == 1,
+                                        }
                                     }
                                 },
                             },
@@ -951,14 +1003,31 @@ impl SimpleComponent for DiscoverView {
                             // Description Box
                             adw::PreferencesGroup {
                                 set_title: "Description",
-                                gtk::Label {
-                                    #[watch]
-                                    set_label: &escape(model.selected_details.as_ref().map(|d| d.info.description.as_str()).unwrap_or("")),
-                                    set_wrap: true,
-                                    set_halign: gtk::Align::Fill,
-                                    set_xalign: 0.0,
-                                    set_use_markup: true,
-                                    set_margin_all: 10,
+
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 6,
+                                    set_css_classes: &["card"],
+
+                                    gtk::Label {
+                                        #[watch]
+                                        set_label: &escape(model.selected_details.as_ref().map(|d| d.info.description.as_str()).unwrap_or("")),
+                                        set_wrap: true,
+                                        set_halign: gtk::Align::Fill,
+                                        set_xalign: 0.0,
+                                        set_use_markup: true,
+                                        set_margin_all: 12,
+                                    },
+
+                                    gtk::Button {
+                                        set_label: "More Description...",
+                                        set_halign: gtk::Align::Center,
+                                        set_margin_bottom: 16,
+                                        set_css_classes: &["circular", "button-more-description"],
+                                        #[watch]
+                                        set_visible: model.selected_details.as_ref().map(|d| d.body.is_some()).unwrap_or(false),
+                                        connect_clicked => DiscoverInput::ShowFullDescription,
+                                    }
                                 }
                             },
 
@@ -986,7 +1055,7 @@ impl SimpleComponent for DiscoverView {
                                 },
                                 adw::ActionRow {
                                     set_title: "Categories",
-                                    add_prefix = &gtk::Image { set_icon_name: Some("preferences-desktop-apps-symbolic"), set_pixel_size: 16 },
+                                    add_prefix = &gtk::Image { set_icon_name: Some("tag-outline-symbolic"), set_pixel_size: 16 },
                                     #[watch]
                                     set_subtitle: &model.selected_details.as_ref()
                                         .map(|d| d.info.categories.join(", "))
@@ -1019,7 +1088,7 @@ impl SimpleComponent for DiscoverView {
                                 },
                                 adw::ActionRow {
                                     set_title: "Source Code",
-                                    add_prefix = &gtk::Image { set_icon_name: Some("text-editor-symbolic"), set_pixel_size: 16 },
+                                    add_prefix = &gtk::Image { set_icon_name: Some("code-symbolic"), set_pixel_size: 16 },
                                     #[watch]
                                     set_visible: model.selected_details.as_ref().and_then(|d| d.source_url.as_ref()).is_some(),
                                     #[watch]
@@ -1037,7 +1106,7 @@ impl SimpleComponent for DiscoverView {
                                 },
                                 adw::ActionRow {
                                     set_title: "Wiki / Docs",
-                                    add_prefix = &gtk::Image { set_icon_name: Some("accessories-dictionary-symbolic"), set_pixel_size: 16 },
+                                    add_prefix = &gtk::Image { set_icon_name: Some("open-book-symbolic"), set_pixel_size: 16 },
                                     #[watch]
                                     set_visible: model.selected_details.as_ref().and_then(|d| d.wiki_url.as_ref()).is_some(),
                                     #[watch]
@@ -1055,7 +1124,7 @@ impl SimpleComponent for DiscoverView {
                                 },
                                 adw::ActionRow {
                                     set_title: "Discord",
-                                    add_prefix = &gtk::Image { set_icon_name: Some("chat-message-new-symbolic"), set_pixel_size: 16 },
+                                    add_prefix = &gtk::Image { set_icon_name: Some("chat-bubbles-text-symbolic"), set_pixel_size: 16 },
                                     #[watch]
                                     set_visible: model.selected_details.as_ref().and_then(|d| d.discord_url.as_ref()).is_some(),
                                     #[watch]
@@ -1230,6 +1299,10 @@ impl SimpleComponent for DiscoverView {
                 VersionDialogOutput::Selected(idx) => DiscoverInput::SelectVersion(idx as u32),
             });
 
+        let description_dialog = DescriptionDialog::builder()
+            .launch(())
+            .forward(sender.input_sender(), |_| unreachable!());
+
         let mut model = DiscoverView {
             search_query: String::new(),
             loading: false,
@@ -1255,6 +1328,7 @@ impl SimpleComponent for DiscoverView {
             install_instance_name: String::new(),
             install_name_entry: None,
             version_dialog,
+            description_dialog,
         };
 
         let popular_grid = model.popular_packs.widget();
@@ -1542,6 +1616,20 @@ impl SimpleComponent for DiscoverView {
             DiscoverInput::CarouselScroll(_pos) => {
                 self.update_active_carousel_color();
             }
+            DiscoverInput::ScreenshotScroll(_pos) => {
+                // Just triggers update/re-evaluation of watches
+            }
+            DiscoverInput::Refresh => {
+                if self.show_details {
+                    if let Some(ref details) = self.selected_details {
+                        sender.input(DiscoverInput::LoadDetails(details.info.slug.clone()));
+                    }
+                } else if self.search_query.is_empty() {
+                    sender.input(DiscoverInput::LoadPopular);
+                } else {
+                    sender.input(DiscoverInput::Search(self.search_query.clone()));
+                }
+            }
             DiscoverInput::OpenVersionDialog => {
                 self.version_dialog.emit(VersionDialogInput::Show(self.available_versions.clone(), self.selected_version_idx));
                 let parent = relm4::main_application().active_window();
@@ -1549,6 +1637,17 @@ impl SimpleComponent for DiscoverView {
             }
             DiscoverInput::OpenUrl(url) => {
                 crate::frontend::utils::open_url(&url);
+            }
+            DiscoverInput::ShowFullDescription => {
+                if let Some(ref details) = self.selected_details {
+                    let body = details.body.clone().unwrap_or_else(|| details.info.description.clone());
+                    self.description_dialog.emit(DescriptionDialogInput::Show {
+                        title: details.info.title.clone(),
+                        body,
+                    });
+                    let parent = relm4::main_application().active_window();
+                    self.description_dialog.widget().present(parent.as_ref());
+                }
             }
         }
     }
