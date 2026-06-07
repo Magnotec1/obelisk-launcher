@@ -7,7 +7,7 @@ use relm4::prelude::*;
 
 #[derive(Debug)]
 pub enum PlaytimeInput {
-    UpdateData(PlaytimeManager, Vec<(String, String, u64)>), // manager, (id, name, seconds)
+    UpdateData(PlaytimeManager, Vec<(String, String, u64, bool)>), // manager, (id, name, seconds, is_detected)
     Refresh,
     ResetRefreshing,
 }
@@ -20,7 +20,7 @@ pub enum PlaytimeOutput {
 pub struct PlaytimeView {
     loading: bool,
     total_seconds: u64,
-    instance_data: Vec<(String, u64, Option<DateTime<Utc>>, usize)>, // name, seconds, last_played, session_count
+    instance_data: Vec<(String, String, u64, Option<DateTime<Utc>>, usize, bool)>, // id, name, seconds, last_played, session_count, is_detected
     recent_sessions: Vec<(String, u64, DateTime<Utc>)>,              // name, duration, end_time
     list_box: gtk::ListBox,
     history_list_box: gtk::ListBox,
@@ -29,11 +29,94 @@ pub struct PlaytimeView {
 fn format_duration(seconds: u64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
+    let secs = seconds % 60;
     if hours > 0 {
         format!("{}h {}m", hours, minutes)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, secs)
     } else {
-        format!("{}m", minutes)
+        format!("{}s", secs)
     }
+}
+
+fn show_playtime_details_dialog(
+    parent: &gtk::Window,
+    name: &str,
+    total_seconds: u64,
+    last_played: Option<DateTime<Utc>>,
+    session_count: usize,
+    is_detected: bool,
+) {
+    let dialog = adw::AlertDialog::builder()
+        .heading(name)
+        .close_response("close")
+        .build();
+    dialog.add_response("close", "Close");
+
+    let container = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(16)
+        .margin_start(16)
+        .margin_end(16)
+        .margin_bottom(16)
+        .build();
+
+    let details_list = gtk::ListBox::new();
+    details_list.set_css_classes(&["boxed-list"]);
+    details_list.set_selection_mode(gtk::SelectionMode::None);
+
+    // Row 1: Status
+    let status_row = adw::ActionRow::new();
+    status_row.set_title("Status");
+    let status_lbl = if is_detected {
+        let label = gtk::Label::new(Some("Detected"));
+        label.add_css_class("success");
+        label
+    } else {
+        let label = gtk::Label::new(Some("Not Detected"));
+        label.add_css_class("dim-label");
+        label
+    };
+    status_row.add_suffix(&status_lbl);
+    details_list.append(&status_row);
+
+    // Row 2: Total Playtime
+    let time_row = adw::ActionRow::new();
+    time_row.set_title("Total Playtime");
+    let time_lbl = gtk::Label::new(Some(&format_duration(total_seconds)));
+    time_lbl.add_css_class("numeric");
+    time_row.add_suffix(&time_lbl);
+    details_list.append(&time_row);
+
+    // Row 3: Last Played
+    if let Some(lp) = last_played {
+        let lp_row = adw::ActionRow::new();
+        lp_row.set_title("Last Played");
+        // Localized/nice formatting for the date
+        let formatted_date = lp.with_timezone(&chrono::Local)
+            .format("%B %e, %Y at %l:%M %p")
+            .to_string();
+        let lp_lbl = gtk::Label::new(Some(&formatted_date));
+        lp_row.add_suffix(&lp_lbl);
+        details_list.append(&lp_row);
+    }
+
+    // Row 4: Total Sessions
+    let sessions_row = adw::ActionRow::new();
+    sessions_row.set_title("Total Sessions");
+    let sessions_lbl = gtk::Label::new(Some(&session_count.to_string()));
+    sessions_row.add_suffix(&sessions_lbl);
+    details_list.append(&sessions_row);
+
+    container.append(&details_list);
+
+    let clamp = adw::Clamp::builder()
+        .maximum_size(450)
+        .child(&container)
+        .build();
+
+    dialog.set_extra_child(Some(&clamp));
+    dialog.choose(parent, None::<&gtk::gio::Cancellable>, |_| {});
 }
 
 impl PlaytimeView {
@@ -43,16 +126,18 @@ impl PlaytimeView {
             self.list_box.remove(&child);
         }
 
-        for (name, seconds, last_played, session_count) in &self.instance_data {
+        for (_id, name, seconds, last_played, session_count, is_detected) in &self.instance_data {
             let row = adw::ActionRow::new();
-            row.set_title(name);
+            if *is_detected {
+                row.set_title(name);
+            } else {
+                row.set_title(&format!("{} (Not Detected)", name));
+                row.add_css_class("dim-label");
+            }
 
             let mut subtitle = format_duration(*seconds);
-            if let Some(lp) = last_played {
-                subtitle.push_str(&format!(" • Last played {}", lp.format("%Y-%m-%d")));
-            }
-            if *session_count > 0 {
-                subtitle.push_str(&format!(" • {} sessions", session_count));
+            if !*is_detected {
+                subtitle.push_str(" • Playtime loaded from file");
             }
             row.set_subtitle(&subtitle);
 
@@ -65,6 +150,31 @@ impl PlaytimeView {
             let label = gtk::Label::new(Some(&format!("{:.1}%", percentage)));
             label.set_css_classes(&["dim-label", "numeric"]);
             row.add_suffix(&label);
+
+            row.set_activatable(true);
+            let name_clone = name.clone();
+            let seconds_clone = *seconds;
+            let last_played_clone = *last_played;
+            let session_count_clone = *session_count;
+            let is_detected_clone = *is_detected;
+
+            let list_box_weak = self.list_box.downgrade();
+            row.connect_activated(move |_| {
+                if let Some(list_box) = list_box_weak.upgrade() {
+                    if let Some(root) = list_box.root() {
+                        if let Some(window) = root.downcast_ref::<gtk::Window>() {
+                            show_playtime_details_dialog(
+                                window,
+                                &name_clone,
+                                seconds_clone,
+                                last_played_clone,
+                                session_count_clone,
+                                is_detected_clone,
+                            );
+                        }
+                    }
+                }
+            });
 
             self.list_box.append(&row);
         }
@@ -85,7 +195,7 @@ impl PlaytimeView {
                 row.set_subtitle(&format!(
                     "{} • {}",
                     format_duration(*duration),
-                    end_time.format("%Y-%m-%d %H:%M")
+                    end_time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
                 ));
 
                 let icon = gtk::Image::from_icon_name("document-open-recent-symbolic");
@@ -167,6 +277,7 @@ impl SimpleComponent for PlaytimeView {
                                             set_halign: gtk::Align::Start,
                                         },
                                     },
+                                    // Refresh button can go here if needed, but none for now
                                 },
                             },
 
@@ -248,23 +359,35 @@ impl SimpleComponent for PlaytimeView {
                 use std::collections::HashMap;
                 let name_map: HashMap<String, String> = data
                     .iter()
-                    .map(|(id, name, _)| (id.clone(), name.clone()))
+                    .map(|(id, name, _, _)| (id.clone(), name.clone()))
                     .collect();
 
                 self.instance_data = data
                     .into_iter()
-                    .map(|(id, name, seconds)| {
+                    .map(|(id, name, seconds, is_detected)| {
+                        let stored_last_played = manager
+                            .instances
+                            .get(&id)
+                            .and_then(|inst_data| inst_data.last_played);
+
+                        let session_count = manager
+                            .instances
+                            .get(&id)
+                            .map(|inst_data| inst_data.session_count)
+                            .unwrap_or(0);
+
                         let instance_sessions: Vec<_> = manager
                             .sessions
                             .iter()
                             .filter(|s| s.instance_id == id)
+                            .cloned()
                             .collect();
 
-                        let last_played = instance_sessions.iter().map(|s| s.end_time).max();
+                        let last_played = stored_last_played.or_else(|| {
+                            instance_sessions.iter().map(|s| s.end_time).max()
+                        });
 
-                        let session_count = instance_sessions.len();
-
-                        (name, seconds, last_played, session_count)
+                        (id, name, seconds, last_played, session_count, is_detected)
                     })
                     .collect();
 
@@ -284,8 +407,8 @@ impl SimpleComponent for PlaytimeView {
                     })
                     .collect();
 
-                self.total_seconds = self.instance_data.iter().map(|(_, s, _, _)| s).sum();
-                self.instance_data.sort_by(|a, b| b.1.cmp(&a.1));
+                self.total_seconds = self.instance_data.iter().map(|(_, _, s, _, _, _)| s).sum();
+                self.instance_data.sort_by(|a, b| b.2.cmp(&a.2));
 
                 self.rebuild_lists();
 

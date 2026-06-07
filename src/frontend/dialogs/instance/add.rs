@@ -1,164 +1,39 @@
 #![allow(unused_assignments)]
 use crate::backend::instance::manager::{create_instance, CreateInstanceOptions, ModLoader};
-use crate::backend::runtime::versions::{
-    fetch_versions, filter_versions, MinecraftVersion, VersionType,
-};
+use crate::backend::runtime::versions::MinecraftVersion;
+use crate::frontend::utils::{VersionSelector, VersionSelectorInput, VersionSelectorOutput};
 use adw::prelude::*;
-use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::path::PathBuf;
-
-// Factory component for version rows in the list
-#[derive(Debug)]
-pub struct VersionRow {
-    id: String,
-    version_type: String,
-    selected: bool,
-}
-
-#[relm4::factory(pub)]
-impl FactoryComponent for VersionRow {
-    type Init = (String, String, bool);
-    type Input = bool;
-    type Output = usize;
-    type CommandOutput = ();
-    type ParentWidget = gtk::ListBox;
-
-    view! {
-        adw::ActionRow {
-            set_title: &self.id,
-            add_prefix = &gtk::Image {
-                set_icon_name: Some("object-select-symbolic"),
-                #[watch]
-                set_visible: self.selected,
-            },
-            add_suffix = &gtk::Label {
-                set_label: &self.version_type,
-                set_css_classes: &["dim-label"],
-            },
-            set_activatable: true,
-            connect_activated[sender, index] => move |_| {
-                let _ = sender.output(index.current_index());
-            }
-        }
-    }
-
-    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        Self {
-            id: init.0,
-            version_type: init.1,
-            selected: init.2,
-        }
-    }
-
-    fn update(&mut self, msg: Self::Input, _sender: FactorySender<Self>) {
-        self.selected = msg;
-    }
-}
 
 pub struct AddInstanceDialog {
     visible: bool,
     instances_path: Option<PathBuf>,
     name: String,
     selected_version: Option<String>,
+    selected_version_data: Option<MinecraftVersion>,
     error_message: Option<String>,
+    target_group: Option<String>,
 
-    // Version data
-    all_versions: Vec<MinecraftVersion>,
-    filtered_versions: Vec<MinecraftVersion>,
-    version_list: FactoryVecDeque<VersionRow>,
-    versions_loading: bool,
-    versions_error: Option<String>,
-
-    // Models for ComboRows
-
-    // Filter toggles
-    show_releases: bool,
-    show_snapshots: bool,
-    show_betas: bool,
-    show_alphas: bool,
-    show_experiments: bool,
-
-    // Search filter
-    search_text: String,
+    version_selector: Controller<VersionSelector>,
 
     // UI Widgets for manual updates
     name_entry: Option<adw::EntryRow>,
-    search_entry: Option<gtk::SearchEntry>,
 }
 
 #[derive(Debug)]
 pub enum AddInstanceInput {
-    Open,
+    Open(Option<String>),
     Close,
     SetName(String),
-    SelectVersion(usize),
+    SelectVersion(String, Option<MinecraftVersion>),
     Create,
     UpdateInstancesPath(Option<PathBuf>),
-
-    // Version loading
-    VersionsLoaded(Result<Vec<MinecraftVersion>, String>),
-
-    // Filters
-    ToggleReleases(bool),
-    ToggleSnapshots(bool),
-    ToggleBetas(bool),
-    ToggleAlphas(bool),
-    ToggleExperiments(bool),
-    SearchChanged(String),
 }
 
 #[derive(Debug)]
 pub enum AddInstanceOutput {
-    InstanceCreated(MinecraftVersion, PathBuf),
-}
-
-impl AddInstanceDialog {
-    fn active_filters(&self) -> Vec<VersionType> {
-        let mut types = Vec::new();
-        if self.show_releases {
-            types.push(VersionType::Release);
-        }
-        if self.show_snapshots {
-            types.push(VersionType::Snapshot);
-        }
-        if self.show_betas {
-            types.push(VersionType::OldBeta);
-        }
-        if self.show_alphas {
-            types.push(VersionType::OldAlpha);
-        }
-        if self.show_experiments {
-            types.push(VersionType::Experiment);
-        }
-        types
-    }
-
-    fn rebuild_version_list(&mut self) {
-        let types = self.active_filters();
-        let mut filtered = filter_versions(&self.all_versions, &types);
-
-        // Apply text search
-        if !self.search_text.is_empty() {
-            let query = self.search_text.to_lowercase();
-            filtered.retain(|v| v.id.to_lowercase().contains(&query));
-        }
-
-        self.filtered_versions = filtered;
-
-        let mut guard = self.version_list.guard();
-        guard.clear();
-
-        // Limit to 100 items to prevent UI freeze
-        for v in self.filtered_versions.iter().take(100) {
-            let is_selected = self.selected_version.as_ref() == Some(&v.id);
-            guard.push_back((
-                v.id.clone(),
-                v.version_type.as_str().to_string(),
-                is_selected,
-            ));
-        }
-    }
+    InstanceCreated(MinecraftVersion, PathBuf, Option<String>),
 }
 
 #[relm4::component(pub)]
@@ -211,107 +86,8 @@ impl SimpleComponent for AddInstanceDialog {
                                 "Select a version below".to_string()
                             }),
 
-                            // Search bar with filter button
-                            gtk::Box {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_spacing: 6,
-                                set_margin_bottom: 8,
-
-                                #[name = "search_entry"]
-                                gtk::SearchEntry {
-                                    set_hexpand: true,
-                                    set_placeholder_text: Some("Search versions..."),
-                                    connect_search_changed[sender] => move |entry| {
-                                        sender.input(AddInstanceInput::SearchChanged(entry.text().to_string()));
-                                    },
-                                },
-
-                                gtk::MenuButton {
-                                    set_icon_name: "funnel-symbolic",
-                                    set_tooltip_text: Some("Filter version types"),
-                                    set_valign: gtk::Align::Center,
-                                    #[wrap(Some)]
-                                    set_popover = &gtk::Popover {
-                                        set_autohide: true,
-                                        #[wrap(Some)]
-                                        set_child = &gtk::Box {
-                                            set_orientation: gtk::Orientation::Vertical,
-                                            set_spacing: 4,
-                                            set_margin_all: 8,
-
-                                            gtk::CheckButton {
-                                                set_label: Some("Releases"),
-                                                set_active: true,
-                                                connect_toggled[sender] => move |btn| {
-                                                    sender.input(AddInstanceInput::ToggleReleases(btn.is_active()));
-                                                },
-                                            },
-                                            gtk::CheckButton {
-                                                set_label: Some("Snapshots"),
-                                                set_active: false,
-                                                connect_toggled[sender] => move |btn| {
-                                                    sender.input(AddInstanceInput::ToggleSnapshots(btn.is_active()));
-                                                },
-                                            },
-                                            gtk::CheckButton {
-                                                set_label: Some("Beta"),
-                                                set_active: false,
-                                                connect_toggled[sender] => move |btn| {
-                                                    sender.input(AddInstanceInput::ToggleBetas(btn.is_active()));
-                                                },
-                                            },
-                                            gtk::CheckButton {
-                                                set_label: Some("Alpha"),
-                                                set_active: false,
-                                                connect_toggled[sender] => move |btn| {
-                                                    sender.input(AddInstanceInput::ToggleAlphas(btn.is_active()));
-                                                },
-                                            },
-                                            gtk::CheckButton {
-                                                set_label: Some("Experiments"),
-                                                set_active: false,
-                                                connect_toggled[sender] => move |btn| {
-                                                    sender.input(AddInstanceInput::ToggleExperiments(btn.is_active()));
-                                                },
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-
-                            // Loading indicator
-                            gtk::Spinner {
-                                #[watch]
-                                set_visible: model.versions_loading,
-                                set_spinning: true,
-                                set_halign: gtk::Align::Center,
-                                set_margin_all: 20,
-                            },
-
-                            // Error label
-                            gtk::Label {
-                                #[watch]
-                                set_visible: model.versions_error.is_some() && !model.versions_loading,
-                                #[watch]
-                                set_label: model.versions_error.as_deref().unwrap_or(""),
-                                set_css_classes: &["error"],
-                                set_wrap: true,
-                            },
-
-                            // Version list
-                            gtk::ScrolledWindow {
-                                set_hscrollbar_policy: gtk::PolicyType::Never,
-                                set_min_content_height: 200,
-                                set_max_content_height: 300,
-                                #[watch]
-                                set_visible: !model.versions_loading && model.versions_error.is_none(),
-
-                                #[local_ref]
-                                version_list_box -> gtk::ListBox {
-                                    set_css_classes: &["boxed-list"],
-                                    set_selection_mode: gtk::SelectionMode::None,
-                                },
-                            },
+                            #[local_ref]
+                            version_selector_widget -> gtk::Box {},
                         },
 
                         // Error + create button
@@ -352,67 +128,53 @@ impl SimpleComponent for AddInstanceDialog {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let version_list = FactoryVecDeque::builder()
-            .launch(gtk::ListBox::new())
-            .forward(sender.input_sender(), AddInstanceInput::SelectVersion);
+        let version_selector = VersionSelector::builder()
+            .launch(())
+            .forward(sender.input_sender(), |output| match output {
+                VersionSelectorOutput::VersionSelected { version, mc_version } => {
+                    AddInstanceInput::SelectVersion(version, mc_version)
+                }
+            });
 
         let model = AddInstanceDialog {
             visible: false,
             instances_path,
             name: String::new(),
             selected_version: None,
+            selected_version_data: None,
             error_message: None,
-            all_versions: Vec::new(),
-            filtered_versions: Vec::new(),
-            version_list,
-            versions_loading: false,
-            versions_error: None,
-            show_releases: true,
-            show_snapshots: false,
-            show_betas: false,
-            show_alphas: false,
-            show_experiments: false,
-            search_text: String::new(),
+            target_group: None,
+            version_selector,
             name_entry: None,
-            search_entry: None,
         };
 
-        let version_list_box = model.version_list.widget();
+        let version_selector_widget = model.version_selector.widget();
         let widgets = view_output!();
 
         let mut model = model;
         model.name_entry = Some(widgets.name_entry.clone());
-        model.search_entry = Some(widgets.search_entry.clone());
 
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            AddInstanceInput::Open => {
+            AddInstanceInput::Open(group) => {
                 self.visible = true;
                 self.name.clear();
+                self.target_group = group;
                 if let Some(entry) = &self.name_entry {
                     entry.set_text("");
                 }
                 self.selected_version = None;
-                if let Some(entry) = &self.search_entry {
-                    entry.set_text("");
-                }
+                self.selected_version_data = None;
 
-                // Fetch versions if not already loaded
-                if self.all_versions.is_empty() && !self.versions_loading {
-                    self.versions_loading = true;
-                    self.versions_error = None;
-
-                    let sender_clone = sender.input_sender().clone();
-                    std::thread::spawn(move || {
-                        let result = fetch_versions();
-                        sender_clone
-                            .send(AddInstanceInput::VersionsLoaded(result))
-                            .ok();
-                    });
-                }
+                self.version_selector.emit(VersionSelectorInput::Load {
+                    uid: "net.minecraft".to_string(),
+                    mc_version: None,
+                    current_version: None,
+                    selected_version: None,
+                });
             }
             AddInstanceInput::Close => {
                 self.visible = false;
@@ -421,58 +183,13 @@ impl SimpleComponent for AddInstanceDialog {
                 self.name = name;
                 self.error_message = None;
             }
-            AddInstanceInput::SelectVersion(index) => {
-                if let Some(v) = self.filtered_versions.get(index) {
-                    self.selected_version = Some(v.id.clone());
-                    self.error_message = None;
-                    for i in 0..self.version_list.len() {
-                        if let Some(row) = self.version_list.get(i) {
-                            let is_sel = row.id == v.id;
-                            self.version_list.send(i, is_sel);
-                        }
-                    }
-                }
+            AddInstanceInput::SelectVersion(version, mc_version) => {
+                self.selected_version = Some(version);
+                self.selected_version_data = mc_version;
+                self.error_message = None;
             }
-
             AddInstanceInput::UpdateInstancesPath(path) => {
                 self.instances_path = path;
-            }
-            AddInstanceInput::VersionsLoaded(result) => {
-                self.versions_loading = false;
-                match result {
-                    Ok(versions) => {
-                        self.all_versions = versions;
-                        self.versions_error = None;
-                        self.rebuild_version_list();
-                    }
-                    Err(e) => {
-                        self.versions_error = Some(e);
-                    }
-                }
-            }
-            AddInstanceInput::ToggleReleases(active) => {
-                self.show_releases = active;
-                self.rebuild_version_list();
-            }
-            AddInstanceInput::ToggleSnapshots(active) => {
-                self.show_snapshots = active;
-                self.rebuild_version_list();
-            }
-            AddInstanceInput::ToggleBetas(active) => {
-                self.show_betas = active;
-                self.rebuild_version_list();
-            }
-            AddInstanceInput::ToggleAlphas(active) => {
-                self.show_alphas = active;
-                self.rebuild_version_list();
-            }
-            AddInstanceInput::ToggleExperiments(active) => {
-                self.show_experiments = active;
-                self.rebuild_version_list();
-            }
-            AddInstanceInput::SearchChanged(text) => {
-                self.search_text = text;
-                self.rebuild_version_list();
             }
             AddInstanceInput::Create => {
                 let Some(instances_path) = &self.instances_path else {
@@ -497,19 +214,13 @@ impl SimpleComponent for AddInstanceDialog {
                     loader_version: None,
                 };
 
-                let selected_v_data = self
-                    .filtered_versions
-                    .iter()
-                    .find(|v| v.id == *version)
-                    .cloned();
-
                 match create_instance(instances_path, options) {
                     Ok(path) => {
                         self.visible = false;
                         self.error_message = None;
-                        if let Some(v) = selected_v_data {
+                        if let Some(v) = self.selected_version_data.clone() {
                             sender
-                                .output(AddInstanceOutput::InstanceCreated(v, path))
+                                .output(AddInstanceOutput::InstanceCreated(v, path, self.target_group.clone()))
                                 .unwrap();
                         }
                     }

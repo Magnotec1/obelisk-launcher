@@ -14,6 +14,8 @@ pub enum ContextMenuOutput {
     RenameGroup(String),
     DeleteGroup(String),
     ShareInstance(usize),
+    AddInstance(Option<String>),
+    CreateGroup,
 }
 
 /// Build a flat menu button without icon.
@@ -26,7 +28,7 @@ pub fn build_flat_menu_button(label: &str) -> gtk::Button {
         .label(label)
         .hexpand(true)
         .halign(gtk::Align::Start)
-        .margin_start(8)
+        .margin_start(2)
         .margin_end(8)
         .build();
     btn.set_child(Some(&lbl));
@@ -65,7 +67,10 @@ pub fn create_instance_popover(
 
     // Delete Section
     let delete_section = gtk::gio::Menu::new();
-    delete_section.append(Some("Delete"), Some("pop.delete"));
+    let delete_item = gtk::gio::MenuItem::new(None, None);
+    use relm4::gtk::glib::prelude::ToVariant;
+    delete_item.set_attribute_value("custom", Some(&"delete-instance-btn".to_variant()));
+    delete_section.append_item(&delete_item);
     menu.append_section(None, &delete_section);
 
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
@@ -74,6 +79,18 @@ pub fn create_instance_popover(
     if let Some(p) = parent {
         popover.set_parent(p);
     }
+
+    let delete_btn = build_flat_menu_button("Delete");
+    delete_btn.add_css_class("destructive-action");
+    {
+        let s = sender.clone();
+        let pop = popover.clone();
+        delete_btn.connect_clicked(move |_| {
+            pop.popdown();
+            s(ContextMenuOutput::DeleteInstance(flat_idx));
+        });
+    }
+    popover.add_child(&delete_btn, "delete-instance-btn");
 
     let action_group = gtk::gio::SimpleActionGroup::new();
 
@@ -105,11 +122,6 @@ pub fn create_instance_popover(
     let s = sender.clone();
     let act = gtk::gio::SimpleAction::new("remove_group", None);
     act.connect_activate(move |_, _| s(ContextMenuOutput::RemoveFromGroup(flat_idx)));
-    action_group.add_action(&act);
-
-    let s = sender.clone();
-    let act = gtk::gio::SimpleAction::new("delete", None);
-    act.connect_activate(move |_, _| s(ContextMenuOutput::DeleteInstance(flat_idx)));
     action_group.add_action(&act);
 
     popover.insert_action_group("pop", Some(&action_group));
@@ -153,6 +165,7 @@ pub fn create_group_popover(
 
     // Delete Group
     let delete_btn = build_flat_menu_button("Delete Group");
+    delete_btn.add_css_class("destructive-action");
     {
         let s = sender.clone();
         let pop = popover.clone();
@@ -166,4 +179,47 @@ pub fn create_group_popover(
 
     popover.set_child(Some(&menu_box));
     popover
+}
+
+pub fn create_library_popover(
+    target_group: Option<String>,
+    sender: impl Fn(ContextMenuOutput) + 'static + Clone,
+    parent: Option<&impl IsA<gtk::Widget>>,
+) -> gtk::Popover {
+    let menu = gtk::gio::Menu::new();
+    let main_section = gtk::gio::Menu::new();
+
+    main_section.append(Some("Add Instance"), Some("lib.add_instance"));
+
+    // Only show "Add Group" if not inside a group
+    if target_group.is_none() {
+        main_section.append(Some("Add Group"), Some("lib.add_group"));
+    }
+
+    menu.append_section(None, &main_section);
+
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_has_arrow(true);
+
+    if let Some(p) = parent {
+        popover.set_parent(p);
+    }
+
+    let action_group = gtk::gio::SimpleActionGroup::new();
+
+    let s = sender.clone();
+    let act = gtk::gio::SimpleAction::new("add_instance", None);
+    let tg = target_group.clone();
+    act.connect_activate(move |_, _| s(ContextMenuOutput::AddInstance(tg.clone())));
+    action_group.add_action(&act);
+
+    if target_group.is_none() {
+        let s = sender.clone();
+        let act = gtk::gio::SimpleAction::new("add_group", None);
+        act.connect_activate(move |_, _| s(ContextMenuOutput::CreateGroup));
+        action_group.add_action(&act);
+    }
+
+    popover.insert_action_group("lib", Some(&action_group));
+    popover.upcast::<gtk::Popover>()
 }

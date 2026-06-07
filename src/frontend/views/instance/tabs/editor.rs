@@ -22,7 +22,9 @@ pub enum EditorTabOutput {
     ExploreMods,
     EditComponents,
     EditResourcePacks,
+    ExploreResourcePacks,
     EditShaderPacks,
+    ExploreShaderPacks,
     EditWorlds,
     OpenScreenshotsFolder,
 }
@@ -219,13 +221,26 @@ impl Component for InstanceEditorTab {
                     set_subtitle: &format!("{} resource packs installed", model.instance.as_ref().map(|inst| inst.resource_packs.len()).unwrap_or(0)),
                     set_subtitle_lines: 1,
                     set_activatable: false,
-                    add_suffix = &gtk::Button {
-                        set_icon_name: "document-edit-symbolic",
-                        set_tooltip_text: Some("Edit resource packs"),
-                        set_css_classes: &["flat", "circular"],
+                    add_suffix = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 6,
                         set_valign: gtk::Align::Center,
-                        connect_clicked[sender] => move |_| {
-                            sender.output(EditorTabOutput::EditResourcePacks).unwrap();
+
+                        gtk::Button {
+                            set_icon_name: "web-browser-symbolic",
+                            set_tooltip_text: Some("Explore Resource Packs (Modrinth)"),
+                            set_css_classes: &["flat", "circular"],
+                            connect_clicked[sender] => move |_| {
+                                sender.output(EditorTabOutput::ExploreResourcePacks).unwrap();
+                            },
+                        },
+                        gtk::Button {
+                            set_icon_name: "document-edit-symbolic",
+                            set_tooltip_text: Some("Edit resource packs"),
+                            set_css_classes: &["flat", "circular"],
+                            connect_clicked[sender] => move |_| {
+                                sender.output(EditorTabOutput::EditResourcePacks).unwrap();
+                            },
                         },
                     },
                 },
@@ -237,13 +252,26 @@ impl Component for InstanceEditorTab {
                     set_subtitle: &format!("{} shader packs installed", model.instance.as_ref().map(|inst| inst.shader_packs.len()).unwrap_or(0)),
                     set_subtitle_lines: 1,
                     set_activatable: false,
-                    add_suffix = &gtk::Button {
-                        set_icon_name: "document-edit-symbolic",
-                        set_tooltip_text: Some("Edit shader packs"),
-                        set_css_classes: &["flat", "circular"],
+                    add_suffix = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 6,
                         set_valign: gtk::Align::Center,
-                        connect_clicked[sender] => move |_| {
-                            sender.output(EditorTabOutput::EditShaderPacks).unwrap();
+
+                        gtk::Button {
+                            set_icon_name: "web-browser-symbolic",
+                            set_tooltip_text: Some("Explore Shader Packs (Modrinth)"),
+                            set_css_classes: &["flat", "circular"],
+                            connect_clicked[sender] => move |_| {
+                                sender.output(EditorTabOutput::ExploreShaderPacks).unwrap();
+                            },
+                        },
+                        gtk::Button {
+                            set_icon_name: "document-edit-symbolic",
+                            set_tooltip_text: Some("Edit shader packs"),
+                            set_css_classes: &["flat", "circular"],
+                            connect_clicked[sender] => move |_| {
+                                sender.output(EditorTabOutput::EditShaderPacks).unwrap();
+                            },
                         },
                     },
                 },

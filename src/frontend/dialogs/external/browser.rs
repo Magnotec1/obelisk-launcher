@@ -1044,27 +1044,31 @@ impl Component for UnifiedBrowser {
                                                     // Description
                                                     adw::PreferencesGroup {
                                                         set_title: "Description",
-                                                        gtk::ScrolledWindow {
-                                                            set_hscrollbar_policy: gtk::PolicyType::Never,
-                                                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
-                                                            set_min_content_height: 100,
-                                                            set_max_content_height: 250,
-                                                            set_propagate_natural_height: true,
-                                                            set_hexpand: true,
-                                                            set_halign: gtk::Align::Fill,
+
+                                                        gtk::Box {
+                                                            set_orientation: gtk::Orientation::Vertical,
+                                                            set_spacing: 6,
+                                                            set_css_classes: &["card"],
 
                                                             gtk::Label {
                                                                 #[watch]
                                                                 set_label: &escape(model.selected_project.as_ref().map(|p| p.description.as_str()).unwrap_or("")),
                                                                 set_wrap: true,
                                                                 set_halign: gtk::Align::Fill,
-                                                                set_valign: gtk::Align::Fill,
-                                                                set_hexpand: true,
                                                                 set_xalign: 0.0,
-                                                                set_yalign: 0.0,
-                                                                set_margin_all: 12,
                                                                 set_use_markup: true,
+                                                                set_margin_all: 12,
                                                             },
+
+                                                            gtk::Button {
+                                                                set_label: "More Description...",
+                                                                set_halign: gtk::Align::Center,
+                                                                set_margin_bottom: 16,
+                                                                set_css_classes: &["circular", "button-more-description"],
+                                                                #[watch]
+                                                                set_visible: model.selected_project.as_ref().map(|p| p.body.is_some()).unwrap_or(false),
+                                                                connect_clicked => BrowserInput::ShowFullDescription,
+                                                            }
                                                         }
                                                     },
 

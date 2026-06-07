@@ -85,6 +85,7 @@ pub enum OverviewInput {
     SetSortBy(SortBy),
     SetLoading(bool),
     ClearTextureCache(PathBuf),
+    ShowLibraryContextMenu(Option<String>, f64, f64),
 }
 
 #[derive(Debug)]
@@ -102,7 +103,7 @@ pub enum OverviewOutput {
     /// Create a new group.
     CreateGroup,
     /// Trigger "Add Instance" dialog.
-    AddInstance,
+    AddInstance(Option<String>),
     /// Rename a group.
     RenameGroup(String),
     /// Delete a group.
@@ -146,6 +147,8 @@ pub struct OverviewGrid {
     current_view: GridView,
     root_flow_box: gtk::FlowBox,
     group_flow_box: gtk::FlowBox,
+    root_scrolled: gtk::ScrolledWindow,
+    group_scrolled: gtk::ScrolledWindow,
     nav_stack: gtk::Stack,
     layout_mode: LayoutMode,
     sort_by: SortBy,
@@ -214,6 +217,7 @@ impl SimpleComponent for OverviewGrid {
                             set_hexpand: true,
                             set_vexpand: true,
 
+                            #[name = "root_scrolled"]
                             gtk::ScrolledWindow {
                                 set_vexpand: true,
                                 set_hexpand: true,
@@ -264,12 +268,13 @@ impl SimpleComponent for OverviewGrid {
                             }
                         },
 
-                        add_named[Some("group")] = &gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
+                        add_named[Some("group")] = &gtk::Stack {
                             set_hexpand: true,
                             set_vexpand: true,
+                            set_transition_type: gtk::StackTransitionType::Crossfade,
 
-                            gtk::ScrolledWindow {
+                            #[name = "group_scrolled"]
+                            add_named[Some("content")] = &gtk::ScrolledWindow {
                                 set_vexpand: true,
                                 set_hexpand: true,
                                 set_hscrollbar_policy: gtk::PolicyType::Never,
@@ -317,10 +322,26 @@ impl SimpleComponent for OverviewGrid {
                                     }
                                 }
                             },
+
+                            #[name = "group_empty_page"]
+                            add_named[Some("empty")] = &adw::StatusPage {
+                                set_title: "Folder is Empty",
+                                set_description: Some("Move instances here to organize your library!"),
+                                set_icon_name: Some("folder-open-symbolic"),
+                                set_vexpand: true,
+                            },
+
+                            #[watch]
+                            set_visible_child_name: if model.is_current_group_empty() {
+                                "empty"
+                            } else {
+                                "content"
+                            },
                         },
                     }
                 },
 
+                #[name = "root_empty_page"]
                 add_named[Some("empty")] = &adw::StatusPage {
                     set_title: "No Instances Found",
                     set_description: Some("Create a new instance to get started!"),
@@ -333,7 +354,7 @@ impl SimpleComponent for OverviewGrid {
                         set_halign: gtk::Align::Center,
                         set_css_classes: &["suggested-action", "pill"],
                         connect_clicked[sender] => move |_| {
-                            sender.output(OverviewOutput::AddInstance).unwrap();
+                            sender.output(OverviewOutput::AddInstance(None)).unwrap();
                         }
                     }
                 },
@@ -379,6 +400,8 @@ impl SimpleComponent for OverviewGrid {
             current_view: GridView::Root,
             root_flow_box: root_flow_box.clone(),
             group_flow_box: group_flow_box.clone(),
+            root_scrolled: gtk::ScrolledWindow::new(), // placeholder, set after view_output!
+            group_scrolled: gtk::ScrolledWindow::new(), // placeholder, set after view_output!
             nav_stack: nav_stack.clone(),
             layout_mode,
             sort_by,
@@ -389,12 +412,106 @@ impl SimpleComponent for OverviewGrid {
         };
 
         let widgets = view_output!();
+
+        // Store real scrolled window references after widget tree is built
+        let mut model = model;
+        model.root_scrolled = widgets.root_scrolled.clone();
+        model.group_scrolled = widgets.group_scrolled.clone();
+        let model = model;
+
+        let root_click = gtk::GestureClick::new();
+        root_click.set_button(3); // Right click
+        {
+            let s = sender.clone();
+            root_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                s.input(OverviewInput::ShowLibraryContextMenu(None, x, y));
+            });
+        }
+        widgets.root_scrolled.add_controller(root_click);
+
+        let group_click = gtk::GestureClick::new();
+        group_click.set_button(3); // Right click
+        {
+            let s = sender.clone();
+            group_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                s.input(OverviewInput::ShowLibraryContextMenu(Some(String::new()), x, y));
+            });
+        }
+        widgets.group_scrolled.add_controller(group_click);
+
+        let root_empty_click = gtk::GestureClick::new();
+        root_empty_click.set_button(3); // Right click
+        {
+            let s = sender.clone();
+            root_empty_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                s.input(OverviewInput::ShowLibraryContextMenu(None, x, y));
+            });
+        }
+        widgets.root_empty_page.add_controller(root_empty_click);
+
+        let group_empty_click = gtk::GestureClick::new();
+        group_empty_click.set_button(3); // Right click
+        {
+            let s = sender.clone();
+            group_empty_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                s.input(OverviewInput::ShowLibraryContextMenu(Some(String::new()), x, y));
+            });
+        }
+        widgets.group_empty_page.add_controller(group_empty_click);
+
         ComponentParts { model, widgets }
      }
  
      fn update(&mut self, msg: OverviewInput, sender: ComponentSender<Self>) {
-         match msg {
-             OverviewInput::Rebuild(instances, groups, statuses) => {
+          match msg {
+              OverviewInput::ShowLibraryContextMenu(mut target_group, x, y) => {
+                  if target_group.is_some() {
+                      if let GridView::Group(ref gname) = self.current_view {
+                          target_group = Some(gname.clone());
+                      } else {
+                          target_group = None;
+                      }
+                  }
+
+                  let parent = if target_group.is_some() {
+                      self.group_flow_box.clone().upcast::<gtk::Widget>()
+                  } else {
+                      self.root_flow_box.clone().upcast::<gtk::Widget>()
+                  };
+
+                  let s = sender.clone();
+                  let popover = helpers::create_library_popover(
+                      target_group.clone(),
+                      move |out| {
+                          match out {
+                              helpers::ContextMenuOutput::AddInstance(tg) => {
+                                  s.output(OverviewOutput::AddInstance(tg)).ok();
+                              }
+                              helpers::ContextMenuOutput::CreateGroup => {
+                                  s.output(OverviewOutput::CreateGroup).ok();
+                              }
+                              _ => {}
+                          }
+                      },
+                      Some(&parent),
+                  );
+
+                  // Use the scrolled window as source_widget so that x,y (which
+                  // come from a gesture on the scrolled window) are correctly
+                  // translated into the popover parent's (flow box) coordinate space.
+                  let source = if target_group.is_some() {
+                      self.group_scrolled.upcast_ref::<gtk::Widget>()
+                  } else {
+                      self.root_scrolled.upcast_ref::<gtk::Widget>()
+                  };
+                  crate::frontend::utils::configure_and_show_popover(&popover, source, x, y);
+                  self.popovers.borrow_mut().push(popover);
+              }
+              OverviewInput::Rebuild(instances, groups, statuses) => {
                  self.instances = instances;
                  self.groups = groups;
                  self.statuses = statuses;
@@ -488,6 +605,22 @@ impl SimpleComponent for OverviewGrid {
 // ─── Grid builder ─────────────────────────────────────────────────────────────
 
 impl OverviewGrid {
+    fn is_current_group_empty(&self) -> bool {
+        if let GridView::Group(ref gname) = self.current_view {
+            if let Some(info) = self.groups.groups.get(gname) {
+                let count = self.instances
+                    .iter()
+                    .filter(|inst| {
+                        let folder = inst.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        info.instances.contains(folder)
+                    })
+                    .count();
+                return count == 0;
+            }
+        }
+        false
+    }
+
     fn sort_instances(&self, list: &mut Vec<(usize, &Instance)>) {
         match self.sort_by {
             SortBy::Alphabetical => {
@@ -1063,20 +1196,12 @@ impl OverviewGrid {
                     if let Some(pt) =
                         w_ref3.compute_point(mb, &gtk::graphene::Point::new(x as f32, y as f32))
                     {
-                        pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-                            pt.x() as i32,
-                            pt.y() as i32,
-                            1,
-                            1,
-                        )));
-                    } else {
-                        pop.set_pointing_to(None);
+                        crate::frontend::utils::configure_and_show_popover(&pop, mb, pt.x() as f64, pt.y() as f64);
                     }
                 } else {
-                    pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                    let parent = w_ref3.upcast_ref::<gtk::Widget>();
+                    crate::frontend::utils::configure_and_show_popover(&pop, parent, x, y);
                 }
-
-                pop.popup();
             });
         }
         widget.add_controller(click_gesture);
@@ -1140,20 +1265,12 @@ impl OverviewGrid {
                     if let Some(pt) =
                         w_ref3.compute_point(mb, &gtk::graphene::Point::new(x as f32, y as f32))
                     {
-                        pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-                            pt.x() as i32,
-                            pt.y() as i32,
-                            1,
-                            1,
-                        )));
-                    } else {
-                        pop.set_pointing_to(None);
+                        crate::frontend::utils::configure_and_show_popover(&pop, mb, pt.x() as f64, pt.y() as f64);
                     }
                 } else {
-                    pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                    let parent = w_ref3.upcast_ref::<gtk::Widget>();
+                    crate::frontend::utils::configure_and_show_popover(&pop, parent, x, y);
                 }
-
-                pop.popup();
             });
         }
         widget.add_controller(click_gesture);

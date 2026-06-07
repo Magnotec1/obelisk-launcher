@@ -163,10 +163,11 @@ pub enum AppMsg {
     AssetSubpageChanged(Option<String>),
     OpenPlaytime,
     RefreshPlaytime,
-    PlaytimeDataReady(PlaytimeManager, Vec<(String, String, u64)>), // manager, (id, name, seconds)
+    PlaytimeDataReady(PlaytimeManager, Vec<(String, String, u64, bool)>), // manager, (id, name, seconds, is_detected)
     ConfigUpdated(Config),
     SelectInstance(usize),
-    AddInstance,
+    AddInstance(Option<String>),
+    HeaderAddInstance,
     RefreshInstances,
     RefreshSelectedInstance,
     SelectedInstanceUpdated(Instance),
@@ -192,12 +193,12 @@ pub enum AppMsg {
     ModLoaderOutput(ModLoaderDialogOutput),
     ComponentEditorOutput(ComponentEditorOutput),
     InstallBrowserItems(EditorType, Vec<(String, String)>), // (EditorType, (Project ID, Version ID))
-    ModrinthInstallResult(Result<usize, String>), // Number of mods installed or error
+    ModrinthInstallResult(EditorType, Result<usize, String>), // Type and number of items installed or error
 
     // Instance management
     RenameInstanceRequest(usize),
     DeleteInstanceRequest(usize),
-    InstanceCreated(MinecraftVersion, std::path::PathBuf),
+    InstanceCreated(MinecraftVersion, std::path::PathBuf, Option<String>),
     ConfirmDelete(usize),
     ConfirmRename(usize, String),
     InstancesUpdated(Vec<Instance>),
@@ -407,7 +408,9 @@ impl AppModel {
             EditorTabOutput::ExploreMods => sender.input(AppMsg::BrowseModrinth(EditorType::Mods)),
             EditorTabOutput::EditComponents => sender.input(AppMsg::EditComponents),
             EditorTabOutput::EditResourcePacks => sender.input(AppMsg::EditResourcePacks),
+            EditorTabOutput::ExploreResourcePacks => sender.input(AppMsg::BrowseModrinth(EditorType::ResourcePacks)),
             EditorTabOutput::EditShaderPacks => sender.input(AppMsg::EditShaderPacks),
+            EditorTabOutput::ExploreShaderPacks => sender.input(AppMsg::BrowseModrinth(EditorType::ShaderPacks)),
             EditorTabOutput::EditWorlds => sender.input(AppMsg::EditWorlds),
             EditorTabOutput::OpenScreenshotsFolder => sender.input(AppMsg::OpenScreenshotsFolder),
             EditorTabOutput::OpenJavaSelector => sender.input(AppMsg::OpenJavaSelector),
@@ -797,13 +800,15 @@ impl SimpleComponent for AppModel {
                                                             },
                                                             connect_clicked[sender, add_popover] => move |_| {
                                                                 add_popover.popdown();
-                                                                sender.input(AppMsg::AddInstance);
+                                                                sender.input(AppMsg::HeaderAddInstance);
                                                             },
                                                         },
 
                                                         gtk::Button {
                                                             set_has_frame: false,
                                                             set_css_classes: &["flat", "menu-btn"],
+                                                            #[watch]
+                                                            set_visible: model.current_folder.is_none(),
                                                             #[wrap(Some)]
                                                             set_child = &gtk::Box {
                                                                 set_orientation: gtk::Orientation::Horizontal,
@@ -1230,8 +1235,8 @@ impl SimpleComponent for AppModel {
         let add_instance_dialog = AddInstanceDialog::builder()
             .launch(config.instances_path.clone())
             .forward(sender.input_sender(), |msg| match msg {
-                AddInstanceOutput::InstanceCreated(version, path) => {
-                    AppMsg::InstanceCreated(version, path)
+                AddInstanceOutput::InstanceCreated(version, path, group) => {
+                    AppMsg::InstanceCreated(version, path, group)
                 }
             });
 
@@ -1597,7 +1602,7 @@ impl SimpleComponent for AppModel {
                 }
                 OverviewOutput::ShareInstance(idx) => _sender.input(AppMsg::ShareInstance(idx)),
                 OverviewOutput::LayoutModeChanged(mode) => self.overview_layout = mode,
-                OverviewOutput::AddInstance => _sender.input(AppMsg::AddInstance),
+                OverviewOutput::AddInstance(tg) => _sender.input(AppMsg::AddInstance(tg)),
                 OverviewOutput::CreateGroup => _sender.input(AppMsg::CreateGroupRequest),
                 OverviewOutput::FolderChanged(folder_opt) => {
                     self.current_folder = folder_opt;
@@ -2024,19 +2029,14 @@ impl SimpleComponent for AppModel {
 
                     for inst in &instances {
                         seen_ids.insert(inst.id.clone());
-                        let playtime = manager
-                            .instance_playtime
-                            .get(&inst.id)
-                            .cloned()
-                            .unwrap_or(0);
-                        instance_data.push((inst.id.clone(), inst.name.clone(), playtime));
+                        let playtime = manager.get_instance_playtime(&inst.id);
+                        instance_data.push((inst.id.clone(), inst.name.clone(), playtime, true));
                     }
 
                     // Include instances from history that are no longer on disk
-                    for (id, playtime) in &manager.instance_playtime {
+                    for (id, data) in &manager.instances {
                         if !seen_ids.contains(id) {
-                            // Use ID as name for missing instances
-                            instance_data.push((id.clone(), id.clone(), *playtime));
+                            instance_data.push((id.clone(), data.name.clone(), data.playtime, false));
                         }
                     }
 
@@ -2334,11 +2334,12 @@ impl SimpleComponent for AppModel {
                     _sender.input(AppMsg::RefreshSelectedInstance);
                 }
             }
-            AppMsg::AddInstance => {
-                self.add_instance_dialog.emit(AddInstanceInput::Open);
-                self.add_instance_dialog
-                    .widget()
-                    .present(Some(&self.window));
+            AppMsg::AddInstance(group) => {
+                self.add_instance_dialog.emit(AddInstanceInput::Open(group));
+                self.add_instance_dialog.widget().present(Some(&self.window));
+            }
+            AppMsg::HeaderAddInstance => {
+                _sender.input(AppMsg::AddInstance(self.current_folder.clone()));
             }
             AppMsg::ShareInstance(idx) => {
                 self.sharer_dialog.emit(SharerInput::Open(idx));
@@ -2771,7 +2772,6 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::EditorOutput(output) => {
-                println!("AppMsg::EditorOutput received: {:?}", output);
                 if let Some(index) = self.selected_instance {
                     if let Some(inst) = self.instances.get(index).cloned() {
                         match output {
@@ -3027,6 +3027,7 @@ impl SimpleComponent for AppModel {
                             .unwrap_or_else(|| "1.20.1".to_string());
                         let (loader, _) = inst.get_loader_info();
 
+                        let et_clone = editor_type.clone();
                         let minecraft_dir = inst.minecraft_dir.clone();
                         let sender_clone = _sender.input_sender().clone();
 
@@ -3123,32 +3124,48 @@ impl SimpleComponent for AppModel {
                             // Send installation results and refreshes after job completes/fails
                             if success_count > 0 {
                                 sender_clone
-                                    .send(AppMsg::ModrinthInstallResult(Ok(success_count)))
+                                    .send(AppMsg::ModrinthInstallResult(et_clone, Ok(success_count)))
                                     .ok();
                                 sender_clone.send(AppMsg::RefreshSelectedInstance).ok();
                             } else if let Some(e) = last_error {
                                 sender_clone
-                                    .send(AppMsg::ModrinthInstallResult(Err(e)))
+                                    .send(AppMsg::ModrinthInstallResult(et_clone, Err(e)))
                                     .ok();
                             }
                         });
                     }
                 }
             }
-            AppMsg::ModrinthInstallResult(result) => match result {
-                Ok(count) => {
-                    let msg = if count == 1 {
-                        "Successfully installed 1 mod".to_string()
-                    } else {
-                        format!("Successfully installed {} mods", count)
-                    };
-                    self.instance_editor.emit(EditorInput::ShowToast(msg));
-                }
-                Err(e) => {
-                    self.instance_editor.emit(EditorInput::ShowToast(format!(
-                        "Installation failed: {}",
-                        e
-                    )));
+            AppMsg::ModrinthInstallResult(editor_type, result) => {
+                let item_label = match editor_type {
+                    EditorType::Mods => "mod",
+                    EditorType::ResourcePacks => "resource pack",
+                    EditorType::ShaderPacks => "shader pack",
+                    EditorType::Worlds => "world",
+                    _ => "item",
+                };
+                let items_label = match editor_type {
+                    EditorType::Mods => "mods",
+                    EditorType::ResourcePacks => "resource packs",
+                    EditorType::ShaderPacks => "shader packs",
+                    EditorType::Worlds => "worlds",
+                    _ => "items",
+                };
+                match result {
+                    Ok(count) => {
+                        let msg = if count == 1 {
+                            format!("Successfully installed 1 {}", item_label)
+                        } else {
+                            format!("Successfully installed {} {}", count, items_label)
+                        };
+                        self.instance_editor.emit(EditorInput::ShowToast(msg));
+                    }
+                    Err(e) => {
+                        self.instance_editor.emit(EditorInput::ShowToast(format!(
+                            "Installation failed: {}",
+                            e
+                        )));
+                    }
                 }
             },
             AppMsg::RenameInstanceRequest(index) => {
@@ -4257,11 +4274,24 @@ impl SimpleComponent for AppModel {
                     });
                 }
             }
-            AppMsg::InstanceCreated(_version, path) => {
+            AppMsg::InstanceCreated(_version, path, group) => {
                 // Apply default icon if set
                 if let Some(default_icon) = &self.config.default_instance_icon {
                     let target = path.join("icon.png");
                     let _ = std::fs::copy(default_icon, target);
+                }
+
+                // If a group was specified, add the new instance to that group!
+                if let Some(group_name) = group {
+                    let folder = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if let Some(instances_path) = &self.config.instances_path {
+                        self.groups.set_instance_group(&folder, &group_name);
+                        let _ = self.groups.save(instances_path);
+                    }
                 }
 
                 // Show success toast
@@ -4620,11 +4650,11 @@ impl AppModel {
                 (false, _) => format!("Move {} Items", ids.len()),
             };
 
-            let dialog = adw::AlertDialog::builder()
-                .heading(&heading)
-                .body("Select the target instance:")
+            let dialog = adw::Dialog::builder()
+                .title(&heading)
+                .content_width(360)
+                .content_height(380)
                 .build();
-            dialog.add_response("cancel", "Cancel");
 
             let list_box = gtk::ListBox::new();
             list_box.set_selection_mode(gtk::SelectionMode::Single);
@@ -4646,38 +4676,67 @@ impl AppModel {
             let scrolled = gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Never)
                 .min_content_height(200)
-                .max_content_height(400)
+                .max_content_height(300)
                 .child(&list_box)
                 .build();
 
-            dialog.set_extra_child(Some(&scrolled));
+            let content_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(12)
+                .margin_start(16)
+                .margin_end(16)
+                .margin_top(16)
+                .margin_bottom(16)
+                .build();
 
-            dialog.connect_response(None, move |_d, response| {
-                if response != "cancel" {
-                    if let Some(row) = list_box.selected_row() {
-                        let selected_row_idx = row.index() as usize;
-                        if let Some(&target_idx) = inst_indices.get(selected_row_idx) {
-                            if is_copy {
-                                sender_clone
-                                    .send(AppMsg::ConfirmCopyItems(
-                                        type_clone.clone(),
-                                        ids_clone.clone(),
-                                        target_idx,
-                                    ))
-                                    .ok();
-                            } else {
-                                sender_clone
-                                    .send(AppMsg::ConfirmMoveItems(
-                                        type_clone.clone(),
-                                        ids_clone.clone(),
-                                        target_idx,
-                                    ))
-                                    .ok();
-                            }
-                        }
+            let label = gtk::Label::builder()
+                .label("Select the target instance:")
+                .halign(gtk::Align::Start)
+                .build();
+            content_box.append(&label);
+            content_box.append(&scrolled);
+
+            let cancel_btn = gtk::Button::builder()
+                .label("Cancel")
+                .css_classes(vec!["flat"])
+                .halign(gtk::Align::End)
+                .build();
+
+            {
+                let dialog_clone = dialog.clone();
+                cancel_btn.connect_clicked(move |_| {
+                    dialog_clone.close();
+                });
+            }
+            content_box.append(&cancel_btn);
+
+            dialog.set_child(Some(&content_box));
+
+            let dialog_clone = dialog.clone();
+            list_box.connect_row_activated(move |_lb, row| {
+                let selected_row_idx = row.index() as usize;
+                if let Some(&target_idx) = inst_indices.get(selected_row_idx) {
+                    if is_copy {
+                        sender_clone
+                            .send(AppMsg::ConfirmCopyItems(
+                                type_clone.clone(),
+                                ids_clone.clone(),
+                                target_idx,
+                            ))
+                            .ok();
+                    } else {
+                        sender_clone
+                            .send(AppMsg::ConfirmMoveItems(
+                                type_clone.clone(),
+                                ids_clone.clone(),
+                                target_idx,
+                            ))
+                            .ok();
                     }
+                    dialog_clone.close();
                 }
             });
+
             dialog.present(Some(&self.window));
         }
     }

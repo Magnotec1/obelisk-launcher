@@ -119,13 +119,13 @@ impl SidebarList {
         let playtime_row = self.create_nav_row(
             SidebarPage::Playtime,
             "Playtime",
-            "preferences-system-time-symbolic",
+            "hourglass-symbolic",
         );
         self.list_box.append(&playtime_row);
         self.rows.insert(SidebarPage::Playtime, playtime_row);
 
         let assets_row =
-            self.create_nav_row(SidebarPage::Assets, "Assets", "folder-download-symbolic");
+            self.create_nav_row(SidebarPage::Assets, "Assets", "harddisk-symbolic");
         self.list_box.append(&assets_row);
         self.rows.insert(SidebarPage::Assets, assets_row);
 

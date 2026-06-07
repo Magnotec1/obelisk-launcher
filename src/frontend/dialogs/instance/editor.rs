@@ -201,17 +201,14 @@ impl InstanceEditorDialog {
     fn update_detail_panel(&self) {
         if let Some(item) = self.focused_item() {
 
-            // Icon — use cached texture if available
+            // Icon — each setter clears the other internally in GTK4
             if let Some(icon_path) = &item.icon_path {
                 if let Some(tex) = self.icon_cache.get(icon_path.as_str()) {
                     self.detail_icon.set_paintable(Some(tex));
-                    self.detail_icon.set_icon_name(None);
                 } else {
-                    self.detail_icon.set_paintable(gtk::gdk::Paintable::NONE);
                     self.detail_icon.set_icon_name(Some(self.type_icon()));
                 }
             } else {
-                self.detail_icon.set_paintable(gtk::gdk::Paintable::NONE);
                 self.detail_icon.set_icon_name(Some(self.type_icon()));
             }
 
@@ -308,144 +305,7 @@ impl InstanceEditorDialog {
         }
     }
 
-    fn create_context_menu_box(
-        &self,
-        index: usize,
-        sender_clone: relm4::Sender<EditorInput>,
-    ) -> gtk::Box {
-        let box_ = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        box_.add_css_class("menu-box");
-        box_.set_width_request(180);
 
-        let checked_indices: Vec<usize> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.is_checked)
-            .map(|(idx, _)| idx)
-            .collect();
-
-        let is_mods = matches!(self.editor_type, EditorType::Mods);
-        let is_components = matches!(self.editor_type, EditorType::Components);
-        let is_world = matches!(self.editor_type, EditorType::Worlds);
-
-        if checked_indices.len() > 1 {
-            // MULTI-SELECT MENU
-            let s_clone = sender_clone.clone();
-
-            // 1. Enable/Disable Selected (Mods only)
-            if is_mods {
-                let any_disabled = checked_indices.iter().any(|&idx| !self.items[idx].enabled);
-                let any_enabled = checked_indices.iter().any(|&idx| self.items[idx].enabled);
-
-                if any_disabled {
-                    let btn = build_menu_item("Enable Selected", false);
-                    let s = s_clone.clone();
-                    btn.connect_clicked(move |_| {
-                        s.send(EditorInput::SetSelectedModsEnabled(true)).ok();
-                    });
-                    box_.append(&btn);
-                }
-                if any_enabled {
-                    let btn = build_menu_item("Disable Selected", false);
-                    let s = s_clone.clone();
-                    btn.connect_clicked(move |_| {
-                        s.send(EditorInput::SetSelectedModsEnabled(false)).ok();
-                    });
-                    box_.append(&btn);
-                }
-            }
-
-            // 2. Move/Copy (if not Components)
-            if !is_components {
-                let btn_move = build_menu_item("Send Selected to...", false);
-                let s = s_clone.clone();
-                btn_move.connect_clicked(move |_| {
-                    s.send(EditorInput::MoveSelectedRequest).ok();
-                });
-                box_.append(&btn_move);
-
-                let btn_copy = build_menu_item("Copy Selected to...", false);
-                let s = s_clone.clone();
-                btn_copy.connect_clicked(move |_| {
-                    s.send(EditorInput::CopySelectedRequest).ok();
-                });
-                box_.append(&btn_copy);
-            }
-
-            // 3. Remove Selected
-            let btn_remove = build_menu_item("Remove Selected", true);
-            let s = s_clone.clone();
-            btn_remove.connect_clicked(move |_| {
-                s.send(EditorInput::RemoveSelected).ok();
-            });
-            box_.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-            box_.append(&btn_remove);
-        } else {
-            // SINGLE-SELECT MENU
-            let s_clone = sender_clone.clone();
-
-            // 1. Rename (Worlds only)
-            if is_world {
-                let btn_rename = build_menu_item("Rename...", false);
-                let s = s_clone.clone();
-                btn_rename.connect_clicked(move |_| {
-                    s.send(EditorInput::RenameWorldRequest(index)).ok();
-                });
-                box_.append(&btn_rename);
-            }
-
-            // 2. Enable/Disable (Mods only)
-            if is_mods {
-                if let Some(item) = self.items.get(index) {
-                    let label = if item.enabled { "Disable" } else { "Enable" };
-                    let btn = build_menu_item(label, false);
-                    let s = s_clone.clone();
-                    btn.connect_clicked(move |_| {
-                        s.send(EditorInput::ToggleFocusedModEnabled).ok();
-                    });
-                    box_.append(&btn);
-                }
-            }
-
-            // 3. Move/Copy (if not Components)
-            if !is_components {
-                let btn_move = build_menu_item("Send to...", false);
-                let s = s_clone.clone();
-                btn_move.connect_clicked(move |_| {
-                    s.send(EditorInput::MoveItemRequest(index)).ok();
-                });
-                box_.append(&btn_move);
-
-                let btn_copy = build_menu_item("Copy to...", false);
-                let s = s_clone.clone();
-                btn_copy.connect_clicked(move |_| {
-                    s.send(EditorInput::CopyItemRequest(index)).ok();
-                });
-                box_.append(&btn_copy);
-            }
-
-            // 4. Remove
-            let btn_remove = build_menu_item("Remove", true);
-            let s = s_clone.clone();
-            btn_remove.connect_clicked(move |_| {
-                s.send(EditorInput::RemoveRequest(Some(index))).ok();
-            });
-            box_.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-            box_.append(&btn_remove);
-        }
-
-        // 4. Select All (available in both single and multi-select context menu)
-        box_.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        let btn_select_all = build_menu_item("Select All", false);
-        let s = sender_clone.clone();
-        btn_select_all.connect_clicked(move |_| {
-            s.send(EditorInput::SelectAll).ok();
-        });
-        box_.append(&btn_select_all);
-
-        box_
-    }
 
     // -------------------------------------------------------------------
     // Full list rebuild — only called when the list content actually changes
@@ -811,7 +671,6 @@ impl SimpleComponent for InstanceEditorDialog {
                                                 #[local_ref]
                                                 detail_icon_ref -> gtk::Image {
                                                     set_pixel_size: 64,
-                                                    set_css_classes: &["dim-label"],
                                                 },
 
                                                 #[local_ref]
@@ -936,7 +795,8 @@ impl SimpleComponent for InstanceEditorDialog {
         let sidebar_scroll = gtk::ScrolledWindow::new();
 
         // Create detail panel widgets
-        let detail_icon = gtk::Image::new();
+        let detail_icon = gtk::Image::from_icon_name("image-missing-symbolic");
+        detail_icon.set_pixel_size(64);
         let detail_name = gtk::Label::new(None);
         let detail_version_row = adw::ActionRow::new();
         let detail_filename_row = adw::ActionRow::new();
@@ -1358,7 +1218,6 @@ impl SimpleComponent for InstanceEditorDialog {
                 }
             }
             EditorInput::ConfirmRemove(ids) => {
-                println!("ConfirmRemove: Removing {} items", ids.len());
                 let output = match &self.editor_type {
                     EditorType::Mods => EditorOutput::RemoveMods(ids.clone()),
                     EditorType::Components => EditorOutput::RemoveComponents(ids.clone()),
@@ -1368,20 +1227,16 @@ impl SimpleComponent for InstanceEditorDialog {
                 };
                 let sender_clone = sender.clone();
                 gtk::glib::idle_add_local_once(move || {
-                    println!("ConfirmRemove: idle_add_local_once executing!");
                     if let Err(e) = sender_clone.output(output) {
                         eprintln!("Failed to send EditorOutput: {:?}", e);
                     }
-                    println!("ConfirmRemove: idle_add_local_once finished!");
                 });
 
                 // Clear focused state before modifying the list
                 self.focused_index = None;
                 self.items.retain(|item| !ids.contains(&item.id));
 
-                println!("ConfirmRemove: Rebuilding list...");
                 self.rebuild_list(&sender);
-                println!("ConfirmRemove: Done.");
             }
             EditorInput::AddItemsRequest => {
                 let (title, label, suffixes) = match self.editor_type {
@@ -1591,45 +1446,194 @@ impl SimpleComponent for InstanceEditorDialog {
             }
             EditorInput::ShowContextMenu(index, x, y) => {
                 let popover = &self.context_menu;
-                let s_clone = sender.input_sender().clone();
-                let box_ = self.create_context_menu_box(index, s_clone);
+                if popover.parent().is_some() {
+                    popover.popdown();
+                    popover.unparent();
+                }
 
-                popover.set_child(Some(&box_));
+                let menu = gtk::gio::Menu::new();
+                let action_group = gtk::gio::SimpleActionGroup::new();
+                let s_clone = sender.input_sender().clone();
+
+                let checked_indices: Vec<usize> = self
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| item.is_checked)
+                    .map(|(idx, _)| idx)
+                    .collect();
+
+                let is_mods = matches!(self.editor_type, EditorType::Mods);
+                let is_components = matches!(self.editor_type, EditorType::Components);
+                let is_world = matches!(self.editor_type, EditorType::Worlds);
+
+                if checked_indices.len() > 1 {
+                    // MULTI-SELECT MENU
+                    let section1 = gtk::gio::Menu::new();
+
+                    if is_mods {
+                        let any_disabled = checked_indices.iter().any(|&idx| !self.items[idx].enabled);
+                        let any_enabled = checked_indices.iter().any(|&idx| self.items[idx].enabled);
+
+                        if any_disabled {
+                            section1.append(Some("Enable Selected"), Some("menu.enable_selected"));
+                            let s = s_clone.clone();
+                            let act = gtk::gio::SimpleAction::new("enable_selected", None);
+                            act.connect_activate(move |_, _| {
+                                s.send(EditorInput::SetSelectedModsEnabled(true)).ok();
+                            });
+                            action_group.add_action(&act);
+                        }
+                        if any_enabled {
+                            section1.append(Some("Disable Selected"), Some("menu.disable_selected"));
+                            let s = s_clone.clone();
+                            let act = gtk::gio::SimpleAction::new("disable_selected", None);
+                            act.connect_activate(move |_, _| {
+                                s.send(EditorInput::SetSelectedModsEnabled(false)).ok();
+                            });
+                            action_group.add_action(&act);
+                        }
+                    }
+
+                    // Move submenu
+                    if !is_components {
+                        let move_submenu = gtk::gio::Menu::new();
+                        
+                        move_submenu.append(Some("Send to…"), Some("menu.send_selected"));
+                        let s = s_clone.clone();
+                        let act = gtk::gio::SimpleAction::new("send_selected", None);
+                        act.connect_activate(move |_, _| {
+                            s.send(EditorInput::MoveSelectedRequest).ok();
+                        });
+                        action_group.add_action(&act);
+
+                        move_submenu.append(Some("Copy to…"), Some("menu.copy_selected"));
+                        let s = s_clone.clone();
+                        let act = gtk::gio::SimpleAction::new("copy_selected", None);
+                        act.connect_activate(move |_, _| {
+                            s.send(EditorInput::CopySelectedRequest).ok();
+                        });
+                        action_group.add_action(&act);
+
+                        section1.append_submenu(Some("Move"), &move_submenu);
+                    }
+
+                    menu.append_section(None, &section1);
+
+                    let section2 = gtk::gio::Menu::new();
+                    section2.append(Some("Remove Selected"), Some("menu.remove_selected"));
+                    let s = s_clone.clone();
+                    let act = gtk::gio::SimpleAction::new("remove_selected", None);
+                    act.connect_activate(move |_, _| {
+                        s.send(EditorInput::RemoveSelected).ok();
+                    });
+                    action_group.add_action(&act);
+                    menu.append_section(None, &section2);
+
+                } else {
+                    // SINGLE-SELECT MENU
+                    let section1 = gtk::gio::Menu::new();
+
+                    if is_world {
+                        section1.append(Some("Rename…"), Some("menu.rename"));
+                        let s = s_clone.clone();
+                        let act = gtk::gio::SimpleAction::new("rename", None);
+                        let idx = index;
+                        act.connect_activate(move |_, _| {
+                            s.send(EditorInput::RenameWorldRequest(idx)).ok();
+                        });
+                        action_group.add_action(&act);
+                    }
+
+                    if is_mods {
+                        if let Some(item) = self.items.get(index) {
+                            let label = if item.enabled { "Disable" } else { "Enable" };
+                            section1.append(Some(label), Some("menu.toggle_enabled"));
+                            let s = s_clone.clone();
+                            let act = gtk::gio::SimpleAction::new("toggle_enabled", None);
+                            act.connect_activate(move |_, _| {
+                                s.send(EditorInput::ToggleFocusedModEnabled).ok();
+                            });
+                            action_group.add_action(&act);
+                        }
+                    }
+
+                    // Move submenu
+                    if !is_components {
+                        let move_submenu = gtk::gio::Menu::new();
+
+                        move_submenu.append(Some("Send to…"), Some("menu.send"));
+                        let s = s_clone.clone();
+                        let act = gtk::gio::SimpleAction::new("send", None);
+                        let idx = index;
+                        act.connect_activate(move |_, _| {
+                            s.send(EditorInput::MoveItemRequest(idx)).ok();
+                        });
+                        action_group.add_action(&act);
+
+                        move_submenu.append(Some("Copy to…"), Some("menu.copy"));
+                        let s = s_clone.clone();
+                        let act = gtk::gio::SimpleAction::new("copy", None);
+                        let idx = index;
+                        act.connect_activate(move |_, _| {
+                            s.send(EditorInput::CopyItemRequest(idx)).ok();
+                        });
+                        action_group.add_action(&act);
+
+                        section1.append_submenu(Some("Move"), &move_submenu);
+                    }
+
+                    menu.append_section(None, &section1);
+
+                    let section2 = gtk::gio::Menu::new();
+                    let delete_item = gtk::gio::MenuItem::new(None, None);
+                    use relm4::gtk::glib::prelude::ToVariant;
+                    delete_item.set_attribute_value("custom", Some(&"delete-mod-btn".to_variant()));
+                    section2.append_item(&delete_item);
+                    menu.append_section(None, &section2);
+                }
+
+                // General section (Select All)
+                let section_all = gtk::gio::Menu::new();
+                section_all.append(Some("Select All"), Some("menu.select_all"));
+                let s = s_clone.clone();
+                let act = gtk::gio::SimpleAction::new("select_all", None);
+                act.connect_activate(move |_, _| {
+                    s.send(EditorInput::SelectAll).ok();
+                });
+                action_group.add_action(&act);
+                menu.append_section(None, &section_all);
+
+                let popover_menu = gtk::PopoverMenu::from_model(Some(&menu));
+                popover_menu.insert_action_group("menu", Some(&action_group));
+
+                if !is_components {
+                    let delete_btn = crate::frontend::views::instance::helpers::build_flat_menu_button("Delete");
+                    delete_btn.add_css_class("destructive-action");
+
+                    let s = s_clone.clone();
+                    let pop = popover_menu.clone();
+                    let idx = index;
+                    delete_btn.connect_clicked(move |_| {
+                        pop.popdown();
+                        s.send(EditorInput::RemoveRequest(Some(idx))).ok();
+                    });
+                    popover_menu.add_child(&delete_btn, "delete-mod-btn");
+                }
 
                 if let Some(pos) = self.visible_indices.iter().position(|&idx| idx == index) {
                     if let Some(row) = self.list_box.row_at_index(pos as i32) {
-                        if popover.parent().is_some() {
-                            popover.unparent();
-                        }
-                        popover.set_parent(&row);
-                        popover
-                            .set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                        popover.popup();
+                        popover_menu.set_parent(&row);
+                        crate::frontend::utils::configure_and_show_popover(
+                            popover_menu.upcast_ref::<gtk::Popover>(),
+                            &row,
+                            x,
+                            y,
+                        );
+                        self.context_menu = popover_menu.upcast::<gtk::Popover>();
                     }
                 }
             }
         }
     }
-}
-
-fn build_menu_item(label: &str, destructive: bool) -> gtk::Button {
-    let btn = gtk::Button::builder()
-        .has_frame(false)
-        .css_classes(vec![
-            "flat",
-            "menu-btn",
-            if destructive {
-                "destructive-action"
-            } else {
-                ""
-            },
-        ])
-        .build();
-    let lbl = gtk::Label::builder()
-        .label(label)
-        .hexpand(true)
-        .halign(gtk::Align::Start)
-        .build();
-    btn.set_child(Some(&lbl));
-    btn
 }

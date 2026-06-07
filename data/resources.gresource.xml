@@ -20,6 +20,11 @@
     preprocess="xml-stripblanks">icons/open-book-symbolic.svg</file>
     <file alias="tag-outline-symbolic.svg"
     preprocess="xml-stripblanks">icons/tag-outline-symbolic.svg</file>
-    
+    <file alias="funnel-outline-symbolic.svg"
+    preprocess="xml-stripblanks">icons/funnel-outline-symbolic.svg</file>
+    <file alias="hourglass-symbolic.svg"
+    preprocess="xml-stripblanks">icons/hourglass-symbolic.svg</file>
+    <file alias="harddisk-symbolic.svg"
+    preprocess="xml-stripblanks">icons/harddisk-symbolic.svg</file>
   </gresource>
 </gresources>
