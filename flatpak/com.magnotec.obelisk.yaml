@@ -30,7 +30,7 @@ modules:
       - cargo build --release
       - install -Dm755 target/release/obelisk -t /app/bin/
       - install -Dm644 flatpak/com.magnotec.obelisk.desktop -t /app/share/applications/
-      - install -Dm644 flatpak/com.magnotec.obelisk.metainfo.xml -t /app/share/metainfo/
+      - VERSION=$(grep -m 1 '^version =' Cargo.toml | cut -d '"' -f 2) && sed -E "s/<release version=\"[^\"]*\"/<release version=\"$VERSION\"/" flatpak/com.magnotec.obelisk.metainfo.xml > flatpak/com.magnotec.obelisk.metainfo.xml.tmp && install -Dm644 flatpak/com.magnotec.obelisk.metainfo.xml.tmp /app/share/metainfo/com.magnotec.obelisk.metainfo.xml
       - install -Dm644 data/com.magnotec.obelisk.svg -t /app/share/icons/hicolor/scalable/apps/
       - mkdir -p /app/bin
       - |
