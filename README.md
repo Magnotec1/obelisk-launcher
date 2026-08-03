@@ -1,5 +1,5 @@
 > [!CAUTION]
-> Development has been assisted by AI.
+> Made while assisted by AI for repetitive tasks.. I know this is a dealbreaker for a lot of people.
 
 > [!WARNING]
 > In development, so expect the possibility of data loss.
