@@ -1,8 +1,6 @@
 use crate::backend::auth::account::{add_account, create_offline_account};
 use crate::backend::download::manager::{fetch_java_packages, JavaPackage};
-use crate::backend::download::sources::java::{
-    download_and_extract_with_progress, JavaDownloadProgress,
-};
+use crate::backend::download::sources::java::JavaDownloadProgress;
 use crate::backend::runtime::java::{find_java_versions, get_java_major_version, JavaInstance};
 use crate::config::Config;
 use adw::prelude::*;
@@ -1043,23 +1041,58 @@ impl SimpleComponent for SetupDialog {
                     self.java_install_progress = -1.0;
                     self.java_install_status = format!("Initializing {}...", package.distribution);
 
-                    let cancel_flag = Arc::new(AtomicBool::new(false));
-                    self.cancel_flag = Some(cancel_flag.clone());
+                    let task = std::sync::Arc::new(crate::backend::download::manager::JavaDownloadTask {
+                        package_id: package.id.clone(),
+                        target_dir: self.config.minecraft_data_path.join("java"),
+                    });
+
+                    let job = crate::backend::download::manager::NetworkJob {
+                        id: format!("setup-java-{}", package.id),
+                        title: format!("Setup Java {} ({})", package.java_version, package.distribution),
+                        tasks: vec![task],
+                        status: crate::backend::download::manager::NetworkJobStatus::Pending,
+                        log: Vec::new(),
+                        items: Vec::new(),
+                    };
+
+                    let (tx, rx) = std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
+                    crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
 
                     let sender_clone = sender.input_sender().clone();
-                    let target_dir = self.config.minecraft_data_path.join("java");
-                    let package_id = package.id.clone();
-
                     std::thread::spawn(move || {
-                        download_and_extract_with_progress(
-                            &package_id,
-                            &target_dir,
-                            cancel_flag,
-                            move |progress| {
-                                let _ = sender_clone
-                                    .send(SetupInput::JavaProgress(major_version, progress));
-                            },
-                        );
+                        while let Ok(msg) = rx.recv() {
+                            match msg {
+                                crate::backend::download::manager::DownloadMsg::Progress(_, prog) => {
+                                    if prog >= 0.9 {
+                                        let _ = sender_clone.send(SetupInput::JavaProgress(
+                                            major_version,
+                                            JavaDownloadProgress::Extracting,
+                                        ));
+                                    } else {
+                                        let _ = sender_clone.send(SetupInput::JavaProgress(
+                                            major_version,
+                                            JavaDownloadProgress::Downloading {
+                                                current: (prog * 100.0) as u64,
+                                                total: 100,
+                                            },
+                                        ));
+                                    }
+                                }
+                                crate::backend::download::manager::DownloadMsg::Error(err) => {
+                                    let _ = sender_clone.send(SetupInput::JavaProgress(
+                                        major_version,
+                                        JavaDownloadProgress::Error(err),
+                                    ));
+                                }
+                                crate::backend::download::manager::DownloadMsg::Finished => {
+                                    let _ = sender_clone.send(SetupInput::JavaProgress(
+                                        major_version,
+                                        JavaDownloadProgress::Finished(std::path::PathBuf::new()),
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        }
                     });
                 }
             }

@@ -11,6 +11,7 @@ pub struct InstanceSettingsTab {
 #[derive(Debug)]
 pub enum SettingsTabInput {
     Update(Option<Instance>, Config),
+    ShowZinkInfo,
 }
 
 #[derive(Debug)]
@@ -88,6 +89,14 @@ impl Component for InstanceSettingsTab {
                         #[watch]
                         set_sensitive: model.instance.is_some(),
 
+                        add_suffix = &gtk::Button {
+                            set_icon_name: "dialog-information-symbolic",
+                            set_valign: gtk::Align::Center,
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("About Zink Rendering"),
+                            connect_clicked => SettingsTabInput::ShowZinkInfo,
+                        },
+
                         add_suffix = &gtk::Switch {
                             set_valign: gtk::Align::Center,
                             #[watch]
@@ -135,11 +144,20 @@ impl Component for InstanceSettingsTab {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>, _root: &Self::Root) {
+    fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             SettingsTabInput::Update(inst, config) => {
                 self.instance = inst;
                 self.config = config;
+            }
+            SettingsTabInput::ShowZinkInfo => {
+                let dialog = adw::AlertDialog::builder()
+                    .heading("Zink (Vulkan) Rendering")
+                    .body("Zink is a Mesa driver translation layer that converts OpenGL calls into Vulkan commands.\n\n• Driver Compatibility: Requires open-source Mesa drivers (AMD RADV, Intel ANV, or Nouveau). Has no effect on proprietary Nvidia drivers.\n• Useful For: Running Minecraft in OpenGL mode (such as with OpenGL mods or shaderpacks) to improve driver stability and frame pacing on Mesa GPUs.\n• Native Vulkan: Not needed if Minecraft is already running natively in Vulkan mode.")
+                    .build();
+                dialog.add_response("ok", "OK");
+                dialog.set_default_response(Some("ok"));
+                dialog.present(Some(root));
             }
         }
     }

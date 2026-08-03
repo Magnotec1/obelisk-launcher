@@ -30,30 +30,38 @@ pub enum DownloadMsg {
 // Network Task & Job Models
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-pub enum NetworkTask {
-    MinecraftDownload {
-        version: RawVersion,
-        loader: ModLoader,
-        loader_version: Option<String>,
-        data_path: PathBuf,
-    },
-    JavaDownload {
-        package_id: String,
-        target_dir: PathBuf,
-    },
-    ModrinthDownload {
-        project_id: String,
-        version_id: Option<String>,
-        game_version: String,
-        loader: ModLoader,
-        mods_dir: PathBuf,
-    },
-    ModrinthModpackDownload {
-        name: String,
-        download_url: String,
-        instances_path: PathBuf,
-    },
+#[derive(Debug, Clone, PartialEq)]
+pub enum TaskItemStatus {
+    Success,
+    Failed(String),
+    Pending,
+    Running(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DownloadedItemType {
+    Mod,
+    ResourcePack,
+    ShaderPack,
+    World,
+    MinecraftComponent,
+    Java,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskItemDetail {
+    pub name: String,
+    pub status: TaskItemStatus,
+    pub item_type: DownloadedItemType,
+}
+
+pub struct TaskContext<'a> {
+    pub progress: &'a (dyn Fn(String, f32) + Send + Sync),
+    pub item: &'a (dyn Fn(String, TaskItemStatus, DownloadedItemType) + Send + Sync),
+}
+
+pub trait DownloadTask: Send + Sync + std::fmt::Debug {
+    fn run(&self, ctx: &TaskContext) -> Result<(), String>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,9 +79,191 @@ pub enum NetworkJobStatus {
 pub struct NetworkJob {
     pub id: String,
     pub title: String,
-    pub tasks: Vec<NetworkTask>,
+    pub tasks: Vec<Arc<dyn DownloadTask>>,
     pub status: NetworkJobStatus,
     pub log: Vec<String>,
+    pub items: Vec<TaskItemDetail>,
+}
+
+// ---------------------------------------------------------------------------
+// Concrete Download Tasks
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct MinecraftDownloadTask {
+    pub version: RawVersion,
+    pub loader: ModLoader,
+    pub loader_version: Option<String>,
+    pub data_path: PathBuf,
+}
+
+impl DownloadTask for MinecraftDownloadTask {
+    fn run(&self, ctx: &TaskContext) -> Result<(), String> {
+        minecraft::download_minecraft_data_internal(
+            &self.version,
+            &self.loader,
+            self.loader_version.as_deref(),
+            &self.data_path,
+            ctx.progress,
+            ctx.item,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaDownloadTask {
+    pub package_id: String,
+    pub target_dir: PathBuf,
+}
+
+impl DownloadTask for JavaDownloadTask {
+    fn run(&self, ctx: &TaskContext) -> Result<(), String> {
+        let (java_tx, java_rx) = std::sync::mpsc::channel();
+        let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let pkg = self.package_id.clone();
+        let dir = self.target_dir.clone();
+        thread::spawn(move || {
+            java::download_and_extract_with_progress(
+                &pkg,
+                &dir,
+                cancel_flag,
+                move |prog| {
+                    let _ = java_tx.send(prog);
+                },
+            );
+        });
+
+        (ctx.item)(
+            format!("Java Runtime ({})", self.package_id),
+            TaskItemStatus::Running("Starting...".to_string()),
+            DownloadedItemType::Java,
+        );
+
+        let mut task_res = Ok(());
+        while let Ok(prog) = java_rx.recv() {
+            match prog {
+                java::JavaDownloadProgress::Downloading { current, total } => {
+                    let prog_pct = if total > 0 {
+                        current as f32 / total as f32
+                    } else {
+                        0.0
+                    };
+                    let detail_str = format!("Downloading... ({:.1}%)", prog_pct * 100.0);
+                    (ctx.progress)(
+                        "Downloading Java...".to_string(),
+                        prog_pct,
+                    );
+                    (ctx.item)(
+                        format!("Java Runtime ({})", self.package_id),
+                        TaskItemStatus::Running(detail_str),
+                        DownloadedItemType::Java,
+                    );
+                }
+                java::JavaDownloadProgress::Extracting => {
+                    (ctx.progress)("Extracting Java runtime...".to_string(), 0.9);
+                    (ctx.item)(
+                        format!("Java Runtime ({})", self.package_id),
+                        TaskItemStatus::Running("Extracting runtime...".to_string()),
+                        DownloadedItemType::Java,
+                    );
+                }
+                java::JavaDownloadProgress::Finished(_) => {
+                    (ctx.progress)("Java installation complete".to_string(), 1.0);
+                    (ctx.item)(
+                        format!("Java Runtime ({})", self.package_id),
+                        TaskItemStatus::Success,
+                        DownloadedItemType::Java,
+                    );
+                    break;
+                }
+                java::JavaDownloadProgress::Error(e) => {
+                    (ctx.item)(
+                        format!("Java Runtime ({})", self.package_id),
+                        TaskItemStatus::Failed(e.clone()),
+                        DownloadedItemType::Java,
+                    );
+                    task_res = Err(e);
+                    break;
+                }
+            }
+        }
+        task_res
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModrinthDownloadTask {
+    pub project_id: String,
+    pub version_id: Option<String>,
+    pub game_version: String,
+    pub loader: ModLoader,
+    pub mods_dir: PathBuf,
+    pub old_filename: Option<String>,
+}
+
+impl DownloadTask for ModrinthDownloadTask {
+    fn run(&self, ctx: &TaskContext) -> Result<(), String> {
+        let res = modrinth::install_mod_with_dependencies(
+            &self.project_id,
+            self.version_id.clone(),
+            &self.game_version,
+            self.loader.clone(),
+            &self.mods_dir,
+            ctx.progress,
+            ctx.item,
+        );
+
+        if let Ok(ref downloaded_paths) = res {
+            if let Some(old_fn) = &self.old_filename {
+                let is_temp = self.mods_dir.file_name().and_then(|n| n.to_str()) != Some("mods");
+                if is_temp {
+                    let target_dir = self.mods_dir.parent().unwrap().join("mods");
+                    if !target_dir.exists() {
+                        let _ = std::fs::create_dir_all(&target_dir);
+                    }
+                    for path in downloaded_paths {
+                        if let Some(fname) = path.file_name() {
+                            let dest = target_dir.join(fname);
+                            let dest_is_old = dest.file_name() == Some(std::ffi::OsStr::new(old_fn));
+                            let _ = std::fs::rename(path, &dest);
+                            if !dest_is_old {
+                                let old_path = target_dir.join(old_fn);
+                                let _ = std::fs::remove_file(old_path);
+                            }
+                        }
+                    }
+                    let marker_path = self.mods_dir.join(format!("{}.success", old_fn));
+                    let _ = std::fs::File::create(marker_path);
+                } else {
+                    let old_path = self.mods_dir.join(old_fn);
+                    let _ = std::fs::remove_file(old_path);
+                }
+            }
+        }
+
+        res.map(|_| ())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModrinthModpackDownloadTask {
+    pub name: String,
+    pub download_url: String,
+    pub instances_path: PathBuf,
+}
+
+impl DownloadTask for ModrinthModpackDownloadTask {
+    fn run(&self, ctx: &TaskContext) -> Result<(), String> {
+        crate::backend::instance::modpack::install_mrpack(
+            &self.name,
+            &self.download_url,
+            &self.instances_path,
+            ctx.progress,
+            ctx.item,
+        )
+        .map(|_| ())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +332,23 @@ impl NetworkQueue {
         });
     }
 
+    pub fn retry_job(&self, id: &str, progress_sender: std::sync::mpsc::Sender<DownloadMsg>) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(j) = inner.jobs.iter_mut().find(|j| j.id == id) {
+            if let NetworkJobStatus::Failed(_) = j.status {
+                j.status = NetworkJobStatus::Pending;
+                j.log.push("Retrying failed items...".to_string());
+                for item in &mut j.items {
+                    if let TaskItemStatus::Failed(_) = item.status {
+                        item.status = TaskItemStatus::Pending;
+                    }
+                }
+                inner.senders.insert(id.to_string(), progress_sender);
+                self.cv.notify_one();
+            }
+        }
+    }
+
     fn worker_loop(inner: Arc<Mutex<QueueInner>>, cv: Arc<Condvar>) {
         loop {
             // Find next Pending job in the unified list
@@ -176,16 +383,11 @@ impl NetworkQueue {
                 }
             };
 
-            let mut job_failed = false;
-            let mut job_err = String::new();
+            let mut failed_task_errors = Vec::new();
             let total_tasks = job.tasks.len();
             let job_id_clone = job_id.clone();
 
             for (idx, task) in job.tasks.iter().enumerate() {
-                if job_failed {
-                    break;
-                }
-
                 let task_start_progress = idx as f32 / total_tasks as f32;
                 let task_weight = 1.0 / total_tasks as f32;
 
@@ -207,111 +409,46 @@ impl NetworkQueue {
                     }
                 };
 
-                let res = match task {
-                    NetworkTask::MinecraftDownload {
-                        version,
-                        loader,
-                        loader_version,
-                        data_path,
-                    } => minecraft::download_minecraft_data_internal(
-                        version,
-                        loader,
-                        loader_version.as_deref(),
-                        data_path,
-                        status_update,
-                    ),
-                    NetworkTask::JavaDownload {
-                        package_id,
-                        target_dir,
-                    } => {
-                        let (java_tx, java_rx) = std::sync::mpsc::channel();
-                        let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-                        let pkg = package_id.clone();
-                        let dir = target_dir.clone();
-                        thread::spawn(move || {
-                            java::download_and_extract_with_progress(
-                                &pkg,
-                                &dir,
-                                cancel_flag,
-                                move |prog| {
-                                    let _ = java_tx.send(prog);
-                                },
-                            );
-                        });
-
-                        let mut task_res = Ok(());
-                        while let Ok(prog) = java_rx.recv() {
-                            match prog {
-                                java::JavaDownloadProgress::Downloading { current, total } => {
-                                    let prog_pct = if total > 0 {
-                                        current as f32 / total as f32
-                                    } else {
-                                        0.0
-                                    };
-                                    status_update(
-                                        format!("Downloading Java... ({:.1}%)", prog_pct * 100.0),
-                                        prog_pct,
-                                    );
-                                }
-                                java::JavaDownloadProgress::Extracting => {
-                                    status_update("Extracting Java runtime...".to_string(), 0.9);
-                                }
-                                java::JavaDownloadProgress::Finished(_) => {
-                                    status_update("Java installation complete".to_string(), 1.0);
-                                    break;
-                                }
-                                java::JavaDownloadProgress::Error(e) => {
-                                    task_res = Err(e);
-                                    break;
-                                }
-                            }
+                let inner_c2 = inner.clone();
+                let job_id_c2 = job_id_clone.clone();
+                let item_update = move |name: String, status: TaskItemStatus, item_type: DownloadedItemType| {
+                    let mut guard = inner_c2.lock().unwrap();
+                    if let Some(j) = guard.jobs.iter_mut().find(|j| j.id == job_id_c2) {
+                        if let Some(existing) = j.items.iter_mut().find(|i| i.name == name) {
+                            existing.status = status;
+                        } else {
+                            j.items.push(TaskItemDetail {
+                                name,
+                                status,
+                                item_type,
+                            });
                         }
-                        task_res
-                    }
-                    NetworkTask::ModrinthDownload {
-                        project_id,
-                        version_id,
-                        game_version,
-                        loader,
-                        mods_dir,
-                    } => {
-                        let callback = status_update.clone();
-                        modrinth::install_mod_with_dependencies(
-                            project_id,
-                            version_id.clone(),
-                            game_version,
-                            loader.clone(),
-                            mods_dir,
-                            move |msg, progress| {
-                                callback(msg, progress);
-                            },
-                        )
-                        .map(|_| ())
-                    }
-                    NetworkTask::ModrinthModpackDownload {
-                        name,
-                        download_url,
-                        instances_path,
-                    } => {
-                        let callback = status_update.clone();
-                        crate::backend::instance::modpack::install_mrpack(
-                            name,
-                            download_url,
-                            instances_path,
-                            Box::new(move |msg, progress| {
-                                callback(msg, progress);
-                            }),
-                        )
-                        .map(|_| ())
                     }
                 };
 
+                let context = TaskContext {
+                    progress: &status_update,
+                    item: &item_update,
+                };
+
+                let res = task.run(&context);
+
                 if let Err(e) = res {
-                    job_failed = true;
-                    job_err = e;
+                    let err_msg = format!("Task failed: {}", e);
+                    failed_task_errors.push(e);
+
+                    let mut guard = inner.lock().unwrap();
+                    if let Some(j) = guard.jobs.iter_mut().find(|j| j.id == job_id_clone) {
+                        j.log.push(format!("[Error] {}", err_msg));
+                    }
+                    if let Some(tx) = guard.senders.get(&job_id_clone) {
+                        let _ = tx.send(DownloadMsg::Error(err_msg));
+                    }
                 }
             }
+
+            let job_failed = !failed_task_errors.is_empty();
+            let job_err = failed_task_errors.join("; ");
 
             let final_status = if job_failed {
                 NetworkJobStatus::Failed(job_err.clone())
@@ -365,14 +502,17 @@ pub fn download_minecraft_data(
     sender: &std::sync::mpsc::Sender<DownloadMsg>,
 ) -> Result<(), String> {
     let sender_clone = sender.clone();
+    let progress_cb = move |msg, progress| {
+        let _ = sender_clone.send(DownloadMsg::Progress(msg, progress));
+    };
+    let item_cb = |_, _, _| {};
     minecraft::download_minecraft_data_internal(
         version,
         loader,
         loader_version,
         data_path,
-        move |msg, progress| {
-            let _ = sender_clone.send(DownloadMsg::Progress(msg, progress));
-        },
+        &progress_cb,
+        &item_cb,
     )
 }
 

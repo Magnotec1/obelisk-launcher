@@ -2,6 +2,7 @@ use crate::backend::auth::account::{refresh_all_accounts, verify_account_status,
 use crate::backend::auth::microsoft::{Account, AccountType};
 use crate::config::Config;
 use crate::frontend::app::AppMsg;
+use crate::frontend::dialogs::account_details::{AccountDetailsDialog, AccountDetailsInput};
 use adw::prelude::*;
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
@@ -35,7 +36,8 @@ impl FactoryComponent for AccountRow {
             add_prefix = &gtk::Image {
                 #[watch]
                 set_icon_name: if self.is_active { Some("object-select-symbolic") } else { Some("avatar-default-symbolic") },
-                set_css_classes: &["accent"],
+                #[watch]
+                set_css_classes: if self.is_active { &["accent"] } else { &["dim-label"] },
             },
 
             add_suffix = &gtk::MenuButton {
@@ -45,17 +47,53 @@ impl FactoryComponent for AccountRow {
                 #[wrap(Some)]
                 #[name = "row_popover"]
                 set_popover = &gtk::Popover {
+                    set_autohide: true,
+                    set_has_arrow: true,
+
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_css_classes: &["menu-box"],
+                        set_width_request: 160,
+                        set_spacing: 4,
+
+                        // Account Details / Info
+                        gtk::Button {
+                            set_has_frame: false,
+                            set_css_classes: &["flat", "menu-btn"],
+                            #[wrap(Some)]
+                            set_child = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 12,
+                                gtk::Label {
+                                    set_label: "Account Info",
+                                    set_hexpand: true,
+                                    set_halign: gtk::Align::Start,
+                                },
+                            },
+                            connect_clicked[sender, account = self.account.clone(), row_popover] => move |_| {
+                                row_popover.popdown();
+                                sender.output(AccountRowOutput::ShowDetails(account.clone())).ok();
+                            }
+                        },
+
+                        gtk::Separator {
+                            set_margin_top: 4,
+                            set_margin_bottom: 4,
+                        },
 
                         // Copy Username
                         gtk::Button {
+                            set_has_frame: false,
                             set_css_classes: &["flat", "menu-btn"],
-                            gtk::Box {
+                            #[wrap(Some)]
+                            set_child = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
                                 set_spacing: 12,
-                                gtk::Image::from_icon_name("edit-copy-symbolic"),
-                                gtk::Label::new(Some("Copy Username")),
+                                gtk::Label {
+                                    set_label: "Copy Username",
+                                    set_hexpand: true,
+                                    set_halign: gtk::Align::Start,
+                                },
                             },
                             connect_clicked[username = self.account.username.clone(), row_popover] => move |btn| {
                                 row_popover.popdown();
@@ -65,11 +103,17 @@ impl FactoryComponent for AccountRow {
 
                         // Copy UUID
                         gtk::Button {
+                            set_has_frame: false,
                             set_css_classes: &["flat", "menu-btn"],
-                            gtk::Box {
+                            #[wrap(Some)]
+                            set_child = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
                                 set_spacing: 12,
-                                gtk::Image::from_icon_name("edit-copy-symbolic"),
-                                gtk::Label::new(Some("Copy UUID")),
+                                gtk::Label {
+                                    set_label: "Copy UUID",
+                                    set_hexpand: true,
+                                    set_halign: gtk::Align::Start,
+                                },
                             },
                             connect_clicked[uuid = self.account.uuid.clone(), row_popover] => move |btn| {
                                 row_popover.popdown();
@@ -77,15 +121,24 @@ impl FactoryComponent for AccountRow {
                             }
                         },
 
-                        gtk::Separator { set_css_classes: &["menu-separator"] },
+                        gtk::Separator {
+                            set_margin_top: 4,
+                            set_margin_bottom: 4,
+                        },
 
                         // Remove
                         gtk::Button {
-                            set_css_classes: &["flat", "menu-btn", "error"],
-                            gtk::Box {
+                            set_has_frame: false,
+                            set_css_classes: &["flat", "menu-btn", "destructive-action"],
+                            #[wrap(Some)]
+                            set_child = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
                                 set_spacing: 12,
-                                gtk::Image::from_icon_name("edit-delete-symbolic"),
-                                gtk::Label::new(Some("Remove Account")),
+                                gtk::Label {
+                                    set_label: "Remove Account",
+                                    set_hexpand: true,
+                                    set_halign: gtk::Align::Start,
+                                },
                             },
                             connect_clicked[sender, uuid = self.account.uuid.clone(), row_popover] => move |_| {
                                 row_popover.popdown();
@@ -127,11 +180,13 @@ impl AccountRow {
 pub enum AccountRowOutput {
     Switch(String),
     Remove(String),
+    ShowDetails(Account),
 }
 
 pub struct AccountView {
     config: Config,
     accounts: FactoryVecDeque<AccountRow>,
+    details_dialog: Controller<AccountDetailsDialog>,
     visible: bool,
     refreshing: bool,
     refresh_message: String,
@@ -144,6 +199,7 @@ pub enum AccountInput {
     ShowToast(String),
     SwitchAccount(String),
     RemoveAccount(String),
+    ShowDetails(Account),
     RefreshAll,
     ResetRefreshing,
 }
@@ -160,11 +216,9 @@ impl Component for AccountView {
         set_vexpand: true,
 
         #[wrap(Some)]
-        #[name = "toast_overlay"]
-        set_child = &adw::ToastOverlay {
-            gtk::ScrolledWindow {
-                set_vexpand: true,
-                set_hscrollbar_policy: gtk::PolicyType::Never,
+        set_child = &gtk::ScrolledWindow {
+            set_vexpand: true,
+            set_hscrollbar_policy: gtk::PolicyType::Never,
 
                 adw::Clamp {
                     set_maximum_size: 1024,
@@ -186,9 +240,12 @@ impl Component for AccountView {
                                     set_spacing: 16,
 
                                     gtk::Image {
-                                        set_icon_name: Some("avatar-default-symbolic"),
                                         set_pixel_size: 40,
-                                        set_css_classes: &["dim-label"],
+                                        #[watch]
+                                        set_paintable: model.get_active_avatar().as_ref().map(|t| t as &gtk::gdk::Texture),
+                                        #[watch]
+                                        set_icon_name: if model.get_active_avatar().is_none() { Some("avatar-default-symbolic") } else { None },
+                                        set_css_classes: &["accent"],
                                     },
 
                                     gtk::Box {
@@ -209,7 +266,7 @@ impl Component for AccountView {
                                             #[watch]
                                             set_label: &model.get_active_name(),
                                         },
-                                    }
+                                    },
                                 },
                             },
 
@@ -252,14 +309,49 @@ impl Component for AccountView {
                                     }
                                 },
 
+                                add_named[Some("empty")] = &adw::StatusPage {
+                                    set_title: "No Accounts Added",
+                                    set_description: Some("Add a Microsoft or Offline Minecraft account to start playing."),
+                                    set_icon_name: Some("avatar-default-symbolic"),
+                                    set_vexpand: true,
+
+                                    #[wrap(Some)]
+                                    set_child = &gtk::Box {
+                                        set_orientation: gtk::Orientation::Vertical,
+                                        set_halign: gtk::Align::Center,
+                                        set_spacing: 12,
+
+                                        gtk::Button {
+                                            set_label: "Add Microsoft Account",
+                                            set_css_classes: &["suggested-action", "pill"],
+                                            connect_clicked[sender] => move |_| {
+                                                let _ = sender.output(AppMsg::LoginStart);
+                                            }
+                                        },
+
+                                        gtk::Button {
+                                            set_label: "Add Offline Account",
+                                            set_css_classes: &["pill"],
+                                            connect_clicked[sender] => move |_| {
+                                                let _ = sender.output(AppMsg::ShowAddOfflineDialog);
+                                            }
+                                        },
+                                    }
+                                },
+
                                 #[watch]
-                                set_visible_child_name: if model.refreshing { "loading" } else { "list" },
+                                set_visible_child_name: if model.refreshing {
+                                    "loading"
+                                } else if model.config.accounts.is_empty() {
+                                    "empty"
+                                } else {
+                                    "list"
+                                },
                             }
                         }
                     }
                 }
             }
-        }
     }
 
     fn init(
@@ -272,11 +364,15 @@ impl Component for AccountView {
             .forward(sender.input_sender(), |output| match output {
                 AccountRowOutput::Switch(uuid) => AccountInput::SwitchAccount(uuid),
                 AccountRowOutput::Remove(uuid) => AccountInput::RemoveAccount(uuid),
+                AccountRowOutput::ShowDetails(acct) => AccountInput::ShowDetails(acct),
             });
+
+        let details_dialog = AccountDetailsDialog::builder().launch(()).detach();
 
         let mut model = AccountView {
             config,
             accounts,
+            details_dialog,
             visible: false,
             refreshing: false,
             refresh_message: String::new(),
@@ -299,22 +395,21 @@ impl Component for AccountView {
                 self.visible = !self.visible;
             }
             AccountInput::ShowToast(text) => {
-                let toast = adw::Toast::new(&text);
-                if let Some(overlay) = self.find_toast_overlay(root.clone().upcast()) {
-                    overlay.add_toast(toast);
-                } else {
-                    if let Some(win) = relm4::main_application().active_window() {
-                        if let Some(overlay) = self.find_toast_overlay(win.upcast()) {
-                            overlay.add_toast(toast);
-                        }
-                    }
-                }
+                crate::frontend::toast::show_toast(root, text);
             }
             AccountInput::SwitchAccount(uuid) => {
                 let _ = sender.output(AppMsg::SwitchAccount(uuid));
             }
             AccountInput::RemoveAccount(uuid) => {
                 let _ = sender.output(AppMsg::RemoveAccount(uuid));
+            }
+            AccountInput::ShowDetails(account) => {
+                self.details_dialog.emit(AccountDetailsInput::Show(account));
+                if let Some(win) = root.ancestor(gtk::Window::static_type()) {
+                    if let Ok(parent_window) = win.downcast::<gtk::Window>() {
+                        self.details_dialog.widget().present(Some(&parent_window));
+                    }
+                }
             }
             AccountInput::RefreshAll => {
                 self.refreshing = true;
@@ -336,22 +431,7 @@ impl Component for AccountView {
     }
 }
 
-impl AccountView {
-    fn find_toast_overlay(&self, start: gtk::Widget) -> Option<adw::ToastOverlay> {
-        if let Some(overlay) = start.downcast_ref::<adw::ToastOverlay>() {
-            return Some(overlay.clone());
-        }
-
-        let mut child = start.first_child();
-        while let Some(c) = child {
-            if let Some(found) = self.find_toast_overlay(c.clone()) {
-                return Some(found);
-            }
-            child = c.next_sibling();
-        }
-        None
-    }
-
+   impl AccountView {
     fn populate_accounts(&mut self) {
         self.refreshing = false;
         let mut guard = self.accounts.guard();
@@ -374,6 +454,21 @@ impl AccountView {
             active.username.clone()
         } else {
             "No active account".to_string()
+        }
+    }
+
+    fn get_active_avatar(&self) -> Option<gtk::gdk::Texture> {
+        let active_uuid = self.config.active_account_uuid.clone()?;
+        let active_account = self.config.accounts.iter().find(|a| a.uuid == active_uuid)?;
+        let cache_path = crate::backend::auth::avatar::get_avatar_cache_path(&active_account.uuid);
+        if cache_path.exists() {
+            gtk::gdk::Texture::from_filename(&cache_path).ok()
+        } else {
+            let uuid = active_account.uuid.clone();
+            std::thread::spawn(move || {
+                let _ = crate::backend::auth::avatar::fetch_and_cache_avatar(&uuid);
+            });
+            None
         }
     }
 }

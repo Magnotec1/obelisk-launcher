@@ -350,65 +350,114 @@ pub fn fetch_loader_versions(
     }
 }
 
-pub fn download_minecraft_data_internal<F>(
+pub fn download_minecraft_data_internal(
     version: &RawVersion,
     loader: &ModLoader,
     loader_version: Option<&str>,
     data_path: &Path,
-    progress_callback: F,
-) -> Result<(), String>
-where
-    F: Fn(String, f32) + Clone + Send + Sync + 'static,
-{
+    progress_callback: &(dyn Fn(String, f32) + Send + Sync),
+    item_callback: &(dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType) + Send + Sync),
+) -> Result<(), String> {
     let client = reqwest::blocking::Client::new();
 
     // 1. Download Version Meta
+    item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
     progress_callback("Downloading version metadata...".to_string(), 0.1);
-    let meta_resp = client
-        .get(&version.url)
-        .send()
-        .map_err(|e| format!("Failed to fetch version meta: {}", e))?;
-    let meta: VersionMeta = meta_resp
-        .json()
-        .map_err(|e| format!("Failed to parse version meta: {}", e))?;
+    let meta_resp = match client.get(&version.url).send() {
+        Ok(resp) => resp,
+        Err(e) => {
+            let err_msg = format!("Failed to fetch version meta: {}", e);
+            item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
+    };
+    let meta: VersionMeta = match meta_resp.json() {
+        Ok(m) => m,
+        Err(e) => {
+            let err_msg = format!("Failed to parse version meta: {}", e);
+            item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
+    };
 
     let meta_folder = data_path.join("meta").join("net.minecraft");
-    fs::create_dir_all(&meta_folder).map_err(|e| e.to_string())?;
+    if let Err(e) = fs::create_dir_all(&meta_folder) {
+        let err_msg = e.to_string();
+        item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+        return Err(err_msg);
+    }
     let meta_file = meta_folder.join(format!("{}.json", version.id));
 
-    let meta_json = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
-    fs::write(&meta_file, meta_json).map_err(|e| e.to_string())?;
+    let meta_json = match serde_json::to_string_pretty(&meta) {
+        Ok(json) => json,
+        Err(e) => {
+            let err_msg = e.to_string();
+            item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
+    };
+    if let Err(e) = fs::write(&meta_file, meta_json) {
+        let err_msg = e.to_string();
+        item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+        return Err(err_msg);
+    }
+    item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
 
     // 2. Download Asset Index
     if let Some(asset_index) = &meta.asset_index {
+        item_callback("Asset Index".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
         progress_callback("Downloading asset index...".to_string(), 0.2);
-        let index_resp = client
-            .get(&asset_index.url)
-            .send()
-            .map_err(|e| format!("Failed to fetch asset index: {}", e))?;
-        let index_content = index_resp.text().map_err(|e| e.to_string())?;
+        let index_resp = match client.get(&asset_index.url).send() {
+            Ok(resp) => resp,
+            Err(e) => {
+                let err_msg = format!("Failed to fetch asset index: {}", e);
+                item_callback("Asset Index".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                return Err(err_msg);
+            }
+        };
+        let index_content = match index_resp.text() {
+            Ok(text) => text,
+            Err(e) => {
+                let err_msg = e.to_string();
+                item_callback("Asset Index".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                return Err(err_msg);
+            }
+        };
 
         let index_folder = data_path.join("assets").join("indexes");
-        fs::create_dir_all(&index_folder).map_err(|e| e.to_string())?;
-        fs::write(
-            index_folder.join(format!("{}.json", asset_index.id)),
-            &index_content,
-        )
-        .map_err(|e| e.to_string())?;
+        if let Err(e) = fs::create_dir_all(&index_folder) {
+            let err_msg = e.to_string();
+            item_callback("Asset Index".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
+        if let Err(e) = fs::write(index_folder.join(format!("{}.json", asset_index.id)), &index_content) {
+            let err_msg = e.to_string();
+            item_callback("Asset Index".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
 
-        let assets: AssetObjects =
-            serde_json::from_str(&index_content).map_err(|e| e.to_string())?;
+        let assets: AssetObjects = match serde_json::from_str(&index_content) {
+            Ok(ass) => ass,
+            Err(e) => {
+                let err_msg = e.to_string();
+                item_callback("Asset Index".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                return Err(err_msg);
+            }
+        };
+        item_callback("Asset Index".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
 
         // 3. Download Assets
         let objects_folder = data_path.join("assets").join("objects");
-        fs::create_dir_all(&objects_folder).map_err(|e| e.to_string())?;
+        if let Err(e) = fs::create_dir_all(&objects_folder) {
+            return Err(e.to_string());
+        }
 
         let downloaded_count = AtomicUsize::new(0);
         let total_assets = assets.objects.len();
         let client_clone = client.clone();
-        let callback_clone = progress_callback.clone();
 
-        assets
+        item_callback(format!("Minecraft Assets ({} files)", total_assets), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+        let assets_res = assets
             .objects
             .into_par_iter()
             .try_for_each(|(name, obj)| -> Result<(), String> {
@@ -446,14 +495,25 @@ where
                 let current = downloaded_count.fetch_add(1, Ordering::SeqCst) + 1;
                 if current % 25 == 0 || current == total_assets {
                     let progress = 0.2 + (current as f32 / total_assets as f32) * 0.4;
-                    callback_clone(format!("Downloading asset: {}", name), progress);
+                    progress_callback(format!("Downloading asset: {}", name), progress);
                 }
                 Ok(())
-            })?;
+            });
+
+        match assets_res {
+            Ok(_) => {
+                item_callback(format!("Minecraft Assets ({} files)", total_assets), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            }
+            Err(e) => {
+                item_callback(format!("Minecraft Assets ({} files)", total_assets), crate::backend::download::manager::TaskItemStatus::Failed(e.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                return Err(e);
+            }
+        }
     }
 
     // 4. Download Client Jar
     if let Some(downloads) = &meta.downloads {
+        item_callback("Minecraft Client Jar".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
         progress_callback("Downloading client jar...".to_string(), 0.7);
         let client_jar_path = data_path
             .join("libraries")
@@ -461,7 +521,11 @@ where
             .join("mojang")
             .join("minecraft")
             .join(&version.id);
-        fs::create_dir_all(&client_jar_path).map_err(|e| e.to_string())?;
+        if let Err(e) = fs::create_dir_all(&client_jar_path) {
+            let err_msg = e.to_string();
+            item_callback("Minecraft Client Jar".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
         let client_jar_file = client_jar_path.join(format!("minecraft-{}-client.jar", version.id));
 
         let mut needs_client_jar = !client_jar_file.exists();
@@ -476,24 +540,45 @@ where
         }
 
         if needs_client_jar {
-            let mut resp = client
-                .get(&downloads.client.url)
-                .send()
-                .map_err(|e| e.to_string())?
-                .error_for_status()
-                .map_err(|e| e.to_string())?;
-            let mut file = fs::File::create(&client_jar_file).map_err(|e| e.to_string())?;
-            std::io::copy(&mut resp, &mut file).map_err(|e| e.to_string())?;
+            let mut resp = match client.get(&downloads.client.url).send() {
+                Ok(r) => match r.error_for_status() {
+                    Ok(ok_r) => ok_r,
+                    Err(e) => {
+                        let err_msg = e.to_string();
+                        item_callback("Minecraft Client Jar".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                        return Err(err_msg);
+                    }
+                },
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    item_callback("Minecraft Client Jar".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                    return Err(err_msg);
+                }
+            };
+            let mut file = match fs::File::create(&client_jar_file) {
+                Ok(f) => f,
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    item_callback("Minecraft Client Jar".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                    return Err(err_msg);
+                }
+            };
+            if let Err(e) = std::io::copy(&mut resp, &mut file) {
+                let err_msg = e.to_string();
+                item_callback("Minecraft Client Jar".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                return Err(err_msg);
+            }
         }
+        item_callback("Minecraft Client Jar".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
     }
 
     // 5. Download Libraries
     if let Some(libraries) = &meta.libraries {
         let lib_count = AtomicUsize::new(0);
         let total_libs = libraries.len();
-        let callback_clone = progress_callback.clone();
 
-        libraries
+        item_callback(format!("Minecraft Libraries ({} files)", total_libs), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+        let lib_res = libraries
             .par_iter()
             .enumerate()
             .try_for_each(|(_i, lib)| -> Result<(), String> {
@@ -503,15 +588,26 @@ where
                     &client,
                     &lib_count,
                     total_libs,
-                    callback_clone.clone(),
+                    progress_callback,
                 )
-            })?;
+            });
+
+        match lib_res {
+            Ok(_) => {
+                item_callback(format!("Minecraft Libraries ({} files)", total_libs), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            }
+            Err(e) => {
+                item_callback(format!("Minecraft Libraries ({} files)", total_libs), crate::backend::download::manager::TaskItemStatus::Failed(e.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                return Err(e);
+            }
+        }
     }
 
     // 6. Loader Meta & Libraries
     match loader {
         ModLoader::Fabric => {
             if let Some(loader_ver) = loader_version {
+                item_callback(format!("Fabric Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
                 progress_callback("Downloading Fabric metadata...".to_string(), 0.95);
 
                 let game_version = version.id.split('-').next().unwrap_or(&version.id);
@@ -526,7 +622,9 @@ where
                     .map_err(|e| format!("Fabric API request failed: {}", e))?;
 
                 if !resp.status().is_success() {
-                    return Err(format!("Fabric API returned status {}", resp.status()));
+                    let err_msg = format!("Fabric API returned status {}", resp.status());
+                    item_callback(format!("Fabric Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                    return Err(err_msg);
                 }
 
                 let fabric_meta: VersionMeta = resp
@@ -550,7 +648,7 @@ where
                             &client,
                             &lib_count,
                             total_libs,
-                            progress_callback.clone(),
+                            progress_callback,
                         );
                     }
                 }
@@ -559,12 +657,14 @@ where
                     game_version,
                     data_path,
                     &client,
-                    progress_callback.clone(),
+                    progress_callback,
                 );
+                item_callback(format!("Fabric Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
             }
         }
         ModLoader::Quilt => {
             if let Some(loader_ver) = loader_version {
+                item_callback(format!("Quilt Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
                 progress_callback("Downloading Quilt metadata...".to_string(), 0.95);
 
                 let game_version = version.id.split('-').next().unwrap_or(&version.id);
@@ -600,7 +700,7 @@ where
                             &client,
                             &lib_count,
                             libs.len(),
-                            progress_callback.clone(),
+                            progress_callback,
                         );
                     }
                 }
@@ -609,12 +709,14 @@ where
                     game_version,
                     data_path,
                     &client,
-                    progress_callback.clone(),
+                    progress_callback,
                 );
+                item_callback(format!("Quilt Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
             }
         }
         ModLoader::Forge => {
             if let Some(loader_ver) = loader_version {
+                item_callback(format!("Forge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
                 let meta_url = format!(
                     "https://meta.prismlauncher.org/v1/net.minecraftforge/{}.json",
                     loader_ver
@@ -628,7 +730,9 @@ where
                     .map_err(|e| format!("Forge meta request failed: {}", e))?;
 
                 if !resp.status().is_success() {
-                    return Err(format!("Forge meta API returned status {}", resp.status()));
+                    let err_msg = format!("Forge meta API returned status {}", resp.status());
+                    item_callback(format!("Forge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                    return Err(err_msg);
                 }
 
                 #[derive(Deserialize)]
@@ -667,10 +771,11 @@ where
                             &client,
                             &lib_count,
                             total_libs,
-                            progress_callback.clone(),
+                            progress_callback,
                         );
                     }
                 }
+                item_callback(format!("Forge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
             }
         }
         ModLoader::NeoForge => {
@@ -678,6 +783,7 @@ where
                 return Err("NeoForge 1.20.1 is not officially supported by Prism Launcher metadata. Please use standard Forge for 1.20.1 instances instead.".to_string());
             }
             if let Some(loader_ver) = loader_version {
+                item_callback(format!("NeoForge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
                 let meta_url = format!(
                     "https://meta.prismlauncher.org/v1/net.neoforged/{}.json",
                     loader_ver
@@ -691,10 +797,9 @@ where
                     .map_err(|e| format!("NeoForge meta request failed: {}", e))?;
 
                 if !resp.status().is_success() {
-                    return Err(format!(
-                        "NeoForge meta API returned status {}",
-                        resp.status()
-                    ));
+                    let err_msg = format!("NeoForge meta API returned status {}", resp.status());
+                    item_callback(format!("NeoForge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                    return Err(err_msg);
                 }
 
                 #[derive(Deserialize)]
@@ -733,10 +838,11 @@ where
                             &client,
                             &lib_count,
                             total_libs,
-                            progress_callback.clone(),
+                            progress_callback,
                         );
                     }
                 }
+                item_callback(format!("NeoForge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
             }
         }
         _ => {}
@@ -746,17 +852,14 @@ where
     Ok(())
 }
 
-fn download_lib_internal<F>(
+fn download_lib_internal(
     lib: &Library,
     data_path: &Path,
     client: &reqwest::blocking::Client,
     lib_count: &AtomicUsize,
     total_libs: usize,
-    progress_callback: F,
-) -> Result<(), String>
-where
-    F: Fn(String, f32) + Send + 'static,
-{
+    progress_callback: &(dyn Fn(String, f32) + Send + Sync),
+) -> Result<(), String> {
     let mut artifacts_to_download: Vec<Artifact> = Vec::new();
 
     if let Some(downloads) = &lib.downloads {
@@ -891,15 +994,12 @@ where
     Ok(())
 }
 
-fn ensure_intermediary<F>(
+fn ensure_intermediary(
     game_version: &str,
     data_path: &Path,
     client: &reqwest::blocking::Client,
-    progress_callback: F,
-) -> Result<(), String>
-where
-    F: Fn(String, f32) + Send + 'static,
-{
+    progress_callback: &(dyn Fn(String, f32) + Send + Sync),
+) -> Result<(), String> {
     let intermediary_meta_folder = data_path.join("meta").join("net.fabricmc.intermediary");
     fs::create_dir_all(&intermediary_meta_folder).map_err(|e| e.to_string())?;
     let intermediary_meta_file = intermediary_meta_folder.join(format!("{}.json", game_version));

@@ -52,7 +52,7 @@ pub fn get_available_packages() -> Result<Vec<JavaPackage>, String> {
     };
 
     let url = format!(
-        "https://api.foojay.io/disco/v3.0/packages?operating_system=linux&libc_type={}&architecture={}&package_type=jdk&release_status=ga&latest=available",
+        "https://api.foojay.io/disco/v3.0/packages?operating_system=linux&libc_type={}&architecture={}&package_type=jdk&release_status=ga&latest=available&archive_type=tar.gz",
         libc_type, arch
     );
 
@@ -98,35 +98,44 @@ pub fn download_and_extract_with_progress<F>(
         package_id
     );
 
-    let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let client = match reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        .redirect(reqwest::redirect::Policy::limited(10))
         .build()
-        .unwrap();
+    {
+        Ok(c) => c,
+        Err(e) => {
+            progress_callback(JavaDownloadProgress::Error(format!("HTTP client build error: {}", e)));
+            return;
+        }
+    };
 
-    let response = match client.get(&redirect_url).send() {
+    let mut response = match client.get(&redirect_url).send() {
         Ok(r) => r,
         Err(e) => {
             progress_callback(JavaDownloadProgress::Error(format!(
-                "Failed to get download link: {}",
+                "Failed to request Java package: {}",
                 e
             )));
             return;
         }
     };
 
-    let download_url = match response.headers().get("location") {
-        Some(loc) => loc.to_str().unwrap_or_default().to_string(),
-        None => {
-            progress_callback(JavaDownloadProgress::Error(
-                "No download redirect found".into(),
-            ));
-            return;
-        }
-    };
+    if !response.status().is_success() {
+        progress_callback(JavaDownloadProgress::Error(format!(
+            "Download failed with HTTP status {}",
+            response.status()
+        )));
+        return;
+    }
 
-    let filename = download_url
+    let final_url = response.url().as_str().to_string();
+    let clean_url = final_url.split('?').next().unwrap_or(&final_url);
+    let clean_url = clean_url.split('#').next().unwrap_or(clean_url);
+    let filename = clean_url
         .split('/')
         .last()
+        .filter(|s| !s.is_empty())
         .unwrap_or("java_runtime.tar.gz");
 
     if let Err(e) = fs::create_dir_all(target_dir) {
@@ -134,14 +143,6 @@ pub fn download_and_extract_with_progress<F>(
         return;
     }
     let download_path = target_dir.join(filename);
-
-    let mut response = match reqwest::blocking::get(&download_url) {
-        Ok(r) => r,
-        Err(e) => {
-            progress_callback(JavaDownloadProgress::Error(e.to_string()));
-            return;
-        }
-    };
 
     let total_size = response.content_length().unwrap_or(0);
     let mut file = match fs::File::create(&download_path) {
@@ -188,12 +189,42 @@ pub fn download_and_extract_with_progress<F>(
         total: total_size,
     });
 
+    // Ensure all downloaded bytes are flushed to disk and file handle is closed before extraction
+    drop(file);
+
     progress_callback(JavaDownloadProgress::Extracting);
 
-    let is_zip = filename.ends_with(".zip");
+    let mut magic = [0u8; 4];
+    let is_zip = if let Ok(mut f) = fs::File::open(&download_path) {
+        let n = f.read(&mut magic).unwrap_or(0);
+        if n >= 4 && magic[0] == 0x50 && magic[1] == 0x4B && magic[2] == 0x03 && magic[3] == 0x04 {
+            true
+        } else if n >= 2 && magic[0] == 0x1F && magic[1] == 0x8B {
+            false
+        } else {
+            let mut prefix = vec![0u8; 200];
+            if let Ok(mut f_start) = fs::File::open(&download_path) {
+                let len = f_start.read(&mut prefix).unwrap_or(0);
+                let text = String::from_utf8_lossy(&prefix[..len]);
+                if text.contains("<html") || text.contains("<!DOCTYPE") || text.contains("Forbidden") || text.contains("Denied") {
+                    progress_callback(JavaDownloadProgress::Error(format!(
+                        "Download returned server error page instead of archive:\n{}",
+                        text.lines().take(3).collect::<Vec<_>>().join(" ")
+                    )));
+                    let _ = fs::remove_file(&download_path);
+                    return;
+                }
+            }
+            filename.to_lowercase().ends_with(".zip")
+        }
+    } else {
+        filename.to_lowercase().ends_with(".zip")
+    };
+
     let output = if is_zip {
         Command::new("unzip")
             .arg("-q")
+            .arg("-o")
             .arg(&download_path)
             .arg("-d")
             .arg(target_dir)
@@ -210,15 +241,26 @@ pub fn download_and_extract_with_progress<F>(
     let output = match output {
         Ok(o) => o,
         Err(e) => {
-            progress_callback(JavaDownloadProgress::Error(e.to_string()));
+            progress_callback(JavaDownloadProgress::Error(format!(
+                "Extraction tool failed: {}. Ensure 'tar' or 'unzip' is installed.",
+                e
+            )));
+            let _ = fs::remove_file(&download_path);
             return;
         }
     };
 
     if !output.status.success() {
-        progress_callback(JavaDownloadProgress::Error(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        let err_msg = String::from_utf8_lossy(&output.stderr).to_string();
+        progress_callback(JavaDownloadProgress::Error(format!(
+            "Extraction failed: {}",
+            if err_msg.trim().is_empty() {
+                String::from_utf8_lossy(&output.stdout).to_string()
+            } else {
+                err_msg
+            }
+        )));
+        let _ = fs::remove_file(&download_path);
         return;
     }
 
@@ -227,7 +269,7 @@ pub fn download_and_extract_with_progress<F>(
     if let Ok(entries) = fs::read_dir(target_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.join("bin/java").exists() {
+            if path.is_dir() && (path.join("bin/java").exists() || path.join("Contents/Home/bin/java").exists()) {
                 progress_callback(JavaDownloadProgress::Finished(path));
                 return;
             }
@@ -235,6 +277,6 @@ pub fn download_and_extract_with_progress<F>(
     }
 
     progress_callback(JavaDownloadProgress::Error(
-        "Extraction failed to find java binary".to_string(),
+        "Extraction finished but could not locate 'bin/java' in target directory".to_string(),
     ));
 }

@@ -159,11 +159,13 @@ fn main() {
             background-color: @card_bg_color;
             border: none;
             border-radius: 12px;
-            transition: background-color 200ms ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            transition: background-color 200ms ease, box-shadow 200ms ease;
         }
 
         .overview-card:hover {
             background-color: mix(@card_bg_color, @window_fg_color, 0.05);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
         }
 
         .overview-card:active {
@@ -172,6 +174,7 @@ fn main() {
 
         .overview-grid-mode flowboxchild:hover .overview-card {
             background-color: mix(@card_bg_color, @window_fg_color, 0.05);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
         }
 
         .overview-grid-mode flowboxchild:selected .overview-card {
@@ -202,7 +205,8 @@ fn main() {
             background-color: @card_bg_color;
             border-radius: 12px;
             border: none;
-            transition: background-color 300ms ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            transition: background-color 300ms ease, box-shadow 200ms ease;
         }
 
         .featured-carousel-item {
@@ -326,11 +330,13 @@ fn main() {
             border: none;
             border-radius: 12px;
             padding: 12px 16px;
-            transition: background-color 200ms ease;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+            transition: background-color 200ms ease, box-shadow 200ms ease;
         }
 
         .overview-list-mode flowboxchild:hover .overview-list-card {
             background-color: mix(@card_bg_color, @window_fg_color, 0.05);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
         }
 
         .overview-list-mode flowboxchild:selected .overview-list-card {

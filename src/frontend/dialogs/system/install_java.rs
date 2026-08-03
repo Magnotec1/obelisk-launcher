@@ -90,6 +90,7 @@ pub enum InstallJavaInput {
 
 #[derive(Debug)]
 pub enum InstallJavaOutput {
+    Progress(crate::backend::download::manager::DownloadMsg),
     Finished,
 }
 
@@ -108,8 +109,10 @@ impl SimpleComponent for InstallJavaDialog {
             set_can_close: true,
 
             #[wrap(Some)]
-            set_child = &adw::ToolbarView {
-                add_top_bar = &adw::HeaderBar {
+            set_child = &adw::ToastOverlay {
+                #[wrap(Some)]
+                set_child = &adw::ToolbarView {
+                    add_top_bar = &adw::HeaderBar {
                     #[wrap(Some)]
                     set_title_widget = &adw::WindowTitle {
                         set_title: "Java Installer",
@@ -350,9 +353,9 @@ impl SimpleComponent for InstallJavaDialog {
                         (false, false, false, false) => "select",
                     },
                 },
-
             }
         }
+    }
     }
 
     fn init(
@@ -429,6 +432,9 @@ impl SimpleComponent for InstallJavaDialog {
             }
             InstallJavaInput::Close => {
                 self.visible = false;
+                if let Some(win) = relm4::main_application().active_window() {
+                    win.close();
+                }
             }
             InstallJavaInput::Refresh => {
                 self.loading_versions = true;
@@ -455,27 +461,56 @@ impl SimpleComponent for InstallJavaDialog {
             }
             InstallJavaInput::Install => {
                 if let Some(package) = &self.selected_package {
-                    self.installing = true;
-                    self.has_error = false;
-                    self.progress = -1.0;
-                    self.status = format!("Starting {} installation...", package.java_version);
+                    let toast_msg = format!("Added Java {} ({}) to download queue", package.java_version, package.distribution);
 
-                    let cancel_flag = Arc::new(AtomicBool::new(false));
-                    self.cancel_flag = Some(cancel_flag.clone());
+                    let task = std::sync::Arc::new(crate::backend::download::manager::JavaDownloadTask {
+                        package_id: package.id.clone(),
+                        target_dir: self.target_dir.clone(),
+                    });
+
+                    let job = crate::backend::download::manager::NetworkJob {
+                        id: format!("java-{}", package.id),
+                        title: format!("Java {} ({})", package.java_version, package.distribution),
+                        tasks: vec![task],
+                        status: crate::backend::download::manager::NetworkJobStatus::Pending,
+                        log: Vec::new(),
+                        items: Vec::new(),
+                    };
+
+                    let (tx, rx) = std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
+                    crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
+
+                    // Close dialog FIRST so it's gone before toast fires
+                    self.visible = false;
+                    if let Some(win) = relm4::main_application().active_window() {
+                        win.close();
+                    }
+                    // Now show toast — dialog is dismissed so parent window's overlay gets picked
+                    if let Some(win) = relm4::main_application().active_window() {
+                        crate::frontend::toast::show_toast(&win, toast_msg);
+                    }
 
                     let sender_clone = sender.input_sender().clone();
-                    let target_dir = self.target_dir.clone();
-                    let package_id = package.id.clone();
-
+                    let sender_output = sender.output_sender().clone();
                     std::thread::spawn(move || {
-                        crate::backend::download::sources::java::download_and_extract_with_progress(
-                            &package_id,
-                            &target_dir,
-                            cancel_flag,
-                            move |progress| {
-                                let _ = sender_clone.send(InstallJavaInput::Progress(progress));
-                            },
-                        );
+                        while let Ok(msg) = rx.recv() {
+                            let _ = sender_output.send(InstallJavaOutput::Progress(msg.clone()));
+                            match msg {
+                                crate::backend::download::manager::DownloadMsg::Error(err) => {
+                                    let _ = sender_clone.send(InstallJavaInput::Progress(
+                                        crate::backend::download::sources::java::JavaDownloadProgress::Error(err),
+                                    ));
+                                }
+                                crate::backend::download::manager::DownloadMsg::Finished => {
+                                    let _ = sender_clone.send(InstallJavaInput::Progress(
+                                        crate::backend::download::sources::java::JavaDownloadProgress::Finished(
+                                            std::path::PathBuf::new(),
+                                        ),
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        }
                     });
                 }
             }
@@ -516,6 +551,9 @@ impl SimpleComponent for InstallJavaDialog {
                         self.has_error = true;
                         self.status = format!("{}", e);
                         self.cancel_flag = None;
+                        if let Some(win) = relm4::main_application().active_window() {
+                            crate::frontend::toast::show_toast(&win, format!("Java download failed: {}", e));
+                        }
                     }
                 }
             }

@@ -75,12 +75,14 @@ pub enum SettingsInput {
     OpenJavaInstaller,
     DeleteJava(PathBuf),
     SetJavaVersions(Vec<JavaInstance>),
+    ForwardProgress(crate::backend::download::manager::DownloadMsg),
 }
 
 #[derive(Debug)]
 pub enum SettingsOutput {
     ConfigUpdated(Config),
     OpenAccountManager,
+    DownloadProgress(crate::backend::download::manager::DownloadMsg),
 }
 
 #[relm4::component(pub)]
@@ -96,8 +98,10 @@ impl SimpleComponent for SettingsDialog {
             set_content_height: 550,
 
             #[wrap(Some)]
-            set_child = &adw::ToolbarView {
-                add_top_bar = &adw::HeaderBar {
+            set_child = &adw::ToastOverlay {
+                #[wrap(Some)]
+                set_child = &adw::ToolbarView {
+                    add_top_bar = &adw::HeaderBar {
                     #[wrap(Some)]
                     set_title_widget = &adw::ViewSwitcher {
                         set_policy: adw::ViewSwitcherPolicy::Wide,
@@ -333,9 +337,10 @@ impl SimpleComponent for SettingsDialog {
                 #[watch]
                 set_visible_child_name: &model.active_page,
             }
-            }
         }
     }
+}
+}
 
     fn init(
         config: Self::Init,
@@ -348,6 +353,7 @@ impl SimpleComponent for SettingsDialog {
             InstallJavaDialog::builder()
                 .launch(java_dir)
                 .forward(sender.input_sender(), |out| match out {
+                    InstallJavaOutput::Progress(msg) => SettingsInput::ForwardProgress(msg),
                     InstallJavaOutput::Finished => SettingsInput::RefreshJava,
                 });
 
@@ -497,6 +503,9 @@ impl SimpleComponent for SettingsDialog {
                 self.java_installer.emit(InstallJavaInput::Open);
                 let parent = relm4::main_application().active_window();
                 self.java_installer.widget().present(parent.as_ref());
+            }
+            SettingsInput::ForwardProgress(msg) => {
+                sender.output(SettingsOutput::DownloadProgress(msg)).ok();
             }
             SettingsInput::DeleteJava(path) => {
                 let java_dir = self.config.minecraft_data_path.join("java");

@@ -677,17 +677,15 @@ pub fn resolve_dependencies(
     Ok(())
 }
 
-pub fn install_mod_with_dependencies<F>(
+pub fn install_mod_with_dependencies(
     project_id: &str,
     target_version: Option<String>,
     game_version: &str,
     loader: ModLoader,
     mods_dir: &Path,
-    progress_callback: F,
-) -> Result<Vec<PathBuf>, String>
-where
-    F: Fn(String, f32) + Clone + Send + 'static,
-{
+    progress_callback: &dyn Fn(String, f32),
+    item_callback: &dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType),
+) -> Result<Vec<PathBuf>, String> {
     progress_callback("Resolving Modrinth dependencies...".to_string(), 0.1);
     let version = if let Some(vid) = target_version {
         let url = format!("{}/version/{}", MODRINTH_API_BASE, vid);
@@ -719,13 +717,28 @@ where
     let mut downloaded_paths = Vec::new();
     let total_mods = resolved.len();
     let mut current = 0;
+    let mut download_errors = Vec::new();
 
     for (_, v) in resolved {
         current += 1;
         let progress = 0.1 + (current as f32 / total_mods as f32) * 0.9;
         progress_callback(format!("Downloading mod: {}", v.name), progress);
-        let path = download_mod(&v, mods_dir)?;
-        downloaded_paths.push(path);
+        item_callback(v.name.clone(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::Mod);
+        match download_mod(&v, mods_dir) {
+            Ok(path) => {
+                downloaded_paths.push(path);
+                item_callback(v.name.clone(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::Mod);
+            }
+            Err(e) => {
+                progress_callback(format!("Error downloading mod {}: {}", v.name, e), progress);
+                item_callback(v.name.clone(), crate::backend::download::manager::TaskItemStatus::Failed(e.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
+                download_errors.push(format!("{}: {}", v.name, e));
+            }
+        }
+    }
+
+    if !download_errors.is_empty() {
+        return Err(format!("Failed to download some mods: {}", download_errors.join(", ")));
     }
 
     Ok(downloaded_paths)
@@ -741,6 +754,10 @@ pub fn download_mod(version: &ModVersion, mods_dir: &Path) -> Result<PathBuf, St
 
     let dest_path = mods_dir.join(&file.filename);
 
+    if dest_path.exists() && dest_path.metadata().map(|m| m.len() == file.size).unwrap_or(false) {
+        return Ok(dest_path);
+    }
+
     let mut response = HTTP_CLIENT
         .get(&file.url)
         .send()
@@ -754,3 +771,60 @@ pub fn download_mod(version: &ModVersion, mods_dir: &Path) -> Result<PathBuf, St
 
     Ok(dest_path)
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UpdateCheckRequest {
+    hashes: Vec<String>,
+    algorithm: String,
+    loaders: Vec<String>,
+    game_versions: Vec<String>,
+}
+
+pub fn calculate_file_sha1(path: &Path) -> Result<String, std::io::Error> {
+    use sha1::{Sha1, Digest};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha1::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+pub fn check_updates(
+    hashes: Vec<String>,
+    loaders: Vec<String>,
+    game_versions: Vec<String>,
+) -> Result<HashMap<String, ModVersion>, String> {
+    let request_body = UpdateCheckRequest {
+        hashes,
+        algorithm: "sha1".to_string(),
+        loaders: loaders.iter().map(|l| l.to_lowercase()).collect(),
+        game_versions,
+    };
+
+    let url = format!("{}/version_files/update", MODRINTH_API_BASE);
+    let response = HTTP_CLIENT
+        .post(url)
+        .json(&request_body)
+        .send()
+        .map_err(super::map_reqwest_error)?;
+
+    if !response.status().is_success() {
+        return Err(format!("Modrinth API error: {}", response.status()));
+    }
+
+    let result: HashMap<String, RawVersion> = response.json().map_err(|e| e.to_string())?;
+    let clean_result = result
+        .into_iter()
+        .map(|(hash, raw)| (hash, raw.into_clean()))
+        .collect();
+
+    Ok(clean_result)
+}
+

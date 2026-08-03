@@ -158,11 +158,11 @@ impl FactoryComponent for CarouselCard {
 
             gtk::Box {
                 set_orientation: gtk::Orientation::Horizontal,
-                set_spacing: 28,
-                set_margin_start: 60,
-                set_margin_end: 60,
-                set_margin_top: 20,
-                set_margin_bottom: 20,
+                set_spacing: 16,
+                set_margin_start: 24,
+                set_margin_end: 24,
+                set_margin_top: 16,
+                set_margin_bottom: 16,
 
                 gtk::Stack {
                     set_hhomogeneous: true,
@@ -480,6 +480,378 @@ impl Component for ModpackVersionDialog {
 }
 
 // ---------------------------------------------------------------------------
+// 3d. Modpack Install Dialog Component
+// ---------------------------------------------------------------------------
+pub struct ModpackInstallDialog {
+    name: String,
+    versions: Vec<ModpackVersionInfo>,
+    selected_idx: usize,
+    target_group: Option<String>,
+    available_groups: Vec<String>,
+    selected_group_idx: u32,
+    current_step: usize,
+    search_text: String,
+
+    group_model: gtk::StringList,
+    version_rows: FactoryVecDeque<VersionSelectRow>,
+    name_entry: Option<adw::EntryRow>,
+}
+
+#[derive(Debug)]
+pub enum ModpackInstallDialogInput {
+    Show {
+        default_name: String,
+        versions: Vec<ModpackVersionInfo>,
+        selected_idx: usize,
+        target_group: Option<String>,
+        available_groups: Vec<String>,
+    },
+    SetName(String),
+    SelectGroup(u32),
+    SelectVersion(usize),
+    SearchChanged(String),
+    SetStep(usize),
+    NextStep,
+    PrevStep,
+    Confirm,
+    Close,
+}
+
+#[derive(Debug)]
+pub enum ModpackInstallDialogOutput {
+    Install {
+        name: String,
+        version: ModpackVersionInfo,
+        group: Option<String>,
+    },
+}
+
+impl ModpackInstallDialog {
+    fn update_version_list(&mut self) {
+        let mut guard = self.version_rows.guard();
+        guard.clear();
+        let query = self.search_text.trim().to_lowercase();
+        for (idx, v) in self.versions.iter().enumerate() {
+            if query.is_empty()
+                || v.name.to_lowercase().contains(&query)
+                || v.version_number.to_lowercase().contains(&query)
+                || v.game_versions.iter().any(|g| g.to_lowercase().contains(&query))
+            {
+                guard.push_back((v.clone(), idx, idx == self.selected_idx));
+            }
+        }
+    }
+}
+
+#[relm4::component(pub)]
+impl Component for ModpackInstallDialog {
+    type Init = ();
+    type Input = ModpackInstallDialogInput;
+    type Output = ModpackInstallDialogOutput;
+    type CommandOutput = ();
+
+    view! {
+        adw::Dialog {
+            set_title: "Install Modpack",
+            set_content_width: 500,
+            set_content_height: 540,
+            set_can_close: true,
+
+            #[wrap(Some)]
+            set_child = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {
+                    #[wrap(Some)]
+                    set_title_widget = &adw::WindowTitle {
+                        set_title: "Install Modpack",
+                        #[watch]
+                        set_subtitle: match model.current_step {
+                            0 => "Step 1 of 2: General & Version",
+                            _ => "Step 2 of 2: Confirm Details",
+                        },
+                    },
+                },
+
+                #[wrap(Some)]
+                set_content = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 0,
+
+                    gtk::Stack {
+                        set_vexpand: true,
+                        set_hexpand: true,
+                        set_transition_type: gtk::StackTransitionType::SlideLeftRight,
+                        set_transition_duration: 250,
+
+                        // Step 1: General Details & Version Selector
+                        add_named[Some("general")] = &gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 12,
+                            set_margin_top: 16,
+                            set_margin_start: 16,
+                            set_margin_end: 16,
+                            set_margin_bottom: 4,
+
+                            adw::PreferencesGroup {
+                                set_title: "Instance Details",
+
+                                #[name = "name_entry"]
+                                adw::EntryRow {
+                                    set_title: "Instance Name",
+                                    connect_changed[sender] => move |entry| {
+                                        sender.input(ModpackInstallDialogInput::SetName(entry.text().to_string()));
+                                    },
+                                    connect_entry_activated[sender] => move |_| {
+                                        sender.input(ModpackInstallDialogInput::NextStep);
+                                    },
+                                },
+                                adw::ComboRow {
+                                    set_title: "Group / Folder",
+                                    #[watch]
+                                    set_model: Some(&model.group_model),
+                                    #[watch]
+                                    set_selected: model.selected_group_idx,
+                                    connect_selected_notify[sender] => move |combo| {
+                                        sender.input(ModpackInstallDialogInput::SelectGroup(combo.selected()));
+                                    },
+                                },
+                            },
+
+                            adw::PreferencesGroup {
+                                set_title: "Modpack Version",
+
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
+                                    set_spacing: 8,
+
+                                    gtk::SearchEntry {
+                                        set_placeholder_text: Some("Search modpack versions..."),
+                                        connect_search_changed[sender] => move |entry| {
+                                            sender.input(ModpackInstallDialogInput::SearchChanged(entry.text().to_string()));
+                                        },
+                                    },
+
+                                    gtk::ScrolledWindow {
+                                        set_vexpand: true,
+                                        set_hscrollbar_policy: gtk::PolicyType::Never,
+                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                                        set_min_content_height: 180,
+
+                                        #[local_ref]
+                                        versions_list -> gtk::ListBox {
+                                            set_selection_mode: gtk::SelectionMode::None,
+                                            set_css_classes: &["boxed-list"],
+                                        }
+                                    }
+                                }
+                            }
+                        },
+
+                        // Step 2: Confirm Details
+                        add_named[Some("confirm")] = &gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_margin_top: 16,
+                            set_margin_start: 16,
+                            set_margin_end: 16,
+                            set_margin_bottom: 4,
+
+                            adw::PreferencesPage {
+                                adw::PreferencesGroup {
+                                    set_title: "Summary &amp; Review",
+                                    adw::ActionRow {
+                                        set_title: "Instance Name",
+                                        #[watch]
+                                        set_subtitle: if model.name.trim().is_empty() { "Not set" } else { model.name.trim() },
+                                    },
+                                    adw::ActionRow {
+                                        set_title: "Group / Folder",
+                                        #[watch]
+                                        set_subtitle: model.target_group.as_deref().unwrap_or("None (No Group)"),
+                                    },
+                                    adw::ActionRow {
+                                        set_title: "Selected Modpack Version",
+                                        #[watch]
+                                        set_subtitle: &if let Some(v) = model.versions.get(model.selected_idx) {
+                                            format!("{} ({}) · {}", v.name, v.version_number, v.game_versions.join(", "))
+                                        } else {
+                                            "Not selected".to_string()
+                                        },
+                                    },
+                                },
+                            }
+                        },
+                        #[watch]
+                        set_visible_child_name: match model.current_step {
+                            0 => "general",
+                            _ => "confirm",
+                        },
+                    }
+                },
+
+                add_bottom_bar = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 12,
+                    set_margin_bottom: 16,
+                    set_margin_start: 16,
+                    set_margin_end: 16,
+
+                    // Left action button: Cancel on step 0, Back on step 1
+                    gtk::Button {
+                        #[watch]
+                        set_label: if model.current_step == 0 { "Cancel" } else { "Back" },
+                        set_css_classes: &["pill"],
+                        connect_clicked[sender] => move |_| {
+                            sender.input(ModpackInstallDialogInput::PrevStep);
+                        }
+                    },
+
+                    gtk::Box { set_hexpand: true },
+
+                    // Right action button: Next on step 0, Install Modpack on step 1
+                    gtk::Button {
+                        set_label: "Next",
+                        set_css_classes: &["suggested-action", "pill"],
+                        #[watch]
+                        set_visible: model.current_step == 0,
+                        #[watch]
+                        set_sensitive: !model.name.trim().is_empty() && !model.versions.is_empty(),
+                        connect_clicked[sender] => move |_| {
+                            sender.input(ModpackInstallDialogInput::NextStep);
+                        }
+                    },
+
+                    gtk::Button {
+                        set_label: "Install Modpack",
+                        set_css_classes: &["suggested-action", "pill"],
+                        #[watch]
+                        set_visible: model.current_step == 1,
+                        #[watch]
+                        set_sensitive: !model.name.trim().is_empty() && !model.versions.is_empty(),
+                        connect_clicked[sender] => move |_| {
+                            sender.input(ModpackInstallDialogInput::Confirm);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn init(_init: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+        let version_rows = FactoryVecDeque::builder()
+            .launch(gtk::ListBox::new())
+            .forward(sender.input_sender(), |out| match out {
+                VersionSelectRowOutput::Selected(idx) => ModpackInstallDialogInput::SelectVersion(idx),
+            });
+
+        let group_model = gtk::StringList::new(&["None (No Group)"]);
+
+        let model = ModpackInstallDialog {
+            name: String::new(),
+            versions: Vec::new(),
+            selected_idx: 0,
+            target_group: None,
+            available_groups: Vec::new(),
+            selected_group_idx: 0,
+            current_step: 0,
+            search_text: String::new(),
+            group_model,
+            version_rows,
+            name_entry: None,
+        };
+
+        let versions_list = model.version_rows.widget();
+        let widgets = view_output!();
+
+        let mut model = model;
+        model.name_entry = Some(widgets.name_entry.clone());
+
+        ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
+        match msg {
+            ModpackInstallDialogInput::Show { default_name, versions, selected_idx, target_group, available_groups } => {
+                self.name = default_name.clone();
+                self.versions = versions;
+                self.selected_idx = selected_idx;
+                self.target_group = target_group.clone();
+                self.available_groups = available_groups;
+                self.current_step = 0;
+                self.search_text.clear();
+
+                // Rebuild group string list model
+                let items: Vec<String> = std::iter::once("None (No Group)".to_string())
+                    .chain(self.available_groups.iter().cloned())
+                    .collect();
+                let str_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+                self.group_model.splice(0, self.group_model.n_items(), &str_refs);
+
+                self.selected_group_idx = if let Some(ref tg) = target_group {
+                    self.available_groups.iter().position(|g| g == tg).map(|i| (i + 1) as u32).unwrap_or(0)
+                } else {
+                    0
+                };
+
+                if let Some(ref entry) = self.name_entry {
+                    entry.set_text(&default_name);
+                }
+
+                self.update_version_list();
+            }
+            ModpackInstallDialogInput::SetName(name) => {
+                self.name = name;
+            }
+            ModpackInstallDialogInput::SelectGroup(idx) => {
+                self.selected_group_idx = idx;
+                if idx == 0 {
+                    self.target_group = None;
+                } else if let Some(group) = self.available_groups.get((idx - 1) as usize) {
+                    self.target_group = Some(group.clone());
+                }
+            }
+            ModpackInstallDialogInput::SelectVersion(idx) => {
+                self.selected_idx = idx;
+                self.update_version_list();
+            }
+            ModpackInstallDialogInput::SearchChanged(text) => {
+                self.search_text = text;
+                self.update_version_list();
+            }
+            ModpackInstallDialogInput::SetStep(step) => {
+                self.current_step = step;
+            }
+            ModpackInstallDialogInput::NextStep => {
+                if self.current_step == 0 && !self.name.trim().is_empty() && !self.versions.is_empty() {
+                    self.current_step = 1;
+                }
+            }
+            ModpackInstallDialogInput::PrevStep => {
+                if self.current_step == 0 {
+                    root.close();
+                } else {
+                    self.current_step = 0;
+                }
+            }
+            ModpackInstallDialogInput::Confirm => {
+                let trimmed = self.name.trim();
+                if !trimmed.is_empty() {
+                    if let Some(version) = self.versions.get(self.selected_idx) {
+                        sender.output(ModpackInstallDialogOutput::Install {
+                            name: trimmed.to_string(),
+                            version: version.clone(),
+                            group: self.target_group.clone(),
+                        }).ok();
+                        root.close();
+                    }
+                }
+            }
+            ModpackInstallDialogInput::Close => {
+                root.close();
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 4. Main Component Model & Controller
 // ---------------------------------------------------------------------------
 #[derive(Debug)]
@@ -506,9 +878,11 @@ pub enum DiscoverInput {
     SelectVersion(u32),
     CloseDetails,
     InstallClicked,
-    ConfirmInstall(String),
-    CancelInstall,
-    PerformInstall,
+    PerformInstallWithNameGroup(String, ModpackVersionInfo, Option<String>),
+    UpdateGroups {
+        current_folder: Option<String>,
+        available_groups: Vec<String>,
+    },
     CarouselScroll(f64),
     ScreenshotScroll(f64),
     Refresh,
@@ -519,7 +893,7 @@ pub enum DiscoverInput {
 
 #[derive(Debug)]
 pub enum DiscoverOutput {
-    InstallModpack(String, ModpackVersionInfo, String), // Name, VersionInfo, ProviderName
+    InstallModpack(String, ModpackVersionInfo, Option<String>, String), // Name, VersionInfo, TargetGroup, ProviderName
     DetailsOpened,
     DetailsClosed,
 }
@@ -540,6 +914,8 @@ pub struct DiscoverView {
     loading_details: bool,
     available_versions: Vec<ModpackVersionInfo>,
     selected_version_idx: usize,
+    current_folder: Option<String>,
+    available_groups: Vec<String>,
 
     // Caches
     icon_cache: HashMap<String, gdk::Texture>,
@@ -547,13 +923,9 @@ pub struct DiscoverView {
     color_cache: HashMap<String, (u8, u8, u8)>,
     carousel_container: Option<gtk::Box>,
 
-    // Installation popup state
-    prompting_install: bool,
-    install_instance_name: String,
-    install_name_entry: Option<gtk::Entry>,
-
     version_dialog: Controller<ModpackVersionDialog>,
     description_dialog: Controller<DescriptionDialog>,
+    install_dialog: Controller<ModpackInstallDialog>,
 }
 
 impl DiscoverView {
@@ -604,6 +976,8 @@ impl SimpleComponent for DiscoverView {
         gtk::Stack {
             set_vexpand: true,
             set_hexpand: true,
+            set_hhomogeneous: false,
+            set_vhomogeneous: false,
             set_transition_type: gtk::StackTransitionType::SlideLeftRight,
             set_transition_duration: 300,
 
@@ -842,9 +1216,9 @@ impl SimpleComponent for DiscoverView {
                             set_orientation: gtk::Orientation::Vertical,
                             set_spacing: 16,
 
-                            // Header: Icon + Title + Stats
+                            // Header: Icon + Title + Author Subtitle + Install Icon Button (matching Mod Browser)
                             gtk::Box {
-                                set_spacing: 16,
+                                set_spacing: 20,
 
                                 gtk::Stack {
                                     set_hhomogeneous: true,
@@ -874,35 +1248,53 @@ impl SimpleComponent for DiscoverView {
 
                                 gtk::Box {
                                     set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 8,
                                     set_valign: gtk::Align::Center,
+                                    set_spacing: 4,
                                     set_hexpand: true,
 
                                     gtk::Label {
                                         #[watch]
                                         set_label: &escape(model.selected_details.as_ref().map(|d| d.info.title.as_str()).unwrap_or("")),
-                                        set_css_classes: &["title-3"],
+                                        set_css_classes: &["title-1"],
                                         set_halign: gtk::Align::Start,
                                         set_use_markup: true,
+                                        set_ellipsize: gtk::pango::EllipsizeMode::End,
                                     },
 
-                                    // Stats badges row
-                                    gtk::Box {
-                                        set_spacing: 8,
+                                    gtk::Label {
+                                        #[watch]
+                                        set_label: &format!("by {}", escape(model.selected_details.as_ref().and_then(|d| d.info.author.as_deref()).unwrap_or("Unknown author"))),
+                                        set_css_classes: &["dim-label"],
                                         set_halign: gtk::Align::Start,
-
-                                        gtk::Label {
-                                            #[watch]
-                                            set_label: &format!("{} downloads", format_downloads(model.selected_details.as_ref().map(|d| d.info.downloads).unwrap_or(0))),
-                                            set_css_classes: &["pill-badge"],
-                                        },
-                                        gtk::Label {
-                                            #[watch]
-                                            set_label: &format!("{} likes", format_downloads(model.selected_details.as_ref().map(|d| d.info.follows).unwrap_or(0))),
-                                            set_css_classes: &["pill-badge"],
-                                        },
+                                        set_use_markup: true,
+                                        set_ellipsize: gtk::pango::EllipsizeMode::End,
                                     },
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: "folder-download-symbolic",
+                                    set_tooltip_text: Some("Install Modpack"),
+                                    set_valign: gtk::Align::Center,
+                                    set_css_classes: &["suggested-action", "pill"],
+                                    connect_clicked => DiscoverInput::InstallClicked,
                                 }
+                            },
+
+                            // Stats badges row (matching Mod Browser)
+                            gtk::Box {
+                                set_spacing: 8,
+                                set_halign: gtk::Align::Start,
+
+                                gtk::Label {
+                                    #[watch]
+                                    set_label: &format!("{} downloads", format_downloads(model.selected_details.as_ref().map(|d| d.info.downloads).unwrap_or(0))),
+                                    set_css_classes: &["pill-badge"],
+                                },
+                                gtk::Label {
+                                    #[watch]
+                                    set_label: &format!("{} likes", format_downloads(model.selected_details.as_ref().map(|d| d.info.follows).unwrap_or(0))),
+                                    set_css_classes: &["pill-badge"],
+                                },
                             },
 
                             // Screenshot Gallery Carousel (nested, wrapped in a tight adw::Clamp)
@@ -1142,104 +1534,9 @@ impl SimpleComponent for DiscoverView {
                                 },
                             },
 
-                            // Installation / Version selector
-                            adw::PreferencesGroup {
-                                set_title: "Installation",
 
-                                adw::ActionRow {
-                                    set_title: "Select Version",
-                                    #[watch]
-                                    set_subtitle: &if let Some(v) = model.available_versions.get(model.selected_version_idx) {
-                                        format!("{} ({})", v.name, v.version_number)
-                                    } else {
-                                        "No version selected".to_string()
-                                    },
-                                    set_activatable: true,
-                                    connect_activated[sender] => move |_| {
-                                        sender.input(DiscoverInput::OpenVersionDialog);
-                                    },
-                                    add_suffix = &gtk::Button {
-                                        set_icon_name: "edit-symbolic",
-                                        set_css_classes: &["flat", "circular"],
-                                        set_tooltip_text: Some("Select Version"),
-                                        set_valign: gtk::Align::Center,
-                                        connect_clicked[sender] => move |_| {
-                                            sender.input(DiscoverInput::OpenVersionDialog);
-                                        }
-                                    }
-                                }
-                            },
 
-                            // Install action card
-                            gtk::Box {
-                                set_orientation: gtk::Orientation::Vertical,
-                                set_spacing: 8,
 
-                                gtk::Box {
-                                    #[watch]
-                                    set_visible: !model.prompting_install,
-                                    set_orientation: gtk::Orientation::Horizontal,
-                                    set_spacing: 12,
-
-                                    gtk::Button {
-                                        set_label: "Install Modpack",
-                                        set_css_classes: &["suggested-action", "pill"],
-                                        set_hexpand: true,
-                                        set_height_request: 40,
-                                        connect_clicked => DiscoverInput::InstallClicked,
-                                    }
-                                },
-
-                                gtk::Box {
-                                    #[watch]
-                                    set_visible: model.prompting_install,
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 8,
-                                    set_css_classes: &["card"],
-                                    set_margin_all: 4,
-
-                                    gtk::Label {
-                                        set_label: "Choose Instance Name:",
-                                        set_halign: gtk::Align::Start,
-                                        set_css_classes: &["dim-label", "caption"],
-                                        set_margin_start: 12,
-                                        set_margin_top: 8,
-                                    },
-
-                                    #[name = "install_name_entry"]
-                                    gtk::Entry {
-                                        set_placeholder_text: Some("My Modpack Instance"),
-                                        set_margin_start: 12,
-                                        set_margin_end: 12,
-                                        connect_changed[sender] => move |entry| {
-                                            sender.input(DiscoverInput::ConfirmInstall(entry.text().to_string()));
-                                        },
-                                        connect_activate => DiscoverInput::PerformInstall,
-                                    },
-
-                                    gtk::Box {
-                                        set_orientation: gtk::Orientation::Horizontal,
-                                        set_spacing: 12,
-                                        set_margin_all: 12,
-
-                                        gtk::Button {
-                                            set_label: "Confirm & Install",
-                                            set_css_classes: &["suggested-action", "pill"],
-                                            set_hexpand: true,
-                                            #[watch]
-                                            set_sensitive: !model.install_instance_name.trim().is_empty(),
-                                            connect_clicked => DiscoverInput::PerformInstall,
-                                        },
-
-                                        gtk::Button {
-                                            set_label: "Cancel",
-                                            set_css_classes: &["pill"],
-                                            set_hexpand: true,
-                                            connect_clicked => DiscoverInput::CancelInstall,
-                                        }
-                                    }
-                                }
-                            },
 
                             // License footer (centered)
                             gtk::Label {
@@ -1303,6 +1600,14 @@ impl SimpleComponent for DiscoverView {
             .launch(())
             .forward(sender.input_sender(), |_| unreachable!());
 
+        let install_dialog = ModpackInstallDialog::builder()
+            .launch(())
+            .forward(sender.input_sender(), |output| match output {
+                ModpackInstallDialogOutput::Install { name, version, group } => {
+                    DiscoverInput::PerformInstallWithNameGroup(name, version, group)
+                }
+            });
+
         let mut model = DiscoverView {
             search_query: String::new(),
             loading: false,
@@ -1318,17 +1623,17 @@ impl SimpleComponent for DiscoverView {
             loading_details: false,
             available_versions: Vec::new(),
             selected_version_idx: 0,
+            current_folder: None,
+            available_groups: Vec::new(),
 
             icon_cache: HashMap::new(),
             screenshot_cache: HashMap::new(),
             color_cache: HashMap::new(),
             carousel_container: None,
 
-            prompting_install: false,
-            install_instance_name: String::new(),
-            install_name_entry: None,
             version_dialog,
             description_dialog,
+            install_dialog,
         };
 
         let popular_grid = model.popular_packs.widget();
@@ -1338,7 +1643,6 @@ impl SimpleComponent for DiscoverView {
 
         let widgets = view_output!();
         model.carousel_container = Some(widgets.carousel_container.clone());
-        model.install_name_entry = Some(widgets.install_name_entry.clone());
 
         // Trigger loading of popular modpacks on startup
         sender.input(DiscoverInput::LoadPopular);
@@ -1425,8 +1729,6 @@ impl SimpleComponent for DiscoverView {
                 self.show_details = true;
                 self.loading_details = true;
                 self.selected_details = None;
-                self.prompting_install = false;
-                self.install_instance_name.clear();
                 
                 // Clear screenshot carousel
                 self.screenshot_cards.guard().clear();
@@ -1449,14 +1751,6 @@ impl SimpleComponent for DiscoverView {
                 self.loading_details = false;
                 match result {
                     Ok(details) => {
-                        // Pre-populate instance name
-                        self.install_instance_name = details.info.title.clone();
-                        // Set entry text imperatively (not via #[watch]) to avoid
-                        // an infinite set_text → changed → ConfirmInstall → set_text loop
-                        if let Some(ref entry) = self.install_name_entry {
-                            entry.set_text(&self.install_instance_name);
-                        }
-                        
                         // Load screenshots
                         let mut guard = self.screenshot_cards.guard();
                         for url in &details.screenshots {
@@ -1588,30 +1882,38 @@ impl SimpleComponent for DiscoverView {
             }
             DiscoverInput::CloseDetails => {
                 self.show_details = false;
-                self.prompting_install = false;
                 sender.output(DiscoverOutput::DetailsClosed).ok();
             }
             DiscoverInput::InstallClicked => {
-                self.prompting_install = true;
-            }
-            DiscoverInput::ConfirmInstall(name) => {
-                self.install_instance_name = name;
-            }
-            DiscoverInput::CancelInstall => {
-                self.prompting_install = false;
-            }
-            DiscoverInput::PerformInstall => {
-                if let Some(version) = self.available_versions.get(self.selected_version_idx) {
-                    sender.output(DiscoverOutput::InstallModpack(
-                        self.install_instance_name.trim().to_string(),
-                        version.clone(),
-                        "Modrinth".to_string()
-                    )).unwrap();
-                    
-                    self.show_details = false;
-                    self.prompting_install = false;
-                    sender.output(DiscoverOutput::DetailsClosed).ok();
+                if !self.available_versions.is_empty() {
+                    let default_name = self.selected_details.as_ref()
+                        .map(|d| d.info.title.clone())
+                        .unwrap_or_else(|| "My Modpack Instance".to_string());
+                    self.install_dialog.emit(ModpackInstallDialogInput::Show {
+                        default_name,
+                        versions: self.available_versions.clone(),
+                        selected_idx: self.selected_version_idx,
+                        target_group: self.current_folder.clone(),
+                        available_groups: self.available_groups.clone(),
+                    });
+                    let parent = relm4::main_application().active_window();
+                    self.install_dialog.widget().present(parent.as_ref());
                 }
+            }
+            DiscoverInput::PerformInstallWithNameGroup(name, version, group) => {
+                sender.output(DiscoverOutput::InstallModpack(
+                    name,
+                    version,
+                    group,
+                    "Modrinth".to_string()
+                )).ok();
+                
+                self.show_details = false;
+                sender.output(DiscoverOutput::DetailsClosed).ok();
+            }
+            DiscoverInput::UpdateGroups { current_folder, available_groups } => {
+                self.current_folder = current_folder;
+                self.available_groups = available_groups;
             }
             DiscoverInput::CarouselScroll(_pos) => {
                 self.update_active_carousel_color();

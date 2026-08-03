@@ -1,3 +1,4 @@
+use crate::backend::auth::error::AuthError;
 use crate::backend::auth::microsoft::{
     get_minecraft_profile, now_secs, refresh_auth, Account, AccountType,
 };
@@ -182,12 +183,12 @@ pub fn verify_account_online(account: &Account) -> AccountStatus {
 }
 
 /// Refresh a single Microsoft account's tokens. Returns updated Account on success.
-pub fn refresh_single_account(account: &Account, client_id: &str) -> Result<Account, String> {
+pub fn refresh_single_account(account: &Account, client_id: &str) -> Result<Account, AuthError> {
     match account.account_type {
         AccountType::Offline => Ok(account.clone()),
         AccountType::Microsoft => {
             if account.refresh_token.is_empty() {
-                return Err("No refresh token available. Please sign in again.".to_string());
+                return Err(AuthError::TokenRefreshFailed("No refresh token available. Please sign in again.".to_string()));
             }
             refresh_auth(client_id, &account.refresh_token)
         }

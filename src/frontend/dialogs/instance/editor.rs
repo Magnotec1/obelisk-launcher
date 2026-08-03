@@ -10,6 +10,15 @@ use std::path::PathBuf;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+pub struct ModUpdateInfo {
+    pub filename: String,
+    pub new_version: String,
+    pub new_filename: String,
+    pub version_id: String,
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct EditorItem {
     pub id: String,
     pub name: String,
@@ -62,6 +71,14 @@ pub enum EditorInput {
     // Search
     Search(String),
 
+    // Mod Updates
+    CheckUpdatesRequest,
+    UpdatesAvailable(Vec<ModUpdateInfo>),
+    UpdateModRequest,
+    UpdateSuccess(String),
+    UpdateAllRequest,
+    UpdateAllSuccess(Vec<String>),
+
     // Keyboard
     KeyPressed(gdk::Key, gdk::ModifierType),
 
@@ -99,6 +116,9 @@ pub enum EditorOutput {
     RenameWorld(String, String), // folder, new_name
     MoveItems(EditorType, Vec<String>),
     CopyItems(EditorType, Vec<String>),
+    CheckModsUpdates(Vec<EditorItem>),
+    UpdateMod(String, String, String), // filename, project_id, version_id
+    UpdateAllMods(Vec<(String, String, String)>), // list of (filename, project_id, version_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +156,11 @@ pub struct InstanceEditorDialog {
     detail_description: gtk::Label,
     detail_remove_btn: gtk::Button,
     detail_toggle_enabled_btn: gtk::Button,
+    detail_banner: adw::Banner,
     detail_box: gtk::Box,
     detail_placeholder: adw::StatusPage,
 
+    updates: HashMap<String, ModUpdateInfo>,
     context_menu: gtk::Popover,
     toast_overlay: adw::ToastOverlay,
     split_view: adw::NavigationSplitView,
@@ -295,10 +317,19 @@ impl InstanceEditorDialog {
                     self.detail_toggle_enabled_btn
                         .set_icon_name("list-add-symbolic");
                 }
+
+                if let Some(update) = self.updates.get(&item.filename) {
+                    self.detail_banner.set_title(&format!("Update to {} is available.", update.new_version));
+                    self.detail_banner.set_revealed(true);
+                } else {
+                    self.detail_banner.set_revealed(false);
+                }
             } else {
                 self.detail_toggle_enabled_btn.set_visible(false);
+                self.detail_banner.set_revealed(false);
             }
         } else {
+            self.detail_banner.set_revealed(false);
             if self.collapsed {
                 self.split_view.set_show_content(false);
             }
@@ -385,6 +416,17 @@ impl InstanceEditorDialog {
 
             if item.is_checked {
                 row.add_css_class("selected");
+            }
+
+            if let Some(update) = self.updates.get(&item.filename) {
+                let badge = gtk::Label::builder()
+                    .label("●")
+                    .valign(gtk::Align::Center)
+                    .tooltip_text(&format!("Update Available: {}", update.new_version))
+                    .build();
+                badge.add_css_class("success");
+                badge.add_css_class("title-3");
+                row.add_suffix(&badge);
             }
 
             let actual_idx = idx;
@@ -510,22 +552,96 @@ impl SimpleComponent for InstanceEditorDialog {
                                     },
 
                                     // Actions on the right
-                                    pack_end = &gtk::Box {
-                                        set_spacing: 4,
-                                        set_orientation: gtk::Orientation::Horizontal,
-                                        gtk::Button {
-                                            set_icon_name: "list-add-symbolic",
-                                            set_tooltip_text: Some("Add..."),
-                                            #[watch]
-                                            set_visible: !matches!(model.editor_type, EditorType::Components),
-                                            connect_clicked => EditorInput::AddItemsRequest,
-                                        },
-                                        gtk::Button {
-                                            set_icon_name: "folder-open-symbolic",
-                                            set_tooltip_text: Some("Open Folder"),
-                                            #[watch]
-                                            set_visible: !matches!(model.editor_type, EditorType::Components),
-                                            connect_clicked => EditorInput::OpenFolder,
+                                    pack_end = &gtk::MenuButton {
+                                        set_icon_name: "open-menu-symbolic",
+                                        set_tooltip_text: Some("Options"),
+                                        #[wrap(Some)]
+                                        set_popover: options_popover = &gtk::Popover {
+                                            set_autohide: true,
+                                            set_has_arrow: true,
+                                            #[wrap(Some)]
+                                            set_child = &gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_css_classes: &["menu-box"],
+                                                set_width_request: 180,
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[watch]
+                                                    set_visible: !matches!(model.editor_type, EditorType::Components),
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Label {
+                                                        set_label: "Add...",
+                                                        set_hexpand: true,
+                                                        set_halign: gtk::Align::Start,
+                                                    },
+                                                    connect_clicked[sender, options_popover] => move |_| {
+                                                        options_popover.popdown();
+                                                        sender.input(EditorInput::AddItemsRequest);
+                                                    },
+                                                },
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[watch]
+                                                    set_visible: !matches!(model.editor_type, EditorType::Components),
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Label {
+                                                        set_label: "Open Folder",
+                                                        set_hexpand: true,
+                                                        set_halign: gtk::Align::Start,
+                                                    },
+                                                    connect_clicked[sender, options_popover] => move |_| {
+                                                        options_popover.popdown();
+                                                        sender.input(EditorInput::OpenFolder);
+                                                    },
+                                                },
+
+                                                gtk::Separator {
+                                                    #[watch]
+                                                    set_visible: matches!(model.editor_type, EditorType::Mods),
+                                                    set_margin_top: 4,
+                                                    set_margin_bottom: 4,
+                                                },
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[watch]
+                                                    set_visible: matches!(model.editor_type, EditorType::Mods),
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Label {
+                                                        set_label: "Check for Updates",
+                                                        set_hexpand: true,
+                                                        set_halign: gtk::Align::Start,
+                                                    },
+                                                    connect_clicked[sender, options_popover] => move |_| {
+                                                        options_popover.popdown();
+                                                        sender.input(EditorInput::CheckUpdatesRequest);
+                                                    },
+                                                },
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[watch]
+                                                    set_visible: matches!(model.editor_type, EditorType::Mods),
+                                                    #[watch]
+                                                    set_sensitive: !model.updates.is_empty(),
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Label {
+                                                        set_label: "Update All",
+                                                        set_hexpand: true,
+                                                        set_halign: gtk::Align::Start,
+                                                    },
+                                                    connect_clicked[sender, options_popover] => move |_| {
+                                                        options_popover.popdown();
+                                                        sender.input(EditorInput::UpdateAllRequest);
+                                                    },
+                                                },
+                                            },
                                         },
                                     },
                                 },
@@ -630,153 +746,165 @@ impl SimpleComponent for InstanceEditorDialog {
                                 },
 
                                 #[wrap(Some)]
-                                set_content = &gtk::Stack {
-                                    set_transition_type: gtk::StackTransitionType::SlideLeftRight,
+                                set_content = &gtk::Box {
+                                    set_orientation: gtk::Orientation::Vertical,
 
-                                    // No-selection placeholder
-                                    add_named[Some("placeholder")] = &gtk::ScrolledWindow {
-                                        set_hscrollbar_policy: gtk::PolicyType::Never,
-                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
-
-                                        #[wrap(Some)]
-                                        #[local_ref]
-                                        set_child = detail_placeholder_ref -> adw::StatusPage {
-                                            set_vexpand: true,
-                                            set_icon_name: Some("find-location-symbolic"),
-                                            set_title: "Select an Item",
-                                            set_description: Some("Click an item to view its details."),
-                                        },
+                                    #[local_ref]
+                                    detail_banner_ref -> adw::Banner {
+                                        set_use_markup: false,
+                                        set_button_label: Some("Update"),
+                                        connect_button_clicked => EditorInput::UpdateModRequest,
                                     },
 
-                                    // Detail view
-                                    add_named[Some("details")] = &gtk::ScrolledWindow {
-                                        set_hscrollbar_policy: gtk::PolicyType::Never,
-                                        set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                                    append = &gtk::Stack {
+                                        set_vexpand: true,
+                                        set_transition_type: gtk::StackTransitionType::SlideLeftRight,
 
-                                        #[wrap(Some)]
-                                        #[local_ref]
-                                        set_child = detail_box_ref -> gtk::Box {
-                                            set_orientation: gtk::Orientation::Vertical,
-                                            set_margin_all: 24,
-                                            set_spacing: 16,
-                                            set_vexpand: true,
+                                        // No-selection placeholder
+                                        add_named[Some("placeholder")] = &gtk::ScrolledWindow {
+                                            set_hscrollbar_policy: gtk::PolicyType::Never,
+                                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
 
-                                            // Icon + title centered
-                                            gtk::Box {
-                                                set_orientation: gtk::Orientation::Vertical,
-                                                set_spacing: 8,
-                                                set_halign: gtk::Align::Center,
-                                                set_margin_top: 16,
-
-                                                #[local_ref]
-                                                detail_icon_ref -> gtk::Image {
-                                                    set_pixel_size: 64,
-                                                },
-
-                                                #[local_ref]
-                                                detail_name_ref -> gtk::Label {
-                                                    set_css_classes: &["title-3"],
-                                                    set_wrap: true,
-                                                    set_wrap_mode: gtk::pango::WrapMode::WordChar,
-                                                    set_justify: gtk::Justification::Center,
-                                                    set_max_width_chars: 30,
-                                                },
+                                            #[wrap(Some)]
+                                            #[local_ref]
+                                            set_child = detail_placeholder_ref -> adw::StatusPage {
+                                                set_vexpand: true,
+                                                set_icon_name: Some("find-location-symbolic"),
+                                                set_title: "Select an Item",
+                                                set_description: Some("Click an item to view its details."),
                                             },
+                                        },
 
-                                            // Info rows
-                                            adw::PreferencesGroup {
-                                                #[local_ref]
-                                                detail_version_row_ref -> adw::ActionRow {
-                                                    set_title: "Version",
+                                        // Detail view
+                                        add_named[Some("details")] = &gtk::ScrolledWindow {
+                                            set_hscrollbar_policy: gtk::PolicyType::Never,
+                                            set_vscrollbar_policy: gtk::PolicyType::Automatic,
+
+                                            #[wrap(Some)]
+                                            #[local_ref]
+                                            set_child = detail_box_ref -> gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_margin_all: 24,
+                                                set_spacing: 16,
+                                                set_vexpand: true,
+
+                                                // Icon + title centered
+                                                gtk::Box {
+                                                    set_orientation: gtk::Orientation::Vertical,
+                                                    set_spacing: 8,
+                                                    set_halign: gtk::Align::Center,
+                                                    set_margin_top: 16,
+
+                                                    #[local_ref]
+                                                    detail_icon_ref -> gtk::Image {
+                                                        set_pixel_size: 64,
+                                                    },
+
+                                                    #[local_ref]
+                                                    detail_name_ref -> gtk::Label {
+                                                        set_css_classes: &["title-3"],
+                                                        set_wrap: true,
+                                                        set_wrap_mode: gtk::pango::WrapMode::WordChar,
+                                                        set_justify: gtk::Justification::Center,
+                                                        set_max_width_chars: 30,
+                                                    },
                                                 },
 
-                                                #[local_ref]
-                                                detail_filename_row_ref -> adw::ActionRow {
-                                                    set_title: "Filename",
-                                                },
+                                                // Info rows
+                                                adw::PreferencesGroup {
+                                                    #[local_ref]
+                                                    detail_version_row_ref -> adw::ActionRow {
+                                                        set_title: "Version",
+                                                    },
 
-                                                #[local_ref]
-                                                detail_homepage_row_ref -> adw::ActionRow {
-                                                    set_title: "Homepage",
-                                                    set_activatable: true,
-                                                    connect_activated[sender] => move |row| {
-                                                        if let Some(subtitle) = row.subtitle() {
-                                                            let url = subtitle.to_string();
-                                                            if !url.is_empty() {
-                                                                sender.input(EditorInput::OpenUrl(url));
+                                                    #[local_ref]
+                                                    detail_filename_row_ref -> adw::ActionRow {
+                                                        set_title: "Filename",
+                                                    },
+
+                                                    #[local_ref]
+                                                    detail_homepage_row_ref -> adw::ActionRow {
+                                                        set_title: "Homepage",
+                                                        set_activatable: true,
+                                                        connect_activated[sender] => move |row| {
+                                                            if let Some(subtitle) = row.subtitle() {
+                                                                let url = subtitle.to_string();
+                                                                if !url.is_empty() {
+                                                                    sender.input(EditorInput::OpenUrl(url));
+                                                                }
                                                             }
                                                         }
-                                                    }
+                                                    },
+
+                                                    #[local_ref]
+                                                    detail_size_row_ref -> adw::ActionRow {
+                                                        set_title: "Size",
+                                                    },
+
+                                                    #[local_ref]
+                                                    detail_seed_row_ref -> adw::ActionRow {
+                                                        set_title: "Seed",
+                                                    },
+
+                                                    #[local_ref]
+                                                    detail_last_played_row_ref -> adw::ActionRow {
+                                                        set_title: "Last Played",
+                                                    },
                                                 },
 
-                                                #[local_ref]
-                                                detail_size_row_ref -> adw::ActionRow {
-                                                    set_title: "Size",
+                                                // Description
+                                                gtk::ScrolledWindow {
+                                                    set_hscrollbar_policy: gtk::PolicyType::Never,
+                                                    set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                                                    set_min_content_height: 60,
+                                                    set_max_content_height: 150,
+                                                    set_propagate_natural_height: true,
+                                                    #[watch]
+                                                    set_visible: model.focused_item().and_then(|i| i.description.as_ref()).is_some(),
+
+                                                    #[wrap(Some)]
+                                                    #[local_ref]
+                                                    set_child = detail_description_ref -> gtk::Label {
+                                                        set_wrap: true,
+                                                        set_halign: gtk::Align::Start,
+                                                        set_valign: gtk::Align::Start,
+                                                        set_xalign: 0.0,
+                                                        set_yalign: 0.0,
+                                                        set_css_classes: &["dim-label", "body"],
+                                                    },
                                                 },
 
-                                                #[local_ref]
-                                                detail_seed_row_ref -> adw::ActionRow {
-                                                    set_title: "Seed",
-                                                },
+                                                gtk::Box { set_vexpand: true },
 
-                                                #[local_ref]
-                                                detail_last_played_row_ref -> adw::ActionRow {
-                                                    set_title: "Last Played",
-                                                },
-                                            },
+                                                gtk::Box {
+                                                    set_orientation: gtk::Orientation::Horizontal,
+                                                    set_spacing: 8,
+                                                    set_halign: gtk::Align::Center,
+                                                    set_margin_bottom: 12,
 
-                                            // Description
-                                            gtk::ScrolledWindow {
-                                                set_hscrollbar_policy: gtk::PolicyType::Never,
-                                                set_vscrollbar_policy: gtk::PolicyType::Automatic,
-                                                set_min_content_height: 60,
-                                                set_max_content_height: 150,
-                                                set_propagate_natural_height: true,
-                                                #[watch]
-                                                set_visible: model.focused_item().and_then(|i| i.description.as_ref()).is_some(),
+                                                    #[local_ref]
+                                                    detail_toggle_enabled_btn_ref -> gtk::Button {
+                                                        set_label: "Disable",
+                                                        set_icon_name: "list-remove-symbolic",
+                                                        set_css_classes: &["pill"],
+                                                        set_visible: false,
+                                                        connect_clicked => EditorInput::ToggleFocusedModEnabled,
+                                                    },
 
-                                                #[wrap(Some)]
-                                                #[local_ref]
-                                                set_child = detail_description_ref -> gtk::Label {
-                                                    set_wrap: true,
-                                                    set_halign: gtk::Align::Start,
-                                                    set_valign: gtk::Align::Start,
-                                                    set_xalign: 0.0,
-                                                    set_yalign: 0.0,
-                                                    set_css_classes: &["dim-label", "body"],
-                                                },
-                                            },
-
-                                            gtk::Box { set_vexpand: true },
-
-                                            gtk::Box {
-                                                set_orientation: gtk::Orientation::Horizontal,
-                                                set_spacing: 8,
-                                                set_halign: gtk::Align::Center,
-                                                set_margin_bottom: 12,
-
-                                                #[local_ref]
-                                                detail_toggle_enabled_btn_ref -> gtk::Button {
-                                                    set_label: "Disable",
-                                                    set_icon_name: "list-remove-symbolic",
-                                                    set_css_classes: &["pill"],
-                                                    set_visible: false,
-                                                    connect_clicked => EditorInput::ToggleFocusedModEnabled,
-                                                },
-
-                                                #[local_ref]
-                                                detail_remove_btn_ref -> gtk::Button {
-                                                    set_label: "Remove",
-                                                    set_css_classes: &["destructive-action", "pill"],
-                                                    set_visible: false,
-                                                    connect_clicked => EditorInput::RemoveRequest(None),
+                                                    #[local_ref]
+                                                    detail_remove_btn_ref -> gtk::Button {
+                                                        set_label: "Remove",
+                                                        set_css_classes: &["destructive-action", "pill"],
+                                                        set_visible: false,
+                                                        connect_clicked => EditorInput::RemoveRequest(None),
+                                                    },
                                                 },
                                             },
                                         },
-                                    },
 
-                                    #[watch]
-                                    set_visible_child_name: if model.focused_index.is_some() { "details" } else { "placeholder" },
+                                        #[watch]
+                                        set_visible_child_name: if model.focused_index.is_some() { "details" } else { "placeholder" },
+                                    },
                                 },
                             },
                         },
@@ -807,6 +935,7 @@ impl SimpleComponent for InstanceEditorDialog {
         let detail_description = gtk::Label::new(None);
         let detail_remove_btn = gtk::Button::new();
         let detail_toggle_enabled_btn = gtk::Button::new();
+        let detail_banner = adw::Banner::new("");
         let detail_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
         let detail_placeholder = adw::StatusPage::new();
         let context_menu = gtk::Popover::new();
@@ -835,8 +964,10 @@ impl SimpleComponent for InstanceEditorDialog {
             detail_description: detail_description.clone(),
             detail_remove_btn: detail_remove_btn.clone(),
             detail_toggle_enabled_btn: detail_toggle_enabled_btn.clone(),
+            detail_banner: detail_banner.clone(),
             detail_box: detail_box.clone(),
             detail_placeholder: detail_placeholder.clone(),
+            updates: HashMap::new(),
             context_menu: context_menu.clone(),
             toast_overlay: adw::ToastOverlay::new(),
             split_view: adw::NavigationSplitView::new(),
@@ -856,6 +987,7 @@ impl SimpleComponent for InstanceEditorDialog {
         let detail_description_ref = &model.detail_description;
         let detail_remove_btn_ref = &model.detail_remove_btn;
         let detail_toggle_enabled_btn_ref = &model.detail_toggle_enabled_btn;
+        let detail_banner_ref = &model.detail_banner;
         let detail_box_ref = &model.detail_box;
         let detail_placeholder_ref = &model.detail_placeholder;
         let widgets = view_output!();
@@ -979,6 +1111,7 @@ impl SimpleComponent for InstanceEditorDialog {
                 self.focused_index = None;
                 self.search_query = String::new();
                 self.icon_cache.clear(); // New item set → fresh cache
+                self.updates.clear();
                 self.rebuild_list(&sender);
             }
             EditorInput::ToggleFocusedModEnabled => {
@@ -1022,8 +1155,60 @@ impl SimpleComponent for InstanceEditorDialog {
                 self.items = items;
                 self.rebuild_list(&sender);
             }
+            EditorInput::CheckUpdatesRequest => {
+                sender.input(EditorInput::ShowToast("Checking for mod updates...".to_string()));
+                sender
+                    .output(EditorOutput::CheckModsUpdates(self.items.clone()))
+                    .ok();
+            }
+            EditorInput::UpdatesAvailable(updates_list) => {
+                self.updates = updates_list
+                    .into_iter()
+                    .map(|u| (u.filename.clone(), u))
+                    .collect();
+                self.rebuild_list(&sender);
+            }
+            EditorInput::UpdateModRequest => {
+                if let Some(focused) = self.focused_index {
+                    if let Some(item) = self.items.get(focused) {
+                        if let Some(update) = self.updates.get(&item.filename) {
+                            sender
+                                .output(EditorOutput::UpdateMod(
+                                    item.filename.clone(),
+                                    update.project_id.clone(),
+                                    update.version_id.clone(),
+                                ))
+                                .ok();
+                        }
+                    }
+                }
+            }
+            EditorInput::UpdateSuccess(filename) => {
+                self.updates.remove(&filename);
+                self.rebuild_list(&sender);
+                sender.input(EditorInput::ShowToast("Mod updated successfully!".to_string()));
+            }
+            EditorInput::UpdateAllRequest => {
+                let updates_to_send: Vec<(String, String, String)> = self
+                    .updates
+                    .values()
+                    .map(|u| (u.filename.clone(), u.project_id.clone(), u.version_id.clone()))
+                    .collect();
+                if !updates_to_send.is_empty() {
+                    sender
+                        .output(EditorOutput::UpdateAllMods(updates_to_send))
+                        .ok();
+                }
+            }
+            EditorInput::UpdateAllSuccess(filenames) => {
+                for filename in filenames {
+                    self.updates.remove(&filename);
+                }
+                self.rebuild_list(&sender);
+                sender.input(EditorInput::ShowToast("All mods updated successfully!".to_string()));
+            }
             EditorInput::ShowToast(msg) => {
-                self.toast_overlay.add_toast(adw::Toast::new(&msg));
+                crate::frontend::toast::show_toast(&self.toast_overlay, msg);
             }
 
             // ---------------------------------------------------------------

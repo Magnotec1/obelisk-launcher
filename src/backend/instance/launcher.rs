@@ -184,7 +184,7 @@ fn resolve_library_path(lib_name: &str, data_path: &Path) -> PathBuf {
 
     let mut filename = format!("{}-{}", artifact, version);
     if parts.len() > 3 {
-        let extra = parts[3];
+        let extra = parts[3..].join("-");
         if let Some(pos) = extra.find('@') {
             filename.push_str(&format!("-{}", &extra[..pos]));
         } else {
@@ -206,6 +206,40 @@ fn resolve_library_path(lib_name: &str, data_path: &Path) -> PathBuf {
     path.push(version);
     path.push(filename);
     path
+}
+
+fn is_modern_minecraft_version(mc_version: &str) -> bool {
+    let parts: Vec<&str> = mc_version.split('.').collect();
+    if !parts.is_empty() {
+        let first = parts[0];
+        if first == "1" {
+            if parts.len() >= 2 {
+                if let Ok(minor) = parts[1].parse::<u32>() {
+                    if minor > 20 {
+                        return true;
+                    }
+                    if minor == 20 {
+                        if parts.len() >= 3 {
+                            let patch_str = parts[2];
+                            let clean_patch: String = patch_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                            if let Ok(patch) = clean_patch.parse::<u32>() {
+                                return patch >= 6;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Snapshot or year-based versions (e.g. 26.1)
+            let leading_digits: String = first.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(year_ver) = leading_digits.parse::<u32>() {
+                if year_ver >= 24 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 pub fn launch_instance(
@@ -400,31 +434,35 @@ pub fn launch_instance(
                             // (e.g. org.lwjgl:lwjgl:3.4.1:natives-linux) that must be
                             // ON the classpath so the JVM can load them via its built-in
                             // JAR extraction. Do NOT rely on -Djava.library.path for these.
-                            let native_classifier_name = format!("{}:natives-linux", lib.name);
-                            let mut native_classifier_path = resolve_library_path(
-                                &native_classifier_name,
-                                &options.mc_data_path,
-                            );
-                            if !native_classifier_path.exists() {
-                                native_classifier_path = resolve_library_path(
+                            // Only attempt to find/append natives-linux if the library name doesn't already have a classifier.
+                            let parts: Vec<&str> = lib.name.split(':').collect();
+                            if parts.len() == 3 {
+                                let native_classifier_name = format!("{}:natives-linux", lib.name);
+                                let mut native_classifier_path = resolve_library_path(
                                     &native_classifier_name,
-                                    &options.shared_data_path,
+                                    &options.mc_data_path,
                                 );
-                            }
-                            if native_classifier_path.exists() {
-                                let parts: Vec<&str> = lib.name.split(':').collect();
-                                if parts.len() >= 2 {
-                                    let mut artifact = parts[1].to_string();
-                                    // Normalize LWJGL artifact name if it's already a native-style name
-                                    if artifact.starts_with("lwjgl")
-                                        && artifact.contains("-natives-")
-                                    {
-                                        if let Some(pos) = artifact.find("-natives-") {
-                                            artifact = artifact[..pos].to_string();
+                                if !native_classifier_path.exists() {
+                                    native_classifier_path = resolve_library_path(
+                                        &native_classifier_name,
+                                        &options.shared_data_path,
+                                    );
+                                }
+                                if native_classifier_path.exists() {
+                                    let parts: Vec<&str> = lib.name.split(':').collect();
+                                    if parts.len() >= 2 {
+                                        let mut artifact = parts[1].to_string();
+                                        // Normalize LWJGL artifact name if it's already a native-style name
+                                        if artifact.starts_with("lwjgl")
+                                            && artifact.contains("-natives-")
+                                        {
+                                            if let Some(pos) = artifact.find("-natives-") {
+                                                artifact = artifact[..pos].to_string();
+                                            }
                                         }
+                                        let key = format!("{}:{}:natives-linux", parts[0], artifact);
+                                        classpath_map.insert(key, native_classifier_path);
                                     }
-                                    let key = format!("{}:{}:natives-linux", parts[0], artifact);
-                                    classpath_map.insert(key, native_classifier_path);
                                 }
                             }
 
@@ -542,27 +580,34 @@ pub fn launch_instance(
     cmd.arg("-Duser.language=en");
 
     if instance.use_wayland {
-        let paths = [
-            "/usr/lib/glfw-wayland/libglfw.so.3",
-            "/usr/lib/glfw-wayland/libglfw.so.3.5",
-            "/usr/lib/x86_64-linux-gnu/libglfw.so.3",
-            "/usr/lib/x86_64-linux-gnu/libglfw.so",
-            "/usr/lib/libglfw.so.3",
-            "/usr/lib/libglfw.so",
-            "/usr/lib64/libglfw.so.3",
-            "/usr/lib64/libglfw.so",
-        ];
-        let mut found_glfw = false;
-        for path in &paths {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                cmd.arg(format!("-Dorg.lwjgl.glfw.libname={}", path));
-                found_glfw = true;
-                break;
+        if is_modern_minecraft_version(mc_version) {
+            // Modern Minecraft (1.20.6+) uses a custom GLFW fork with Mojang-specific patches (like glfwSetPreeditCallback).
+            // Stock system GLFW libraries do not have these patches, resulting in a NullPointerException crash.
+            // Modern LWJGL 3.4.0+ bundled GLFW library has native Wayland support built-in; we just tell it to use Wayland.
+            cmd.env("GLFW_PLATFORM", "wayland");
+        } else {
+            let paths = [
+                "/usr/lib/glfw-wayland/libglfw.so.3",
+                "/usr/lib/glfw-wayland/libglfw.so.3.5",
+                "/usr/lib/x86_64-linux-gnu/libglfw.so.3",
+                "/usr/lib/x86_64-linux-gnu/libglfw.so",
+                "/usr/lib/libglfw.so.3",
+                "/usr/lib/libglfw.so",
+                "/usr/lib64/libglfw.so.3",
+                "/usr/lib64/libglfw.so",
+            ];
+            let mut found_glfw = false;
+            for path in &paths {
+                let p = PathBuf::from(path);
+                if p.exists() {
+                    cmd.arg(format!("-Dorg.lwjgl.glfw.libname={}", path));
+                    found_glfw = true;
+                    break;
+                }
             }
-        }
-        if !found_glfw {
-            cmd.arg("-Dorg.lwjgl.glfw.libname=glfw");
+            if !found_glfw {
+                cmd.arg("-Dorg.lwjgl.glfw.libname=glfw");
+            }
         }
     }
 

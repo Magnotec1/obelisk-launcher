@@ -1487,16 +1487,18 @@ impl Component for UnifiedBrowser {
             BrowserInput::ToggleQueueItem(id, title) => {
                 if self.download_queue.contains_key(&id) {
                     self.download_queue.remove(&id);
+                    sender.input(BrowserInput::ShowToast(format!("Removed '{}' from download queue", title)));
                 } else {
                     self.download_queue.insert(
                         id.clone(),
                         QueueItem {
-                            title,
+                            title: title.clone(),
                             version_id: None,
                             version_name: None,
                             filename: None,
                         },
                     );
+                    sender.input(BrowserInput::ShowToast(format!("Added '{}' to download queue", title)));
                 }
 
                 let mut guard = self.projects.guard();
@@ -1785,7 +1787,7 @@ impl Component for UnifiedBrowser {
                 }
             }
             BrowserInput::ShowToast(msg) => {
-                self.toast_overlay.add_toast(adw::Toast::new(&msg));
+                crate::frontend::toast::show_toast(&self.toast_overlay, msg);
             }
             BrowserInput::SetCollapsed(collapsed) => {
                 self.collapsed = collapsed;

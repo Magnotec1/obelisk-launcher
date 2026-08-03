@@ -136,7 +136,8 @@ pub fn import_shared_instance(
             &shared.minecraft_version,
             shared.mod_loader.clone(),
             &mods_dir,
-            |_, _| {},
+            &|_, _| {},
+            &|_, _, _| {},
         ) {
             eprintln!("Failed to install mod {}: {}", sm.name, e);
             failed_mods.push(sm.name);

@@ -25,7 +25,7 @@ use crate::frontend::dialogs::instance::components::{
     ComponentEditorDialog, ComponentEditorInput, ComponentEditorOutput,
 };
 use crate::frontend::dialogs::instance::editor::{
-    EditorInput, EditorItem, EditorOutput, EditorType, InstanceEditorDialog,
+    EditorInput, EditorItem, EditorOutput, EditorType, InstanceEditorDialog, ModUpdateInfo,
 };
 use crate::frontend::dialogs::instance::mod_loader::{
     ModLoaderDialog, ModLoaderDialogInput, ModLoaderDialogOutput,
@@ -194,6 +194,9 @@ pub enum AppMsg {
     ComponentEditorOutput(ComponentEditorOutput),
     InstallBrowserItems(EditorType, Vec<(String, String)>), // (EditorType, (Project ID, Version ID))
     ModrinthInstallResult(EditorType, Result<usize, String>), // Type and number of items installed or error
+    ModUpdatesResult(Result<Vec<ModUpdateInfo>, String>),
+    ModUpdateSuccess(String), // filename
+    ModUpdateAllSuccess(Vec<String>),
 
     // Instance management
     RenameInstanceRequest(usize),
@@ -284,6 +287,7 @@ pub enum AppMsg {
     DownloadProgress(DownloadMsg),
     RemoveJob(String),
     ClearFinishedJobs,
+    RetryJob(String),
     OpenDownloadDetails,
     DownloadFinished,
     DownloadError(String),
@@ -706,21 +710,18 @@ impl SimpleComponent for AppModel {
                                     #[wrap(Some)]
                                     #[name = "title_widget"]
                                     set_title_widget = &gtk::Stack {
+                                        set_hhomogeneous: false,
+                                        set_vhomogeneous: false,
                                         add_named[Some("library")] = &adw::WindowTitle {
                                             set_title: "Library",
                                             #[watch]
                                             set_subtitle: model.current_folder.as_deref().unwrap_or(""),
                                         },
                                         add_named[Some("discover")] = &adw::WindowTitle {
-                                            #[watch]
-                                            set_title: if model.discover_details_open {
-                                                &model.discover_details_title
-                                            } else {
-                                                "Discover"
-                                            },
+                                            set_title: "Discover",
                                             #[watch]
                                             set_subtitle: if model.discover_details_open {
-                                                "Modpack Details"
+                                                &model.discover_details_title
                                             } else {
                                                 ""
                                             },
@@ -1113,6 +1114,8 @@ impl SimpleComponent for AppModel {
 
                                     gtk::Stack {
                                         set_vexpand: true,
+                                        set_hhomogeneous: false,
+                                        set_vhomogeneous: false,
                                         set_transition_type: gtk::StackTransitionType::Crossfade,
                                         set_transition_duration: 250,
 
@@ -1221,6 +1224,7 @@ impl SimpleComponent for AppModel {
             |msg| match msg {
                 SettingsOutput::ConfigUpdated(new_config) => AppMsg::ConfigUpdated(new_config),
                 SettingsOutput::OpenAccountManager => AppMsg::AccountAction,
+                SettingsOutput::DownloadProgress(msg) => AppMsg::DownloadProgress(msg),
             },
         );
 
@@ -1250,6 +1254,7 @@ impl SimpleComponent for AppModel {
                 .forward(sender.input_sender(), |out| match out {
                     DownloadDialogOutput::RemoveJob(id) => AppMsg::RemoveJob(id),
                     DownloadDialogOutput::ClearFinishedJobs => AppMsg::ClearFinishedJobs,
+                    DownloadDialogOutput::RetryJob(id) => AppMsg::RetryJob(id),
                 });
 
         let java_selector = JavaSelectorDialog::builder()
@@ -1449,10 +1454,10 @@ impl SimpleComponent for AppModel {
             .sync_create()
             .build();
 
-        // Single breakpoint at 600sp: collapses sidebar and enables narrow mode.
+        // Single breakpoint at 680sp: collapses sidebar and enables narrow mode.
         let bp_condition = adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
-            600.0,
+            680.0,
             adw::LengthUnit::Sp,
         );
         let bp = adw::Breakpoint::new(bp_condition);
@@ -1605,12 +1610,23 @@ impl SimpleComponent for AppModel {
                 OverviewOutput::AddInstance(tg) => _sender.input(AppMsg::AddInstance(tg)),
                 OverviewOutput::CreateGroup => _sender.input(AppMsg::CreateGroupRequest),
                 OverviewOutput::FolderChanged(folder_opt) => {
-                    self.current_folder = folder_opt;
+                    self.current_folder = folder_opt.clone();
+                    let groups = self.groups.sorted_group_names().into_iter().map(String::from).collect();
+                    self.discover_view.emit(crate::frontend::views::discover::DiscoverInput::UpdateGroups {
+                        current_folder: folder_opt,
+                        available_groups: groups,
+                    });
                 }
             },
             AppMsg::DiscoverEvent(out) => match out {
-                DiscoverOutput::InstallModpack(name, version_info, _provider) => {
+                DiscoverOutput::InstallModpack(name, version_info, target_group, _provider) => {
                     self.installing_modpack = true;
+                    if let Some(ref group_name) = target_group {
+                        self.groups.set_instance_group(&name, group_name);
+                        if let Some(ref path) = &self.config.instances_path {
+                            let _ = self.groups.save(path);
+                        }
+                    }
                     self.download_status_bar.emit(DownloadStatusBarInput::Update(
                         DownloadState::Starting,
                         true,
@@ -1627,19 +1643,20 @@ impl SimpleComponent for AppModel {
                             id: format!("modpack-{}", version_info.id),
                             title: format!("Installing Modpack {}", name),
                             tasks: vec![
-                                crate::backend::download::manager::NetworkTask::ModrinthModpackDownload {
+                                std::sync::Arc::new(crate::backend::download::manager::ModrinthModpackDownloadTask {
                                     name: name.clone(),
                                     download_url: version_info.download_url.clone(),
                                     instances_path: path.clone(),
-                                }
+                                })
                             ],
                             status: crate::backend::download::manager::NetworkJobStatus::Pending,
                             log: Vec::new(),
+                            items: Vec::new(),
                         };
 
                         let (tx, rx) = std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
-
                         crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
+                        crate::frontend::toast::show_toast(&self.window, format!("Started downloading Modpack: {}", name));
 
                         thread::spawn(move || {
                             while let Ok(msg) = rx.recv() {
@@ -1665,8 +1682,7 @@ impl SimpleComponent for AppModel {
                             }
                         });
                     } else {
-                        self.toast_overlay
-                            .add_toast(adw::Toast::new("No instances directory configured"));
+                        crate::frontend::toast::show_toast(&self.window, "No instances directory configured");
                     }
                 }
                 DiscoverOutput::DetailsOpened => {
@@ -2335,7 +2351,11 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::AddInstance(group) => {
-                self.add_instance_dialog.emit(AddInstanceInput::Open(group));
+                let available_groups = self.groups.sorted_group_names().into_iter().map(String::from).collect();
+                self.add_instance_dialog.emit(AddInstanceInput::Open {
+                    target_group: group,
+                    available_groups,
+                });
                 self.add_instance_dialog.widget().present(Some(&self.window));
             }
             AppMsg::HeaderAddInstance => {
@@ -2539,8 +2559,7 @@ impl SimpleComponent for AppModel {
                     }
                 } else {
                     self.import_loading = false;
-                    self.toast_overlay
-                        .add_toast(adw::Toast::new("Invalid sharing code"));
+                    crate::frontend::toast::show_toast(&self.window, "Invalid sharing code");
                     self.import_dialog.emit(ImportInput::Close);
                 }
             }
@@ -2897,6 +2916,219 @@ impl SimpleComponent for AppModel {
                                     _sender.input_sender().clone(),
                                 );
                             }
+                            EditorOutput::CheckModsUpdates(items) => {
+                                let minecraft_dir = inst.minecraft_dir.clone();
+                                let (loader, _) = inst.get_loader_info();
+                                let gv = inst.minecraft_version.clone().unwrap_or_else(|| "1.20.1".to_string());
+                                let sender_clone = _sender.input_sender().clone();
+
+                                std::thread::spawn(move || {
+                                    let mut hashes = Vec::new();
+                                    let mut hash_to_filename = HashMap::new();
+
+                                    for item in &items {
+                                        let mod_path = minecraft_dir.join("mods").join(&item.filename);
+                                        if mod_path.is_file() {
+                                            if let Ok(hash) = crate::backend::download::sources::modrinth::calculate_file_sha1(&mod_path) {
+                                                hashes.push(hash.clone());
+                                                hash_to_filename.insert(hash, item.filename.clone());
+                                            }
+                                        }
+                                    }
+
+                                    if hashes.is_empty() {
+                                        let _ = sender_clone.send(AppMsg::ModUpdatesResult(Ok(Vec::new())));
+                                        return;
+                                    }
+
+                                    let loaders = if loader != ModLoader::None {
+                                        vec![loader.as_str().to_lowercase()]
+                                    } else {
+                                        Vec::new()
+                                    };
+
+                                    match crate::backend::download::sources::modrinth::check_updates(
+                                        hashes,
+                                        loaders,
+                                        vec![gv],
+                                    ) {
+                                        Ok(result) => {
+                                            let mut updates = Vec::new();
+                                            for (hash, version) in result {
+                                                if let Some(filename) = hash_to_filename.get(&hash) {
+                                                    let up_to_date = version.files.iter().any(|f| {
+                                                        f.hashes.values().any(|h| h.to_lowercase() == hash.to_lowercase())
+                                                    });
+
+                                                    if !up_to_date {
+                                                        if let Some(file) = version.files.iter().find(|f| f.primary).or_else(|| version.files.first()) {
+                                                            updates.push(ModUpdateInfo {
+                                                                filename: filename.clone(),
+                                                                new_version: version.version_number.clone(),
+                                                                new_filename: file.filename.clone(),
+                                                                version_id: version.id.clone(),
+                                                                project_id: version.project_id.clone(),
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            let _ = sender_clone.send(AppMsg::ModUpdatesResult(Ok(updates)));
+                                        }
+                                        Err(e) => {
+                                            let _ = sender_clone.send(AppMsg::ModUpdatesResult(Err(e)));
+                                        }
+                                    }
+                                });
+                            }
+                            EditorOutput::UpdateMod(filename, project_id, version_id) => {
+                                // Queue download for new mod in temporary folder
+                                let gv = inst.minecraft_version.clone().unwrap_or_else(|| "1.20.1".to_string());
+                                let (loader, _) = inst.get_loader_info();
+                                let target_dir = inst.minecraft_dir.join("mods");
+                                let temp_dir = target_dir.parent().unwrap().join(format!("temp_update_{}", uuid::Uuid::new_v4()));
+                                if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                                    eprintln!("Failed to create temp mods dir: {}", e);
+                                    return;
+                                }
+
+                                self.download_status_bar.emit(DownloadStatusBarInput::Update(
+                                    DownloadState::Starting,
+                                    true,
+                                ));
+
+                                let task = std::sync::Arc::new(crate::backend::download::manager::ModrinthDownloadTask {
+                                    project_id,
+                                    version_id: Some(version_id),
+                                    game_version: gv,
+                                    loader,
+                                    mods_dir: temp_dir.clone(),
+                                    old_filename: Some(filename.clone()),
+                                });
+
+                                let job = crate::backend::download::manager::NetworkJob {
+                                    id: format!("update-mod-{}", uuid::Uuid::new_v4()),
+                                    title: format!("Updating mod {}", filename),
+                                    tasks: vec![task],
+                                    status: crate::backend::download::manager::NetworkJobStatus::Pending,
+                                    log: Vec::new(),
+                                    items: Vec::new(),
+                                };
+
+                                let (tx, rx) = std::sync::mpsc::channel::<
+                                    crate::backend::download::manager::DownloadMsg,
+                                >();
+
+                                crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
+
+                                let sender_clone = _sender.input_sender().clone();
+                                let filename_clone = filename.clone();
+                                let temp_dir_clone = temp_dir.clone();
+
+                                std::thread::spawn(move || {
+                                    let mut last_error = None;
+                                    while let Ok(msg) = rx.recv() {
+                                        match msg {
+                                            crate::backend::download::manager::DownloadMsg::Error(err) => {
+                                                last_error = Some(err);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    
+                                    let success = temp_dir_clone.join(format!("{}.success", filename_clone)).exists();
+                                    let _ = std::fs::remove_dir_all(&temp_dir_clone);
+
+                                    if success {
+                                        let _ = sender_clone.send(AppMsg::ModUpdateSuccess(filename_clone));
+                                    } else if let Some(err) = last_error {
+                                        let _ = sender_clone.send(AppMsg::DownloadError(err));
+                                    }
+                                    let _ = sender_clone.send(AppMsg::RefreshSelectedInstance);
+                                });
+                            }
+                            EditorOutput::UpdateAllMods(updates) => {
+                                let gv = inst.minecraft_version.clone().unwrap_or_else(|| "1.20.1".to_string());
+                                let (loader, _) = inst.get_loader_info();
+                                let target_dir = inst.minecraft_dir.join("mods");
+                                let temp_dir = target_dir.parent().unwrap().join(format!("temp_update_{}", uuid::Uuid::new_v4()));
+                                if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                                    eprintln!("Failed to create temp mods dir: {}", e);
+                                    return;
+                                }
+
+                                self.download_status_bar.emit(DownloadStatusBarInput::Update(
+                                    DownloadState::Starting,
+                                    true,
+                                ));
+
+                                let mut tasks: Vec<std::sync::Arc<dyn crate::backend::download::manager::DownloadTask>> = Vec::new();
+                                let mut filenames = Vec::new();
+
+                                for (filename, project_id, version_id) in updates {
+                                    let task = std::sync::Arc::new(crate::backend::download::manager::ModrinthDownloadTask {
+                                        project_id,
+                                        version_id: Some(version_id),
+                                        game_version: gv.clone(),
+                                        loader: loader.clone(),
+                                        mods_dir: temp_dir.clone(),
+                                        old_filename: Some(filename.clone()),
+                                    });
+                                    tasks.push(task);
+                                    filenames.push(filename);
+                                }
+
+                                let job = crate::backend::download::manager::NetworkJob {
+                                    id: format!("update-all-mods-{}", uuid::Uuid::new_v4()),
+                                    title: "Updating all mods".to_string(),
+                                    tasks,
+                                    status: crate::backend::download::manager::NetworkJobStatus::Pending,
+                                    log: Vec::new(),
+                                    items: Vec::new(),
+                                };
+
+                                let (tx, rx) = std::sync::mpsc::channel::<
+                                    crate::backend::download::manager::DownloadMsg,
+                                >();
+
+                                crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
+
+                                let sender_clone = _sender.input_sender().clone();
+                                let temp_dir_clone = temp_dir.clone();
+                                let filenames_clone = filenames.clone();
+
+                                std::thread::spawn(move || {
+                                    let mut errors = Vec::new();
+                                    while let Ok(msg) = rx.recv() {
+                                        match msg {
+                                            crate::backend::download::manager::DownloadMsg::Error(err) => {
+                                                errors.push(err);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    
+                                    let mut successful_updates = Vec::new();
+                                    for filename in &filenames_clone {
+                                        let marker_path = temp_dir_clone.join(format!("{}.success", filename));
+                                        if marker_path.exists() {
+                                            successful_updates.push(filename.clone());
+                                        }
+                                    }
+
+                                    let _ = std::fs::remove_dir_all(&temp_dir_clone);
+
+                                    if !successful_updates.is_empty() {
+                                        let _ = sender_clone.send(AppMsg::ModUpdateAllSuccess(successful_updates));
+                                    }
+
+                                    if !errors.is_empty() {
+                                        let combined_err = errors.join("\n");
+                                        let _ = sender_clone.send(AppMsg::DownloadError(combined_err));
+                                    }
+                                    let _ = sender_clone.send(AppMsg::RefreshSelectedInstance);
+                                });
+                            }
                         }
                         // Refresh only the selected instance
                         _sender.input(AppMsg::RefreshSelectedInstance);
@@ -3018,6 +3250,23 @@ impl SimpleComponent for AppModel {
                     self.browser_dialog.widget().present(Some(&self.window));
                 }
             }
+            AppMsg::ModUpdatesResult(result) => {
+                match result {
+                    Ok(updates) => {
+                        self.instance_editor.emit(EditorInput::UpdatesAvailable(updates));
+                        crate::frontend::toast::show_toast(&self.window, "Mod update check complete.");
+                    }
+                    Err(e) => {
+                        crate::frontend::toast::show_toast(&self.window, format!("Failed to check for updates: {}", e));
+                    }
+                }
+            }
+            AppMsg::ModUpdateSuccess(filename) => {
+                self.instance_editor.emit(EditorInput::UpdateSuccess(filename));
+            }
+            AppMsg::ModUpdateAllSuccess(filenames) => {
+                self.instance_editor.emit(EditorInput::UpdateAllSuccess(filenames));
+            }
             AppMsg::InstallBrowserItems(editor_type, installs) => {
                 if let Some(index) = self.selected_instance {
                     if let Some(inst) = self.instances.get(index) {
@@ -3053,7 +3302,7 @@ impl SimpleComponent for AppModel {
                         let installs_len = installs.len();
                         for (project_id, version_id) in installs {
                             tasks.push(
-                                crate::backend::download::manager::NetworkTask::ModrinthDownload {
+                                std::sync::Arc::new(crate::backend::download::manager::ModrinthDownloadTask {
                                     project_id,
                                     version_id: if version_id.is_empty() {
                                         None
@@ -3063,7 +3312,8 @@ impl SimpleComponent for AppModel {
                                     game_version: gv.clone(),
                                     loader: if matches!(editor_type, EditorType::Mods) { loader.clone() } else { ModLoader::None },
                                     mods_dir: target_dir.clone(),
-                                },
+                                    old_filename: None,
+                                }) as std::sync::Arc<dyn crate::backend::download::manager::DownloadTask>,
                             );
                         }
 
@@ -3081,6 +3331,7 @@ impl SimpleComponent for AppModel {
                             tasks,
                             status: crate::backend::download::manager::NetworkJobStatus::Pending,
                             log: Vec::new(),
+                            items: Vec::new(),
                         };
 
                         let (tx, rx) = std::sync::mpsc::channel::<
@@ -3330,8 +3581,7 @@ impl SimpleComponent for AppModel {
                     let _ = self.config.save();
                     self.account_view
                         .emit(AccountInput::UpdateConfig(self.config.clone()));
-                    self.toast_overlay
-                        .add_toast(adw::Toast::new("Switched account"));
+                    crate::frontend::toast::show_toast(&self.window, "Switched account");
                 }
             }
             AppMsg::RemoveAccount(uuid) => {
@@ -3339,8 +3589,7 @@ impl SimpleComponent for AppModel {
                 let _ = self.config.save();
                 self.account_view
                     .emit(AccountInput::UpdateConfig(self.config.clone()));
-                self.toast_overlay
-                    .add_toast(adw::Toast::new("Account removed"));
+                crate::frontend::toast::show_toast(&self.window, "Account removed");
             }
             AppMsg::AddOfflineAccount(username) => {
                 let account = create_offline_account(&username);
@@ -3349,8 +3598,7 @@ impl SimpleComponent for AppModel {
                 let _ = self.config.save();
                 self.account_view
                     .emit(AccountInput::UpdateConfig(self.config.clone()));
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(&format!("Added offline account: {}", name)));
+                crate::frontend::toast::show_toast(&self.window, format!("Added offline account: {}", name));
             }
             AppMsg::VerifyAccount(_) => {}
             AppMsg::VerifyAccountResult(_, _) => {}
@@ -3415,8 +3663,10 @@ impl SimpleComponent for AppModel {
                         // Check if it's a mod loader component group
                         if is_loader_component(&uid) {
                             let _ = remove_mod_loader(&inst.path);
+                            crate::frontend::toast::show_toast(&self.window, "Removed mod loader");
                         } else {
                             let _ = remove_component(&inst.path, &uid);
+                            crate::frontend::toast::show_toast(&self.window, "Removed component");
                         }
                         _sender.input(AppMsg::RefreshSelectedInstance);
                     }
@@ -3434,6 +3684,7 @@ impl SimpleComponent for AppModel {
                     if let Some(index) = self.selected_instance {
                         if let Some(inst) = self.instances.get(index) {
                             let _ = set_mod_loader_with_version(&inst.path, &loader, &version);
+                            crate::frontend::toast::show_toast(&self.window, format!("Installed {:?} {}", loader, version));
                             _sender.input(AppMsg::RefreshSelectedInstance);
                         }
                     }
@@ -3444,6 +3695,7 @@ impl SimpleComponent for AppModel {
                     if let Some(index) = self.selected_instance {
                         if let Some(inst) = self.instances.get(index) {
                             let _ = set_component_version(&inst.path, &uid, &version);
+                            crate::frontend::toast::show_toast(&self.window, format!("Updated version to {}", version));
                             _sender.input(AppMsg::RefreshSelectedInstance);
                         }
                     }
@@ -3482,17 +3734,17 @@ impl SimpleComponent for AppModel {
                                             }
                                             Err(e) => {
                                                 let _ =
-                                                    sender_clone.send(AppMsg::LoginResult(Err(e)));
+                                                    sender_clone.send(AppMsg::LoginResult(Err(e.to_string())));
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = sender_clone.send(AppMsg::LoginResult(Err(e)));
+                                        let _ = sender_clone.send(AppMsg::LoginResult(Err(e.to_string())));
                                     }
                                 }
                             }
                             Err(e) => {
-                                let _ = sender_clone.send(AppMsg::LoginResult(Err(e)));
+                                let _ = sender_clone.send(AppMsg::LoginResult(Err(e.to_string())));
                             }
                         }
                     });
@@ -4295,8 +4547,7 @@ impl SimpleComponent for AppModel {
                 }
 
                 // Show success toast
-                self.toast_overlay
-                    .add_toast(adw::Toast::new("Instance created successfully"));
+                crate::frontend::toast::show_toast(&self.window, "Instance created successfully");
 
                 // Ensure the dialog is closed
                 self.add_instance_dialog.widget().close();
@@ -4335,15 +4586,16 @@ impl SimpleComponent for AppModel {
                     ),
                     title: format!("Minecraft {}", raw_version.id),
                     tasks: vec![
-                        crate::backend::download::manager::NetworkTask::MinecraftDownload {
+                        std::sync::Arc::new(crate::backend::download::manager::MinecraftDownloadTask {
                             version: raw_version.clone(),
                             loader: loader.clone(),
                             loader_version: loader_version.clone(),
                             data_path: data_path.clone(),
-                        },
+                        })
                     ],
                     status: crate::backend::download::manager::NetworkJobStatus::Pending,
                     log: Vec::new(),
+                    items: Vec::new(),
                 };
 
                 let (tx, rx) =
@@ -4351,6 +4603,7 @@ impl SimpleComponent for AppModel {
 
                 // Queue the job in DOWNLOAD_QUEUE
                 crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
+                crate::frontend::toast::show_toast(&self.window, format!("Started downloading Minecraft {}", raw_version.id));
 
                 // Spawn a thread to forward messages from the channel rx to the AppMsg channel
                 thread::spawn(move || {
@@ -4419,27 +4672,38 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::DownloadFinished => {
                 if self.verifying_loading {
-                    self.toast_overlay.add_toast(adw::Toast::new(
+                    crate::frontend::toast::show_toast(
+                        &self.window,
                         "Instance verification completed successfully!",
-                    ));
+                    );
                 }
                 if self.installing_modpack {
-                    self.toast_overlay.add_toast(adw::Toast::new(
+                    crate::frontend::toast::show_toast(
+                        &self.window,
                         "Modpack installed successfully!",
-                    ));
+                    );
                     self.installing_modpack = false;
                 }
                 self.verifying_loading = false;
                 self.instance_summary
                     .emit(SummaryInput::SetVerifyingLoading(false));
 
-                self.download_dialog
-                    .emit(DownloadDialogInput::UpdateState(DownloadState::Finished));
-                self.download_status_bar
-                    .emit(DownloadStatusBarInput::Update(
-                        DownloadState::Finished,
-                        false,
-                    ));
+                let has_active_jobs = crate::backend::download::manager::DOWNLOAD_QUEUE
+                    .get_jobs()
+                    .into_iter()
+                    .any(|j| matches!(j.status, crate::backend::download::manager::NetworkJobStatus::Pending | crate::backend::download::manager::NetworkJobStatus::Running { .. }));
+
+                if !has_active_jobs {
+                    self.download_dialog
+                        .emit(DownloadDialogInput::UpdateState(DownloadState::Finished));
+                    self.download_status_bar
+                        .emit(DownloadStatusBarInput::Update(
+                            DownloadState::Finished,
+                            false,
+                        ));
+                } else {
+                    self.download_dialog.emit(DownloadDialogInput::Refresh);
+                }
 
                 if self.launch_after_download {
                     self.launch_after_download = false;
@@ -4453,15 +4717,24 @@ impl SimpleComponent for AppModel {
                 self.instance_summary
                     .emit(SummaryInput::SetVerifyingLoading(false));
 
-                self.download_dialog
-                    .emit(DownloadDialogInput::UpdateState(DownloadState::Failed(
-                        err.clone(),
-                    )));
-                self.download_status_bar
-                    .emit(DownloadStatusBarInput::Update(
-                        DownloadState::Failed(err),
-                        true,
-                    ));
+                let has_active_jobs = crate::backend::download::manager::DOWNLOAD_QUEUE
+                    .get_jobs()
+                    .into_iter()
+                    .any(|j| matches!(j.status, crate::backend::download::manager::NetworkJobStatus::Pending | crate::backend::download::manager::NetworkJobStatus::Running { .. }));
+
+                if !has_active_jobs {
+                    self.download_dialog
+                        .emit(DownloadDialogInput::UpdateState(DownloadState::Failed(
+                            err.clone(),
+                        )));
+                    self.download_status_bar
+                        .emit(DownloadStatusBarInput::Update(
+                            DownloadState::Failed(err),
+                            true,
+                        ));
+                } else {
+                    self.download_dialog.emit(DownloadDialogInput::Refresh);
+                }
             }
             AppMsg::DismissDownloadStatus => {
                 self.download_status_bar
@@ -4474,6 +4747,29 @@ impl SimpleComponent for AppModel {
             AppMsg::ClearFinishedJobs => {
                 crate::backend::download::manager::DOWNLOAD_QUEUE.clear_finished_jobs();
                 self.download_dialog.emit(DownloadDialogInput::Refresh);
+            }
+            AppMsg::RetryJob(id) => {
+                let (tx, rx) = std::sync::mpsc::channel::<crate::backend::download::manager::DownloadMsg>();
+                crate::backend::download::manager::DOWNLOAD_QUEUE.retry_job(&id, tx);
+                self.download_dialog.emit(DownloadDialogInput::Refresh);
+
+                let sender_clone = _sender.input_sender().clone();
+                std::thread::spawn(move || {
+                    while let Ok(msg) = rx.recv() {
+                        let is_finished = matches!(
+                            msg,
+                            crate::backend::download::manager::DownloadMsg::Finished
+                                | crate::backend::download::manager::DownloadMsg::Error(_)
+                        );
+                        let app_msg = AppMsg::DownloadProgress(msg);
+                        if sender_clone.send(app_msg).is_err() {
+                            break;
+                        }
+                        if is_finished {
+                            break;
+                        }
+                    }
+                });
             }
             AppMsg::OpenDownloadDetails => {
                 self.download_dialog.emit(DownloadDialogInput::Show);

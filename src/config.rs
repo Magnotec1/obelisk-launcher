@@ -71,6 +71,13 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn get_data_dir() -> PathBuf {
+        let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+        let mut path = home;
+        path.push(".local/share/obelisk-launcher");
+        path
+    }
+
     fn config_path() -> PathBuf {
         let mut path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
         path.push(".config");

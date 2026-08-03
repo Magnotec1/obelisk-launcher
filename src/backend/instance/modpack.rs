@@ -217,7 +217,7 @@ impl ModpackSource for ModrinthSource {
     }
 
     fn install(&self, name: &str, version: &ModpackVersionInfo, instances_path: &Path, progress_callback: Box<dyn Fn(String, f32) + Send + 'static>) -> Result<PathBuf, String> {
-        install_mrpack(name, &version.download_url, instances_path, progress_callback)
+        install_mrpack(name, &version.download_url, instances_path, &*progress_callback, &|_, _, _| {})
     }
 }
 
@@ -316,25 +316,57 @@ pub(crate) fn install_mrpack(
     name: &str,
     download_url: &str,
     instances_path: &Path,
-    progress_callback: Box<dyn Fn(String, f32) + Send + 'static>,
+    progress_callback: &dyn Fn(String, f32),
+    item_callback: &dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType),
 ) -> Result<PathBuf, String> {
+    item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
     progress_callback("Connecting to download modpack archive...".to_string(), 0.05);
 
     // Create a temporary path in instances_path
     let temp_dir = instances_path.join(".tmp_modpack_install");
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temporary directory: {}", e))?;
+    fs::create_dir_all(&temp_dir).map_err(|e| {
+        let err_msg = format!("Failed to create temporary directory: {}", e);
+        item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+        err_msg
+    })?;
     let temp_file_path = temp_dir.join("pack.mrpack");
 
     // Download the mrpack zip to the temporary file
-    let mut response = HTTP_CLIENT.get(download_url).send().map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
+    let mut response = match HTTP_CLIENT.get(download_url).send() {
+        Ok(res) => {
+            if !res.status().is_success() {
+                let _ = fs::remove_dir_all(&temp_dir);
+                let err_msg = format!("Failed to download modpack archive: Status {}", res.status());
+                item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+                return Err(err_msg);
+            }
+            res
+        }
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            let err_msg = format!("Failed to download modpack archive: {}", e);
+            item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
+    };
+
+    let mut dest_file = match fs::File::create(&temp_file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            let err_msg = format!("Failed to create temporary file: {}", e);
+            item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(err_msg);
+        }
+    };
+    if let Err(e) = std::io::copy(&mut response, &mut dest_file) {
         let _ = fs::remove_dir_all(&temp_dir);
-        return Err(format!("Failed to download modpack archive: Status {}", response.status()));
+        let err_msg = format!("Failed to write to temporary file: {}", e);
+        item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+        return Err(err_msg);
     }
 
-    let mut dest_file = fs::File::create(&temp_file_path).map_err(|e| format!("Failed to create temporary file: {}", e))?;
-    std::io::copy(&mut response, &mut dest_file).map_err(|e| format!("Failed to write to temporary file: {}", e))?;
-
+    item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
     progress_callback("Parsing modpack archive...".to_string(), 0.15);
 
     // Open ZIP and parse modrinth.index.json
@@ -374,6 +406,7 @@ pub(crate) fn install_mrpack(
         loader_version = Some(v.clone());
     }
 
+    item_callback("Create Instance".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
     progress_callback("Creating instance folders...".to_string(), 0.20);
 
     // Call create_instance
@@ -384,9 +417,19 @@ pub(crate) fn install_mrpack(
         loader_version,
     };
 
-    let instance_dir = create_instance(instances_path, options)?;
+    let instance_dir = match create_instance(instances_path, options) {
+        Ok(dir) => {
+            item_callback("Create Instance".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            dir
+        }
+        Err(e) => {
+            item_callback("Create Instance".to_string(), crate::backend::download::manager::TaskItemStatus::Failed(e.clone()), crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+            return Err(e);
+        }
+    };
     let minecraft_dir = get_minecraft_dir(&instance_dir);
 
+    item_callback("Extract Overrides".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
     progress_callback("Extracting overrides...".to_string(), 0.25);
 
     // Copy overrides
@@ -420,6 +463,8 @@ pub(crate) fn install_mrpack(
         }
     }
 
+    item_callback("Extract Overrides".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+
     // Clean up temporary archive
     drop(archive);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -434,25 +479,76 @@ pub(crate) fn install_mrpack(
     }).collect();
 
     let total_files = client_files.len();
+    let mut download_errors = Vec::new();
+
     for (idx, file_entry) in client_files.into_iter().enumerate() {
-        let file_url = file_entry.downloads.first().ok_or_else(|| format!("No download URL for file {}", file_entry.path))?;
+        let file_url = match file_entry.downloads.first() {
+            Some(url) => url,
+            None => {
+                let err_msg = format!("No download URL for file {}", file_entry.path);
+                download_errors.push(err_msg);
+                continue;
+            }
+        };
         
         let progress = 0.3 + (idx as f32 / total_files as f32) * 0.7;
-        let filename = Path::new(&file_entry.path).file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let filename = Path::new(&file_entry.path).file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
         progress_callback(format!("Downloading mod {}/{} ({})", idx + 1, total_files, filename), progress);
 
         let dest_path = minecraft_dir.join(&file_entry.path);
+
+        // Skip already-downloaded files for retry efficiency
+        if dest_path.exists() && dest_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+            item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::Mod);
+            continue;
+        }
+
+        item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::Mod);
+
         if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            if let Err(e) = fs::create_dir_all(parent) {
+                let err_msg = format!("Failed to create parent directory: {}", e);
+                item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
+                download_errors.push(format!("{}: {}", filename, err_msg));
+                continue;
+            }
         }
 
-        let mut res = HTTP_CLIENT.get(file_url).send().map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            return Err(format!("Failed to download file {}: Status {}", file_entry.path, res.status()));
+        match HTTP_CLIENT.get(file_url).send() {
+            Ok(mut res) => {
+                if res.status().is_success() {
+                    match fs::File::create(&dest_path) {
+                        Ok(mut out) => {
+                            if let Err(e) = std::io::copy(&mut res, &mut out) {
+                                let err_msg = format!("Failed to write file: {}", e);
+                                item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
+                                download_errors.push(format!("{}: {}", filename, err_msg));
+                            } else {
+                                item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::Mod);
+                            }
+                        }
+                        Err(e) => {
+                            let err_msg = format!("Failed to create file: {}", e);
+                            item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
+                            download_errors.push(format!("{}: {}", filename, err_msg));
+                        }
+                    }
+                } else {
+                    let err_msg = format!("HTTP Status {}", res.status());
+                    item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
+                    download_errors.push(format!("{}: {}", filename, err_msg));
+                }
+            }
+            Err(e) => {
+                let err_msg = e.to_string();
+                item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
+                download_errors.push(format!("{}: {}", filename, err_msg));
+            }
         }
+    }
 
-        let mut out = fs::File::create(&dest_path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut res, &mut out).map_err(|e| e.to_string())?;
+    if !download_errors.is_empty() {
+        return Err(format!("Failed to download some modpack files: {}", download_errors.join("; ")));
     }
 
     progress_callback("Installation complete!".to_string(), 1.0);
