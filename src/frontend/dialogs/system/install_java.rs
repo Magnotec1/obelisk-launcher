@@ -549,7 +549,7 @@ impl SimpleComponent for InstallJavaDialog {
                     JavaDownloadProgress::Error(e) => {
                         self.installing = false;
                         self.has_error = true;
-                        self.status = format!("{}", e);
+                        self.status = e.to_string();
                         self.cancel_flag = None;
                         if let Some(win) = relm4::main_application().active_window() {
                             crate::frontend::toast::show_toast(&win, format!("Java download failed: {}", e));

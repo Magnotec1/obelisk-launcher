@@ -56,6 +56,28 @@ impl FactoryComponent for AccountRow {
                         set_width_request: 160,
                         set_spacing: 4,
 
+                        // Refresh Token (Microsoft accounts only)
+                        gtk::Button {
+                            #[watch]
+                            set_visible: self.account.account_type == AccountType::Microsoft,
+                            set_has_frame: false,
+                            set_css_classes: &["flat", "menu-btn"],
+                            #[wrap(Some)]
+                            set_child = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 12,
+                                gtk::Label {
+                                    set_label: "Refresh Token",
+                                    set_hexpand: true,
+                                    set_halign: gtk::Align::Start,
+                                },
+                            },
+                            connect_clicked[sender, uuid = self.account.uuid.clone(), row_popover] => move |_| {
+                                row_popover.popdown();
+                                sender.output(AccountRowOutput::Refresh(uuid.clone())).ok();
+                            }
+                        },
+
                         // Account Details / Info
                         gtk::Button {
                             set_has_frame: false,
@@ -172,7 +194,7 @@ impl AccountRow {
             AccountStatus::Expired => "Expired",
             AccountStatus::Unknown(e) => e.as_str(),
         };
-        format!("{} ({})", status_str, type_str)
+        format!("{} • {}", type_str, status_str)
     }
 }
 
@@ -181,6 +203,7 @@ pub enum AccountRowOutput {
     Switch(String),
     Remove(String),
     ShowDetails(Account),
+    Refresh(String),
 }
 
 pub struct AccountView {
@@ -201,6 +224,7 @@ pub enum AccountInput {
     RemoveAccount(String),
     ShowDetails(Account),
     RefreshAll,
+    RefreshSingle(String),
     ResetRefreshing,
 }
 
@@ -265,6 +289,12 @@ impl Component for AccountView {
                                             set_ellipsize: gtk::pango::EllipsizeMode::End,
                                             #[watch]
                                             set_label: &model.get_active_name(),
+                                        },
+                                        gtk::Label {
+                                            set_css_classes: &["dim-label", "caption"],
+                                            set_halign: gtk::Align::Start,
+                                            #[watch]
+                                            set_label: &model.get_active_subtitle(),
                                         },
                                     },
                                 },
@@ -365,6 +395,7 @@ impl Component for AccountView {
                 AccountRowOutput::Switch(uuid) => AccountInput::SwitchAccount(uuid),
                 AccountRowOutput::Remove(uuid) => AccountInput::RemoveAccount(uuid),
                 AccountRowOutput::ShowDetails(acct) => AccountInput::ShowDetails(acct),
+                AccountRowOutput::Refresh(uuid) => AccountInput::RefreshSingle(uuid),
             });
 
         let details_dialog = AccountDetailsDialog::builder().launch(()).detach();
@@ -424,6 +455,27 @@ impl Component for AccountView {
                     let _ = sender_in.send(AccountInput::ResetRefreshing);
                 });
             }
+            AccountInput::RefreshSingle(uuid) => {
+                self.refreshing = true;
+                self.refresh_message = "Refreshing account token…".to_string();
+
+                let mut config_clone = self.config.clone();
+                let sender_out = sender.output_sender().clone();
+                let sender_in = sender.input_sender().clone();
+                std::thread::spawn(move || {
+                    let client_id = config_clone
+                        .microsoft_client_id
+                        .clone()
+                        .unwrap_or_else(|| "00000000402b5328".to_string());
+                    if let Some(acct) = config_clone.accounts.iter().find(|a| a.uuid == uuid) {
+                        if let Ok(refreshed) = crate::backend::auth::account::refresh_single_account(acct, &client_id) {
+                            crate::backend::auth::account::add_account(&mut config_clone, refreshed);
+                            let _ = sender_out.send(AppMsg::RefreshAccountsAll(config_clone));
+                        }
+                    }
+                    let _ = sender_in.send(AccountInput::ResetRefreshing);
+                });
+            }
             AccountInput::ResetRefreshing => {
                 self.refreshing = false;
             }
@@ -454,6 +506,31 @@ impl Component for AccountView {
             active.username.clone()
         } else {
             "No active account".to_string()
+        }
+    }
+
+    fn get_active_subtitle(&self) -> String {
+        let active_uuid = self.config.active_account_uuid.clone();
+        if let Some(active) = self
+            .config
+            .accounts
+            .iter()
+            .find(|a| Some(a.uuid.clone()) == active_uuid)
+        {
+            let type_str = match active.account_type {
+                AccountType::Microsoft => "Microsoft Account",
+                AccountType::Offline => "Offline Profile",
+            };
+            let status = verify_account_status(active);
+            let status_str = match &status {
+                AccountStatus::Valid => "Ready",
+                AccountStatus::ExpiringSoon => "Expiring Soon",
+                AccountStatus::Expired => "Expired",
+                AccountStatus::Unknown(e) => e.as_str(),
+            };
+            format!("{} • {}", type_str, status_str)
+        } else {
+            "Select or add an account below".to_string()
         }
     }
 

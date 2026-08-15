@@ -7,6 +7,7 @@ use crate::backend::download::manager::{
 };
 use crate::backend::instance::manager::ModLoader;
 use crate::frontend::dialogs::instance::editor::EditorType;
+use crate::frontend::utils::format::{escape_pango as escape, format_downloads};
 use adw::prelude::*;
 use gtk::gdk;
 use gtk::glib;
@@ -15,20 +16,6 @@ use relm4::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
-
-fn escape(text: &str) -> String {
-    glib::markup_escape_text(text).to_string()
-}
-
-fn format_downloads(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Generic Browser Models
@@ -573,7 +560,7 @@ pub enum BrowserInput {
     ToggleQueueFromDetails,
     ShowDetails(String),
     ShowList,
-    DetailsLoaded(Result<(BrowserProject, Vec<BrowserVersion>), String>),
+    DetailsLoaded(Box<Result<(BrowserProject, Vec<BrowserVersion>), String>>),
 
     ToggleQueueItem(String, String),
 
@@ -1589,7 +1576,7 @@ impl Component for UnifiedBrowser {
                         let versions = source.get_project_versions(&id_clone, &gv, l)?;
                         Ok((project, versions))
                     })();
-                    sender.input(BrowserInput::DetailsLoaded(result));
+                    sender.input(BrowserInput::DetailsLoaded(Box::new(result)));
                 });
             }
             BrowserInput::IconLoaded(url, texture) => {
@@ -1618,7 +1605,7 @@ impl Component for UnifiedBrowser {
             }
             BrowserInput::DetailsLoaded(result) => {
                 self.loading_details = false;
-                match result {
+                match *result {
                     Ok((mut project, versions)) => {
                         if project.author.is_none() {
                             if let Some(author) =
@@ -1792,11 +1779,7 @@ impl Component for UnifiedBrowser {
             BrowserInput::SetCollapsed(collapsed) => {
                 self.collapsed = collapsed;
                 if collapsed {
-                    if self.view_state == BrowserView::Details {
-                        self.show_sidebar = false;
-                    } else {
-                        self.show_sidebar = true;
-                    }
+                    self.show_sidebar = self.view_state != BrowserView::Details;
                 } else {
                     self.show_sidebar = true;
                 }
@@ -2265,26 +2248,26 @@ fn markdown_to_pango(md: &str) -> String {
         }
 
         // Headers
-        if trimmed.starts_with("# ") {
-            let content = trimmed[2..].trim();
+        if let Some(stripped) = trimmed.strip_prefix("# ") {
+            let content = stripped.trim();
             block_parsed.push_str(&format!(
                 "\n<span size=\"xx-large\" weight=\"bold\">{}</span>\n\n",
                 content
             ));
-        } else if trimmed.starts_with("## ") {
-            let content = trimmed[3..].trim();
+        } else if let Some(stripped) = trimmed.strip_prefix("## ") {
+            let content = stripped.trim();
             block_parsed.push_str(&format!(
                 "\n<span size=\"x-large\" weight=\"bold\">{}</span>\n\n",
                 content
             ));
-        } else if trimmed.starts_with("### ") {
-            let content = trimmed[4..].trim();
+        } else if let Some(stripped) = trimmed.strip_prefix("### ") {
+            let content = stripped.trim();
             block_parsed.push_str(&format!(
                 "\n<span size=\"large\" weight=\"bold\">{}</span>\n\n",
                 content
             ));
-        } else if trimmed.starts_with("#### ") {
-            let content = trimmed[5..].trim();
+        } else if let Some(stripped) = trimmed.strip_prefix("#### ") {
+            let content = stripped.trim();
             block_parsed.push_str(&format!(
                 "\n<span weight=\"bold\">{}</span>\n\n",
                 content

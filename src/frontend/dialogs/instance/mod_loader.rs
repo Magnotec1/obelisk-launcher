@@ -540,13 +540,13 @@ impl ModLoaderDialog {
             Some(ModLoader::Fabric) => self
                 .fabric_versions
                 .as_ref()
-                .map_or(false, |v| v.is_empty()),
-            Some(ModLoader::Quilt) => self.quilt_versions.as_ref().map_or(false, |v| v.is_empty()),
-            Some(ModLoader::Forge) => self.forge_versions.as_ref().map_or(false, |v| v.is_empty()),
+                .is_some_and(|v| v.is_empty()),
+            Some(ModLoader::Quilt) => self.quilt_versions.as_ref().is_some_and(|v| v.is_empty()),
+            Some(ModLoader::Forge) => self.forge_versions.as_ref().is_some_and(|v| v.is_empty()),
             Some(ModLoader::NeoForge) => self
                 .neoforge_versions
                 .as_ref()
-                .map_or(false, |v| v.is_empty()),
+                .is_some_and(|v| v.is_empty()),
             _ => false,
         }
     }

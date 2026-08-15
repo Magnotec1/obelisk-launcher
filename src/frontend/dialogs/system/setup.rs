@@ -65,7 +65,7 @@ pub enum SetupInput {
 #[derive(Debug)]
 pub enum SetupOutput {
     StartMicrosoftLogin,
-    ConfigUpdated(Config),
+    ConfigUpdated(Box<Config>),
 }
 
 impl SetupDialog {
@@ -926,7 +926,7 @@ impl SimpleComponent for SetupDialog {
                 self.config.instances_path = Some(path);
                 let _ = self.config.save();
                 sender
-                    .output(SetupOutput::ConfigUpdated(self.config.clone()))
+                    .output(SetupOutput::ConfigUpdated(Box::new(self.config.clone())))
                     .ok();
                 sender.input(SetupInput::RefreshJava); // Refresh Java as path is now set
             }
@@ -943,7 +943,7 @@ impl SimpleComponent for SetupDialog {
                     self.config.microsoft_client_id = new_val;
                     let _ = self.config.save();
                     sender
-                        .output(SetupOutput::ConfigUpdated(self.config.clone()))
+                        .output(SetupOutput::ConfigUpdated(Box::new(self.config.clone())))
                         .ok();
                 }
             }
@@ -957,7 +957,7 @@ impl SimpleComponent for SetupDialog {
                     add_account(&mut self.config, account);
                     let _ = self.config.save();
                     sender
-                        .output(SetupOutput::ConfigUpdated(self.config.clone()))
+                        .output(SetupOutput::ConfigUpdated(Box::new(self.config.clone())))
                         .ok();
                     self.offline_username.clear();
                 }

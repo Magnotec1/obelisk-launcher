@@ -27,7 +27,7 @@ pub struct InstanceSummary {
 
 #[derive(Debug)]
 pub enum SummaryInput {
-    Update(Option<Instance>, InstanceStatus),
+    Update(Box<Option<Instance>>, InstanceStatus),
     SetNarrow(bool),
     SetSharingLoading(bool),
     SetVerifyingLoading(bool),
@@ -240,7 +240,7 @@ impl SimpleComponent for InstanceSummary {
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>) {
         match msg {
             SummaryInput::Update(inst, status) => {
-                self.instance = inst;
+                self.instance = *inst;
                 self.status = status;
             }
             SummaryInput::SetNarrow(narrow) => {

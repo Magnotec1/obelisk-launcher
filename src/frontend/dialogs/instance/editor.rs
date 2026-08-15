@@ -422,7 +422,7 @@ impl InstanceEditorDialog {
                 let badge = gtk::Label::builder()
                     .label("●")
                     .valign(gtk::Align::Center)
-                    .tooltip_text(&format!("Update Available: {}", update.new_version))
+                    .tooltip_text(format!("Update Available: {}", update.new_version))
                     .build();
                 badge.add_css_class("success");
                 badge.add_css_class("title-3");
@@ -1320,7 +1320,7 @@ impl SimpleComponent for InstanceEditorDialog {
 
                         let dialog = adw::AlertDialog::builder()
                             .heading("Confirm Removal")
-                            .body(&format!("Are you sure you want to remove '{}'?", name))
+                            .body(format!("Are you sure you want to remove '{}'?", name))
                             .build();
 
                         dialog.add_response("cancel", "Cancel");
@@ -1375,7 +1375,7 @@ impl SimpleComponent for InstanceEditorDialog {
 
                 let dialog = adw::AlertDialog::builder()
                     .heading("Confirm Removal")
-                    .body(&format!(
+                    .body(format!(
                         "Are you sure you want to remove {} selected items?",
                         count
                     ))

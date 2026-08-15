@@ -11,14 +11,8 @@ const XBOX_AUTH_URL: &str = "https://user.auth.xboxlive.com/user/authenticate";
 const XSTS_AUTH_URL: &str = "https://xsts.auth.xboxlive.com/xsts/authorize";
 const MC_AUTH_URL: &str = "https://api.minecraftservices.com/authentication/login_with_xbox";
 const MC_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
-const USER_AGENT: &str = "obelisk-launcher-rs (github.com/magnotec/obelisk-launcher)";
-
-fn build_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new())
+fn build_client() -> &'static reqwest::blocking::Client {
+    crate::backend::core::http::client()
 }
 
 // ─── Serde Structs ──────────────────────────────────────────────────────────
@@ -143,16 +137,11 @@ pub struct McProfile {
 
 // ─── Account Type ───────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub enum AccountType {
+    #[default]
     Microsoft,
     Offline,
-}
-
-impl Default for AccountType {
-    fn default() -> Self {
-        AccountType::Microsoft
-    }
 }
 
 // ─── Account (stored in config) ─────────────────────────────────────────────

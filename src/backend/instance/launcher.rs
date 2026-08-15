@@ -1,7 +1,8 @@
 use crate::backend::auth::microsoft::Account;
+use crate::backend::core::mojang::{
+    is_rule_allowed, ComponentMeta, MavenCoordinate,
+};
 use crate::backend::instance::manager::{Instance, MmcPack};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -44,66 +45,6 @@ impl Default for LaunchOptions {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Artifact {
-    pub path: Option<String>,
-    pub url: String,
-    pub sha1: String,
-    pub size: u64,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct LibDownloads {
-    pub artifact: Option<Artifact>,
-    pub classifiers: Option<HashMap<String, Artifact>>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Library {
-    pub name: String,
-    pub downloads: Option<LibDownloads>,
-    pub url: Option<String>,
-    pub sha1: Option<String>,
-    pub size: Option<u64>,
-    pub rules: Option<Vec<Rule>>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Rule {
-    pub action: String,
-    pub os: Option<Os>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Os {
-    pub name: String,
-}
-
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct GameArguments {
-    game: Option<Vec<serde_json::Value>>,
-    jvm: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct ComponentMeta {
-    #[serde(rename = "mainClass")]
-    main_class: Option<String>,
-    libraries: Option<Vec<Library>>,
-    #[serde(rename = "mavenFiles")]
-    maven_files: Option<Vec<Library>>,
-    #[serde(rename = "minecraftArguments")]
-    minecraft_arguments: Option<String>,
-    arguments: Option<GameArguments>,
-    #[serde(rename = "assetIndex")]
-    asset_index: Option<AssetIndex>,
-    /// Prism Meta: extra tweaker classes to append as --tweakClass args
-    #[serde(rename = "+tweakers", default)]
-    tweakers: Vec<String>,
-}
-
 /// Extract native .so/.dll files from a classifier JAR into the given directory.
 fn extract_natives_jar(jar_path: &Path, natives_dir: &Path) -> Result<(), String> {
     let file = fs::File::open(jar_path)
@@ -138,74 +79,10 @@ fn extract_natives_jar(jar_path: &Path, natives_dir: &Path) -> Result<(), String
     Ok(())
 }
 
-#[derive(Deserialize, Debug)]
-struct AssetIndex {
-    id: String,
-}
-
-fn is_library_allowed(rules: &Option<Vec<Rule>>) -> bool {
-    if let Some(rules) = rules {
-        let mut allowed = false;
-        for rule in rules {
-            if rule.action == "allow" {
-                if let Some(os) = &rule.os {
-                    if os.name == "linux" || os.name == "linux-x86_64" {
-                        allowed = true;
-                    }
-                } else {
-                    allowed = true;
-                }
-            } else if rule.action == "disallow" {
-                if let Some(os) = &rule.os {
-                    if os.name == "linux" || os.name == "linux-x86_64" {
-                        allowed = false;
-                    }
-                } else {
-                    allowed = false;
-                }
-            }
-        }
-        allowed
-    } else {
-        true
-    }
-}
-
 fn resolve_library_path(lib_name: &str, data_path: &Path) -> PathBuf {
-    // Name format: group:artifact:version[:classifier][@extension]
-    let parts: Vec<&str> = lib_name.split(':').collect();
-    if parts.len() < 3 {
-        return PathBuf::new();
-    }
-
-    let group = parts[0].replace('.', "/");
-    let artifact = parts[1];
-    let version = parts[2];
-
-    let mut filename = format!("{}-{}", artifact, version);
-    if parts.len() > 3 {
-        let extra = parts[3..].join("-");
-        if let Some(pos) = extra.find('@') {
-            filename.push_str(&format!("-{}", &extra[..pos]));
-        } else {
-            filename.push_str(&format!("-{}", extra));
-        }
-    }
-
-    let extension = if let Some(pos) = lib_name.find('@') {
-        &lib_name[pos + 1..]
-    } else {
-        "jar"
-    };
-
-    filename.push_str(&format!(".{}", extension));
-
-    let mut path = data_path.join("libraries");
-    path.push(group);
-    path.push(artifact);
-    path.push(version);
-    path.push(filename);
-    path
+    MavenCoordinate::parse(lib_name)
+        .map(|c| c.to_full_path(&data_path.join("libraries")))
+        .unwrap_or_default()
 }
 
 fn is_modern_minecraft_version(mc_version: &str) -> bool {
@@ -218,13 +95,11 @@ fn is_modern_minecraft_version(mc_version: &str) -> bool {
                     if minor > 20 {
                         return true;
                     }
-                    if minor == 20 {
-                        if parts.len() >= 3 {
-                            let patch_str = parts[2];
-                            let clean_patch: String = patch_str.chars().take_while(|c| c.is_ascii_digit()).collect();
-                            if let Ok(patch) = clean_patch.parse::<u32>() {
-                                return patch >= 6;
-                            }
+                    if minor == 20 && parts.len() >= 3 {
+                        let patch_str = parts[2];
+                        let clean_patch: String = patch_str.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        if let Ok(patch) = clean_patch.parse::<u32>() {
+                            return patch >= 6;
                         }
                     }
                 }
@@ -389,7 +264,7 @@ pub fn launch_instance(
                 }
                 if let Some(libs) = meta.libraries {
                     for lib in libs {
-                        if is_library_allowed(&lib.rules) {
+                        if is_rule_allowed(&lib.rules) {
                             // Collect the main artifact for classpath
                             let mut path = resolve_library_path(&lib.name, &options.mc_data_path);
                             if !path.exists() {
@@ -558,7 +433,7 @@ pub fn launch_instance(
 
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .current_dir(&minecraft_dir);
+        .current_dir(minecraft_dir);
 
     // Extract native libraries from classifier JARs
     let natives_dir = instance.path.join("natives");
@@ -873,7 +748,7 @@ pub fn check_instance_assets(instance: &Instance, options: &LaunchOptions) -> bo
                             }
                             if let Ok(index_content) = fs::read_to_string(&index_path) {
                                 if let Ok(assets) = serde_json::from_str::<
-                                    crate::backend::download::sources::minecraft::AssetObjects,
+                                    crate::backend::core::mojang::AssetObjects,
                                 >(&index_content)
                                 {
                                     for obj in assets.objects.values() {
@@ -917,7 +792,7 @@ pub fn check_instance_assets(instance: &Instance, options: &LaunchOptions) -> bo
 
                         if let Some(libs) = meta.libraries {
                             for lib in libs {
-                                if is_library_allowed(&lib.rules) {
+                                if is_rule_allowed(&lib.rules) {
                                     // If we have download info, only check if it has a main artifact.
                                     // Natives (classifiers) are often handled differently or not strictly required in classpath.
                                     let needs_check = if let Some(downloads) = &lib.downloads {

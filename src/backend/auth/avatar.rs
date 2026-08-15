@@ -1,10 +1,8 @@
 use crate::config::Config;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 const AVATAR_API_URL: &str = "https://crafatar.com/avatars";
-const USER_AGENT: &str = "obelisk-launcher-rs (github.com/magnotec/obelisk-launcher)";
 
 /// Returns the cache file path for an account's avatar PNG.
 pub fn get_avatar_cache_path(uuid: &str) -> PathBuf {
@@ -27,11 +25,7 @@ pub fn fetch_and_cache_avatar(uuid: &str) -> Result<PathBuf, String> {
     }
 
     let url = format!("{}/{}?size=64&overlay", AVATAR_API_URL, uuid);
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to create client: {}", e))?;
+    let client = crate::backend::core::http::client();
 
     let resp = client
         .get(&url)

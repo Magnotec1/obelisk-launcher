@@ -466,11 +466,7 @@ impl SimpleComponent for ImportDialog {
             }
             ImportInput::SetStep(step) => {
                 self.step = step;
-                if step == ImportStep::Progress {
-                    self.is_loading = true;
-                } else {
-                    self.is_loading = false;
-                }
+                self.is_loading = step == ImportStep::Progress;
             }
             ImportInput::SetCode(code) => {
                 self.code = code;

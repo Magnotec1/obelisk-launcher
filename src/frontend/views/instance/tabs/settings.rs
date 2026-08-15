@@ -10,7 +10,7 @@ pub struct InstanceSettingsTab {
 
 #[derive(Debug)]
 pub enum SettingsTabInput {
-    Update(Option<Instance>, Config),
+    Update(Box<Option<Instance>>, Box<Config>),
     ShowZinkInfo,
 }
 
@@ -147,8 +147,8 @@ impl Component for InstanceSettingsTab {
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             SettingsTabInput::Update(inst, config) => {
-                self.instance = inst;
-                self.config = config;
+                self.instance = *inst;
+                self.config = *config;
             }
             SettingsTabInput::ShowZinkInfo => {
                 let dialog = adw::AlertDialog::builder()

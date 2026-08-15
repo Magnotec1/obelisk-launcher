@@ -28,13 +28,15 @@ fn scan_flatpak_dir(base: &Path, versions: &mut Vec<JavaInstance>) {
     {
         if entry.file_type().is_file() {
             let path = entry.path();
-            if path.file_name().map_or(false, |name| name == "java") {
-                if path.parent().map_or(false, |parent| parent.file_name().map_or(false, |p_name| p_name == "bin")) {
-                    if let Some(mut instance) = probe_java(path) {
-                        instance.source = JavaSource::System;
-                        if !versions.iter().any(|v| v.path == instance.path) {
-                            versions.push(instance);
-                        }
+            if path.file_name().is_some_and(|name| name == "java")
+                && path.parent().is_some_and(|parent| {
+                    parent.file_name().is_some_and(|p_name| p_name == "bin")
+                })
+            {
+                if let Some(mut instance) = probe_java(path) {
+                    instance.source = JavaSource::System;
+                    if !versions.iter().any(|v| v.path == instance.path) {
+                        versions.push(instance);
                     }
                 }
             }

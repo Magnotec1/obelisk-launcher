@@ -284,30 +284,40 @@ pub fn import_instance_from_zip(
     let total_files = archive.len();
     for i in 0..total_files {
         let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = file.name().to_string();
+        
+        // Use enclosed_name to guard against Zip Slip / path traversal
+        let safe_path = match file.enclosed_name() {
+            Some(p) => p.to_path_buf(),
+            None => continue,
+        };
+
+        let name = safe_path.to_string_lossy().to_string();
 
         let p = (i + 1) as f64 / total_files as f64;
         if i % 10 == 0 || i + 1 == total_files {
             progress(p, format!("Extracting: {}", name));
         }
 
-        let stripped_name = if let Some(ref prefix) = prefix_to_strip {
-            if name.starts_with(prefix) && name.len() > prefix.len() + 1 {
-                &name[prefix.len() + 1..]
+        let stripped_path = if let Some(ref prefix) = prefix_to_strip {
+            if let Ok(rel) = safe_path.strip_prefix(prefix) {
+                rel.to_path_buf()
             } else {
-                continue; // Skip the root folder entry itself
+                continue; // Skip entries outside the root folder prefix
             }
         } else {
-            &name
+            safe_path
         };
 
-        if stripped_name.is_empty() {
+        if stripped_path.as_os_str().is_empty() {
             continue;
         }
 
-        let outpath = target_dir.join(stripped_name);
+        let outpath = target_dir.join(&stripped_path);
+        if !outpath.starts_with(&target_dir) {
+            return Err(format!("Security alert: Zip path '{}' attempts to escape target directory.", name));
+        }
 
-        if name.ends_with('/') {
+        if file.is_dir() || name.ends_with('/') {
             std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
         } else {
             if let Some(p) = outpath.parent() {

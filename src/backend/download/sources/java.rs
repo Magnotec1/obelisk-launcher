@@ -134,7 +134,7 @@ pub fn download_and_extract_with_progress<F>(
     let clean_url = clean_url.split('#').next().unwrap_or(clean_url);
     let filename = clean_url
         .split('/')
-        .last()
+        .next_back()
         .filter(|s| !s.is_empty())
         .unwrap_or("java_runtime.tar.gz");
 

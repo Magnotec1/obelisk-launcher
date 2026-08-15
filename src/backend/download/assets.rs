@@ -137,7 +137,7 @@ pub fn scan_assets(
                             .to_string();
                         if let Ok(content) = fs::read_to_string(&p) {
                             if let Ok(index) = serde_json::from_str::<
-                                crate::backend::download::sources::minecraft::AssetObjects,
+                                crate::backend::core::mojang::AssetObjects,
                             >(&content)
                             {
                                 let mut type_sizes: HashMap<String, u64> = HashMap::new();
@@ -184,7 +184,7 @@ pub fn scan_assets(
                                         path: PathBuf::new(), // Virtual entry, not directly deletable
                                     })
                                     .collect();
-                                sub_entries.sort_by(|a, b| b.size.cmp(&a.size));
+                                sub_entries.sort_by_key(|b| std::cmp::Reverse(b.size));
                                 let total: u64 = sub_entries.iter().map(|e| e.size).sum();
                                 let index_size = p.metadata().map(|m| m.len()).unwrap_or(0);
 
@@ -327,7 +327,7 @@ pub fn scan_assets(
                 }
             }
             for (name, (total, mut entries)) in lib_groups {
-                entries.sort_by(|a, b| b.size.cmp(&a.size));
+                entries.sort_by_key(|b| std::cmp::Reverse(b.size));
                 libraries.groups.push(AssetGroup {
                     name: format!(
                         "{} (in {})",
@@ -424,7 +424,7 @@ pub fn scan_assets(
                                 }
                             }
                         }
-                        inst_entries.sort_by(|a, b| b.size.cmp(&a.size));
+                        inst_entries.sort_by_key(|b| std::cmp::Reverse(b.size));
                         let total: u64 = inst_entries.iter().map(|e| e.size).sum();
                         if total > 0 {
                             let inst_name = {
@@ -449,7 +449,7 @@ pub fn scan_assets(
                     }
                 }
             }
-            groups.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+            groups.sort_by_key(|b| std::cmp::Reverse(b.total_size));
             let total: u64 = groups.iter().map(|g| g.total_size).sum();
             grand_total += total;
             categories.push(AssetCategory {
@@ -461,7 +461,7 @@ pub fn scan_assets(
         }
     }
 
-    categories.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+    categories.sort_by_key(|b| std::cmp::Reverse(b.total_size));
     AssetScanResult {
         categories,
         total_size: grand_total,
@@ -503,7 +503,7 @@ pub fn scan_versions(data_path: &Path, shared_path: Option<&Path>) -> Vec<AssetG
                 let jar_size = dir_size(&v_dir);
                 if jar_size > 0 {
                     entries.push(AssetEntry {
-                        name: format!("Client JAR"),
+                        name: "Client JAR".to_string(),
                         size: jar_size,
                         path: v_dir.clone(),
                     });
@@ -527,7 +527,7 @@ pub fn scan_versions(data_path: &Path, shared_path: Option<&Path>) -> Vec<AssetG
                         }
                     }
                     entries.push(AssetEntry {
-                        name: format!("Version Metadata"),
+                        name: "Version Metadata".to_string(),
                         size: meta_size,
                         path: meta_path,
                     });
@@ -565,7 +565,7 @@ pub fn scan_versions(data_path: &Path, shared_path: Option<&Path>) -> Vec<AssetG
     }
 
     let mut result: Vec<AssetGroup> = groups_map.into_values().collect();
-    result.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+    result.sort_by_key(|b| std::cmp::Reverse(b.total_size));
     result
 }
 

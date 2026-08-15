@@ -95,7 +95,7 @@ impl PlaytimeManager {
                         .to_string();
 
                     // If it is a UUID or prefix, name it "Unknown Instance (id)" so it is clear
-                    let display_name = if name == *id || (id.len() >= 8 && name == &id[0..8]) {
+                    let display_name = if name == *id || (id.len() >= 8 && name == id[0..8]) {
                         format!("Unknown Instance ({})", &id[0..8])
                     } else {
                         name
@@ -125,7 +125,7 @@ impl PlaytimeManager {
         }
 
         // Cap global sessions to previous 5
-        sessions.sort_by(|a, b| b.end_time.cmp(&a.end_time));
+        sessions.sort_by_key(|b| std::cmp::Reverse(b.end_time));
         sessions.truncate(5);
 
         PlaytimeManager {
@@ -241,7 +241,7 @@ impl PlaytimeManager {
 
         self.sessions.push(session);
         // Cap global sessions to previous 5
-        self.sessions.sort_by(|a, b| b.end_time.cmp(&a.end_time));
+        self.sessions.sort_by_key(|b| std::cmp::Reverse(b.end_time));
         self.sessions.truncate(5);
 
         let _ = self.save();

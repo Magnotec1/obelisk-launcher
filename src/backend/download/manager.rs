@@ -281,6 +281,12 @@ struct QueueInner {
     senders: HashMap<String, std::sync::mpsc::Sender<DownloadMsg>>,
 }
 
+impl Default for NetworkQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkQueue {
     pub fn new() -> Self {
         Self {

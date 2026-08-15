@@ -45,6 +45,8 @@ pub enum AssetOutput {
     SubpageChanged(Option<String>),
 }
 
+pub type ChartSlice = (String, f64, &'static str);
+
 pub struct AssetManagerView {
     loading: bool,
     data_path: PathBuf,
@@ -58,7 +60,7 @@ pub struct AssetManagerView {
     page_ids: Vec<String>,
     sender: Option<ComponentSender<AssetManagerView>>,
 
-    chart_slices: std::rc::Rc<std::cell::RefCell<Vec<(String, f64, &'static str)>>>,
+    chart_slices: std::rc::Rc<std::cell::RefCell<Vec<ChartSlice>>>,
     chart_drawing_area: gtk::DrawingArea,
     legend_box: gtk::Box,
 }
@@ -253,7 +255,7 @@ impl AssetManagerView {
                     dialog.connect_response(None, move |_dlg, response| {
                         if response == "delete" {
                             let _ = delete_asset(&path);
-                            Self::remove_widgets_for_paths(&w_map_clone, &[path.clone()]);
+                            Self::remove_widgets_for_paths(&w_map_clone, std::slice::from_ref(&path));
                         }
                     });
 
@@ -414,7 +416,7 @@ impl AssetManagerView {
                     dialog.connect_response(None, move |_dlg, response| {
                         if response == "delete" {
                             let _ = delete_asset(&path);
-                            Self::remove_widgets_for_paths(&w_map_clone, &[path.clone()]);
+                            Self::remove_widgets_for_paths(&w_map_clone, std::slice::from_ref(&path));
                         }
                     });
 

@@ -3,24 +3,13 @@ use crate::backend::instance::manager::Instance;
 use crate::config::SortBy;
 use crate::frontend::views::instance::helpers::{self, ContextMenuOutput};
 use crate::frontend::app::InstanceStatus;
+use crate::frontend::utils::format::format_playtime;
 use adw::prelude::*;
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-fn format_playtime(seconds: u64) -> String {
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    if hours > 0 {
-        format!("{}h {}m", hours, minutes)
-    } else if minutes > 0 {
-        format!("{}m", minutes)
-    } else {
-        "No playtime".to_string()
-    }
-}
 
 fn loader_css_class(loader: &str) -> &'static str {
     match loader {
@@ -624,7 +613,7 @@ impl OverviewGrid {
     fn sort_instances(&self, list: &mut Vec<(usize, &Instance)>) {
         match self.sort_by {
             SortBy::Alphabetical => {
-                list.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()));
+                list.sort_by_key(|a| a.1.name.to_lowercase());
             }
             SortBy::LastPlayed => {
                 list.sort_by(|a, b| {
@@ -768,7 +757,7 @@ impl OverviewGrid {
                 .css_classes(vec!["overview-card-title"])
                 .build();
             let sub = gtk::Label::builder()
-                .label(&format!("{} instances", count))
+                .label(format!("{} instances", count))
                 .halign(gtk::Align::Start)
                 .css_classes(vec!["dim-label", "caption"])
                 .build();
@@ -830,7 +819,7 @@ impl OverviewGrid {
         info_area.append(&title);
 
         let sub = gtk::Label::builder()
-            .label(&format!("{} instances", count))
+            .label(format!("{} instances", count))
             .css_classes(vec!["overview-card-subtitle"])
             .halign(gtk::Align::Center)
             .build();
@@ -910,7 +899,7 @@ impl OverviewGrid {
             // Right-side playtime highlight
             if inst.total_time_played > 0 {
                 let pt_label = gtk::Label::builder()
-                    .label(&format_playtime(inst.total_time_played))
+                    .label(format_playtime(inst.total_time_played))
                     .css_classes(vec!["dim-label", "caption"])
                     .valign(gtk::Align::Center)
                     .margin_end(4)
@@ -1026,7 +1015,7 @@ impl OverviewGrid {
         }
         if !stat_parts.is_empty() {
             let stats_label = gtk::Label::builder()
-                .label(&stat_parts.join(" · "))
+                .label(stat_parts.join(" · "))
                 .css_classes(vec!["overview-card-stats"])
                 .halign(gtk::Align::Center)
                 .ellipsize(gtk::pango::EllipsizeMode::End)

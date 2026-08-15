@@ -47,10 +47,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
-
-        let mut mc_data = home.clone();
-        mc_data.push(".local/share/obelisk-launcher");
+        let mc_data = Self::get_data_dir();
 
         Self {
             instances_path: None,
@@ -72,18 +69,24 @@ impl Default for Config {
 
 impl Config {
     pub fn get_data_dir() -> PathBuf {
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
-        let mut path = home;
-        path.push(".local/share/obelisk-launcher");
-        path
+        if let Some(base) = directories::BaseDirs::new() {
+            base.data_local_dir().join("obelisk-launcher")
+        } else {
+            let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+            home.join(".local/share/obelisk-launcher")
+        }
     }
 
     fn config_path() -> PathBuf {
-        let mut path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
-        path.push(".config");
-        path.push("obelisk-launcher");
-        path.push("config.json");
-        path
+        if let Some(base) = directories::BaseDirs::new() {
+            base.config_dir().join("obelisk-launcher").join("config.json")
+        } else {
+            let mut path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+            path.push(".config");
+            path.push("obelisk-launcher");
+            path.push("config.json");
+            path
+        }
     }
 
     pub fn load() -> Self {
@@ -100,13 +103,8 @@ impl Config {
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let content = serde_json::to_string_pretty(self)?;
-        let tmp_path = path.with_extension("tmp");
-        fs::write(&tmp_path, content)?;
-        fs::rename(tmp_path, path)?;
+        crate::backend::core::fs_utils::atomic_write(&path, content)?;
         Ok(())
     }
 }

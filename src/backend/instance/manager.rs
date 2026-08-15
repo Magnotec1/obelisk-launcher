@@ -876,7 +876,7 @@ pub fn create_instance(
          instanceId={}\n\
          IntendedVersion={}\n",
         options.name,
-        uuid::Uuid::new_v4().to_string(),
+        uuid::Uuid::new_v4(),
         options.minecraft_version
     );
     fs::write(instance_dir.join("instance.cfg"), cfg_content)
@@ -1025,7 +1025,7 @@ const LOADER_UIDS: &[&str] = &[
 ];
 
 pub fn is_loader_component(uid: &str) -> bool {
-    LOADER_UIDS.iter().any(|&u| uid == u)
+    LOADER_UIDS.contains(&uid)
 }
 
 pub fn get_minecraft_dir(instance_path: &Path) -> PathBuf {
@@ -1425,6 +1425,7 @@ pub fn rename_instance(instance_path: &Path, new_name: &str) -> Result<(), Strin
     update_cfg_key(instance_path, "name", new_name)
 }
 
+#[allow(clippy::permissions_set_readonly_false)]
 fn make_writable_recursive(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path)? {

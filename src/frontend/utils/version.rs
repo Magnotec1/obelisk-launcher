@@ -9,8 +9,8 @@ pub struct VersionFilters {
     pub show_experiments: bool,
 }
 
-impl VersionFilters {
-    pub fn new() -> Self {
+impl Default for VersionFilters {
+    fn default() -> Self {
         Self {
             show_releases: true,
             show_snapshots: false,
@@ -18,6 +18,12 @@ impl VersionFilters {
             show_alphas: false,
             show_experiments: false,
         }
+    }
+}
+
+impl VersionFilters {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn active_filters(&self) -> Vec<VersionType> {

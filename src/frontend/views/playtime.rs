@@ -17,11 +17,13 @@ pub enum PlaytimeOutput {
     Refresh,
 }
 
+pub type InstancePlaytimeEntry = (String, String, u64, Option<DateTime<Utc>>, usize, bool);
+
 pub struct PlaytimeView {
     loading: bool,
     total_seconds: u64,
-    instance_data: Vec<(String, String, u64, Option<DateTime<Utc>>, usize, bool)>, // id, name, seconds, last_played, session_count, is_detected
-    recent_sessions: Vec<(String, u64, DateTime<Utc>)>,              // name, duration, end_time
+    instance_data: Vec<InstancePlaytimeEntry>,
+    recent_sessions: Vec<(String, u64, DateTime<Utc>)>, // name, duration, end_time
     list_box: gtk::ListBox,
     history_list_box: gtk::ListBox,
 }
@@ -393,7 +395,7 @@ impl SimpleComponent for PlaytimeView {
 
                 // Calculate recent sessions (last 5)
                 let mut all_sessions = manager.sessions.clone();
-                all_sessions.sort_by(|a, b| b.end_time.cmp(&a.end_time));
+                all_sessions.sort_by_key(|b| std::cmp::Reverse(b.end_time));
 
                 self.recent_sessions = all_sessions
                     .into_iter()
@@ -408,7 +410,7 @@ impl SimpleComponent for PlaytimeView {
                     .collect();
 
                 self.total_seconds = self.instance_data.iter().map(|(_, _, s, _, _, _)| s).sum();
-                self.instance_data.sort_by(|a, b| b.2.cmp(&a.2));
+                self.instance_data.sort_by_key(|b| std::cmp::Reverse(b.2));
 
                 self.rebuild_lists();
 

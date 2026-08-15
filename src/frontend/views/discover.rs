@@ -2,6 +2,7 @@ use crate::backend::instance::modpack::{
     ModpackDetails, ModpackInfo, ModpackSource, ModpackVersionInfo, ModrinthSource,
 };
 use crate::frontend::dialogs::external::browser::{DescriptionDialog, DescriptionDialogInput};
+use crate::frontend::utils::format::{escape_pango as escape, format_downloads};
 use adw::prelude::*;
 use gtk::gdk;
 use gtk::glib;
@@ -9,21 +10,6 @@ use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::thread;
-
-// Helper functions for UI formatting
-fn format_downloads(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
-
-fn escape(text: &str) -> String {
-    glib::markup_escape_text(text).to_string()
-}
 
 // ---------------------------------------------------------------------------
 // 1. Modpack Card Factory Component (for lists/grids)
@@ -860,7 +846,7 @@ pub enum DiscoverInput {
     Search(String),
     SearchResultsReady(Result<Vec<ModpackInfo>, String>),
     LoadDetails(String),
-    DetailsReady(Result<ModpackDetails, String>),
+    DetailsReady(Box<Result<ModpackDetails, String>>),
     VersionsReady(Result<Vec<ModpackVersionInfo>, String>),
     IconLoaded {
         url: String,
@@ -878,7 +864,7 @@ pub enum DiscoverInput {
     SelectVersion(u32),
     CloseDetails,
     InstallClicked,
-    PerformInstallWithNameGroup(String, ModpackVersionInfo, Option<String>),
+    PerformInstallWithNameGroup(String, Box<ModpackVersionInfo>, Option<String>),
     UpdateGroups {
         current_folder: Option<String>,
         available_groups: Vec<String>,
@@ -893,7 +879,7 @@ pub enum DiscoverInput {
 
 #[derive(Debug)]
 pub enum DiscoverOutput {
-    InstallModpack(String, ModpackVersionInfo, Option<String>, String), // Name, VersionInfo, TargetGroup, ProviderName
+    InstallModpack(String, Box<ModpackVersionInfo>, Option<String>, String), // Name, VersionInfo, TargetGroup, ProviderName
     DetailsOpened,
     DetailsClosed,
 }
@@ -1119,7 +1105,7 @@ impl SimpleComponent for DiscoverView {
                                 set_margin_bottom: 8,
 
                                 adw::CarouselIndicatorDots {
-                                    set_carousel: Some(&featured_carousel),
+                                    set_carousel: Some(featured_carousel),
                                     #[watch]
                                     set_visible: featured_carousel.n_pages() > 1,
                                 },
@@ -1378,7 +1364,7 @@ impl SimpleComponent for DiscoverView {
                                         set_margin_bottom: 6,
 
                                         adw::CarouselIndicatorDots {
-                                            set_carousel: Some(&screenshot_carousel),
+                                            set_carousel: Some(screenshot_carousel),
                                             #[watch]
                                             set_visible: screenshot_carousel.n_pages() > 1,
                                         },
@@ -1604,7 +1590,7 @@ impl SimpleComponent for DiscoverView {
             .launch(())
             .forward(sender.input_sender(), |output| match output {
                 ModpackInstallDialogOutput::Install { name, version, group } => {
-                    DiscoverInput::PerformInstallWithNameGroup(name, version, group)
+                    DiscoverInput::PerformInstallWithNameGroup(name, Box::new(version), group)
                 }
             });
 
@@ -1741,7 +1727,7 @@ impl SimpleComponent for DiscoverView {
                 thread::spawn(move || {
                     let source = ModrinthSource;
                     let details_res = source.get_details(&slug_clone);
-                    sender_clone.send(DiscoverInput::DetailsReady(details_res)).ok();
+                    sender_clone.send(DiscoverInput::DetailsReady(Box::new(details_res))).ok();
 
                     let versions_res = source.get_versions(&slug_clone);
                     sender_clone.send(DiscoverInput::VersionsReady(versions_res)).ok();
@@ -1749,7 +1735,7 @@ impl SimpleComponent for DiscoverView {
             }
             DiscoverInput::DetailsReady(result) => {
                 self.loading_details = false;
-                match result {
+                match *result {
                     Ok(details) => {
                         // Load screenshots
                         let mut guard = self.screenshot_cards.guard();
@@ -1981,15 +1967,11 @@ fn fetch_icon(url: String, sender: relm4::Sender<DiscoverInput>) {
                                 count += 1;
                             }
                         }
-                        let average_color = if count > 0 {
-                            Some((
-                                (r_sum / count) as u8,
-                                (g_sum / count) as u8,
-                                (b_sum / count) as u8,
-                            ))
-                        } else {
-                            None
-                        };
+                        let average_color = count.checked_div(1).filter(|_| count > 0).map(|_| (
+                            (r_sum / count) as u8,
+                            (g_sum / count) as u8,
+                            (b_sum / count) as u8,
+                        ));
 
                         let _ = sender.send(DiscoverInput::IconLoaded {
                             url,

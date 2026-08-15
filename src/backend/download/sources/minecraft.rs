@@ -1,100 +1,17 @@
+use crate::backend::core::http::client;
+use crate::backend::core::mojang::{
+    is_rule_allowed, Artifact, AssetObjects, LegacyLibInfo, Library, MavenCoordinate, VersionMeta,
+};
 use crate::backend::instance::manager::ModLoader;
 use crate::backend::runtime::versions::{LoaderVersion, MinecraftVersion, RawVersion, VersionType};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const VERSION_MANIFEST_URL: &str =
     "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct VersionMeta {
-    pub id: String,
-    #[serde(rename = "mainClass")]
-    pub main_class: Option<String>,
-    #[serde(rename = "minecraftArguments")]
-    pub minecraft_arguments: Option<String>,
-    pub arguments: Option<GameArguments>,
-    #[serde(rename = "assetIndex")]
-    pub asset_index: Option<AssetIndex>,
-    pub libraries: Option<Vec<Library>>,
-    pub downloads: Option<Downloads>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct AssetIndex {
-    pub id: String,
-    pub sha1: String,
-    pub url: String,
-    #[serde(rename = "totalSize")]
-    pub total_size: Option<u64>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct Downloads {
-    pub client: Artifact,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Artifact {
-    pub path: Option<String>,
-    pub sha1: String,
-    pub size: u64,
-    pub url: String,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Library {
-    pub name: String,
-    pub downloads: Option<LibDownloads>,
-    #[serde(flatten)]
-    pub legacy_info: Option<LegacyLibInfo>,
-    pub rules: Option<Vec<Rule>>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct LegacyLibInfo {
-    pub url: Option<String>,
-    pub sha1: Option<String>,
-    pub size: Option<u64>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct LibDownloads {
-    pub artifact: Option<Artifact>,
-    pub classifiers: Option<HashMap<String, Artifact>>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Rule {
-    pub action: String,
-    pub os: Option<Os>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct Os {
-    pub name: String,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct GameArguments {
-    pub game: Option<Vec<serde_json::Value>>,
-    pub jvm: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct AssetObjects {
-    pub objects: HashMap<String, AssetObject>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct AssetObject {
-    pub hash: String,
-    pub size: u64,
-}
 
 const EXPERIMENT_IDS: &[&str] = &[
     "20w14infinite",
@@ -109,7 +26,7 @@ const EXPERIMENT_IDS: &[&str] = &[
 ];
 
 fn is_experiment(id: &str) -> bool {
-    EXPERIMENT_IDS.iter().any(|&exp| exp == id)
+    EXPERIMENT_IDS.contains(&id)
 }
 
 fn classify_version(raw: &RawVersion) -> VersionType {
@@ -125,15 +42,8 @@ fn classify_version(raw: &RawVersion) -> VersionType {
     }
 }
 
-fn get_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .user_agent("obelisk-launcher")
-        .build()
-        .map_err(|e| format!("failed to build reqwest client: {}", e))
-}
-
 pub fn fetch_versions() -> Result<Vec<MinecraftVersion>, String> {
-    let client = get_client()?;
+    let client = client();
     let response = client.get(VERSION_MANIFEST_URL).send()
         .map_err(|e| format!("failed to fetch version manifest: {}", e))?;
 
@@ -165,7 +75,7 @@ pub fn find_version_by_id(id: &str) -> Result<Option<MinecraftVersion>, String> 
 }
 
 pub fn fetch_fabric_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
-    let client = get_client()?;
+    let client = client();
     let url = format!(
         "https://meta.fabricmc.net/v2/versions/loader/{}",
         game_version
@@ -190,7 +100,7 @@ pub fn fetch_fabric_versions_for_game(game_version: &str) -> Result<Vec<LoaderVe
 }
 
 pub fn fetch_quilt_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
-    let client = get_client()?;
+    let client = client();
     let url = format!(
         "https://meta.quiltmc.org/v3/versions/loader/{}",
         game_version
@@ -215,7 +125,7 @@ pub fn fetch_quilt_versions_for_game(game_version: &str) -> Result<Vec<LoaderVer
 }
 
 pub fn fetch_forge_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
-    let client = get_client()?;
+    let client = client();
     let url = "https://meta.prismlauncher.org/v1/net.minecraftforge/index.json";
     let response = client.get(url).send()
         .map_err(|e| format!("failed to fetch forge index: {}", e))?;
@@ -265,7 +175,7 @@ pub fn fetch_forge_versions_for_game(game_version: &str) -> Result<Vec<LoaderVer
 }
 
 pub fn fetch_neoforge_versions_for_game(game_version: &str) -> Result<Vec<LoaderVersion>, String> {
-    let client = get_client()?;
+    let client = client();
     let is_legacy_1_20_1 = game_version == "1.20.1";
     let url = if is_legacy_1_20_1 {
         "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/forge"
@@ -358,7 +268,7 @@ pub fn download_minecraft_data_internal(
     progress_callback: &(dyn Fn(String, f32) + Send + Sync),
     item_callback: &(dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType) + Send + Sync),
 ) -> Result<(), String> {
-    let client = reqwest::blocking::Client::new();
+    let client = client();
 
     // 1. Download Version Meta
     item_callback("Version Metadata".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
@@ -493,7 +403,7 @@ pub fn download_minecraft_data_internal(
                 }
 
                 let current = downloaded_count.fetch_add(1, Ordering::SeqCst) + 1;
-                if current % 25 == 0 || current == total_assets {
+                if current.is_multiple_of(25) || current == total_assets {
                     let progress = 0.2 + (current as f32 / total_assets as f32) * 0.4;
                     progress_callback(format!("Downloading asset: {}", name), progress);
                 }
@@ -898,63 +808,18 @@ fn download_lib_internal(
     }
 
     for artifact in artifacts_to_download {
-        let mut allowed = true;
-        if let Some(rules) = &lib.rules {
-            allowed = false;
-            for rule in rules {
-                if rule.action == "allow" {
-                    if let Some(os) = &rule.os {
-                        if os.name == "linux" {
-                            allowed = true;
-                        }
-                    } else {
-                        allowed = true;
-                    }
-                } else if rule.action == "disallow" {
-                    if let Some(os) = &rule.os {
-                        if os.name == "linux" {
-                            allowed = false;
-                        }
-                    }
-                }
-            }
-        }
-
-        if allowed {
+        if is_rule_allowed(&lib.rules) {
             let rel_path = if let Some(p) = &artifact.path {
                 p.clone()
+            } else if let Some(coord) = MavenCoordinate::parse(&lib.name) {
+                coord.to_relative_path().to_string_lossy().to_string()
             } else {
-                let parts: Vec<&str> = lib.name.split(':').collect();
-                if parts.len() < 3 {
-                    continue;
-                }
-                let group = parts[0].replace('.', "/");
-                let artifact_id = parts[1];
-                let version = parts[2];
-
-                let mut filename = format!("{}-{}", artifact_id, version);
-
-                if parts.len() > 3 {
-                    let extra = parts[3];
-                    let classifier = extra.split('@').next().unwrap_or(extra);
-                    filename.push_str(&format!("-{}", classifier));
-                }
-
-                let extension = if let Some(pos) = lib.name.find('@') {
-                    &lib.name[pos + 1..]
-                } else {
-                    "jar"
-                };
-
-                format!(
-                    "{}/{}/{}/{}.{}",
-                    group, artifact_id, version, filename, extension
-                )
+                continue;
             };
 
             let mut download_url = artifact.url.clone();
             if !download_url.ends_with(".jar") && !download_url.ends_with(".zip") {
-                if !download_url.ends_with("/") {
+                if !download_url.ends_with('/') {
                     download_url.push('/');
                 }
                 download_url.push_str(&rel_path);
@@ -1030,6 +895,7 @@ fn ensure_intermediary(
             size: None,
         }),
         rules: None,
+        ..Default::default()
     };
     let _ = download_lib_internal(
         &intermediary_lib,

@@ -1,3 +1,5 @@
+#![allow(clippy::needless_borrow)]
+
 pub mod backend;
 pub mod config;
 pub mod frontend;
