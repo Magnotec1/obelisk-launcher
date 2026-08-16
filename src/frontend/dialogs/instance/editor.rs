@@ -680,8 +680,11 @@ impl SimpleComponent for InstanceEditorDialog {
                                             },
                                             #[watch]
                                             set_description: Some(match model.editor_type {
+                                                EditorType::Mods => "Drag and drop .jar mod files here or click + to add.",
+                                                EditorType::ResourcePacks => "Drag and drop .zip resource packs here or click + to add.",
+                                                EditorType::ShaderPacks => "Drag and drop .zip shader packs here or click + to add.",
+                                                EditorType::Worlds => "Drag and drop world folders or archives here or click + to add.",
                                                 EditorType::Components => "This instance has no extra components.",
-                                                _ => "Drag &amp; drop files here or click + to add.",
                                             }),
                                         },
                                     },
@@ -1007,21 +1010,33 @@ impl SimpleComponent for InstanceEditorDialog {
 
         // --- Drag & Drop ---
         let drop_target =
-            gtk::DropTarget::new(gtk::gio::File::static_type(), gdk::DragAction::COPY);
+            gtk::DropTarget::new(gtk::glib::types::Type::INVALID, gdk::DragAction::COPY);
+        drop_target.set_types(&[gtk::gio::File::static_type(), gdk::FileList::static_type()]);
         {
             let sender_clone = sender.input_sender().clone();
             drop_target.connect_drop(move |_, value, _x, _y| {
-                if let Ok(file) = value.get::<gtk::gio::File>() {
-                    if let Some(path) = file.path() {
-                        sender_clone
-                            .send(EditorInput::FilesDropped(vec![path]))
-                            .ok();
-                        return true;
+                let mut paths = Vec::new();
+                if let Ok(file_list) = value.get::<gdk::FileList>() {
+                    for file in file_list.files() {
+                        if let Some(path) = file.path() {
+                            paths.push(path);
+                        }
                     }
+                } else if let Ok(file) = value.get::<gtk::gio::File>() {
+                    if let Some(path) = file.path() {
+                        paths.push(path);
+                    }
+                }
+                if !paths.is_empty() {
+                    sender_clone
+                        .send(EditorInput::FilesDropped(paths))
+                        .ok();
+                    return true;
                 }
                 false
             });
         }
+        root.add_controller(drop_target);
         // --- Selection change (Keyboard only) ---
         {
             let sender_clone = sender.input_sender().clone();
@@ -1052,8 +1067,6 @@ impl SimpleComponent for InstanceEditorDialog {
                 }
             });
         }
-
-        root.add_controller(drop_target);
 
         model.toast_overlay = widgets.toast_overlay.clone();
         model.split_view = widgets.split_view.clone();
@@ -1535,7 +1548,6 @@ impl SimpleComponent for InstanceEditorDialog {
                     sender
                         .output(EditorOutput::AddItems(self.editor_type.clone(), paths))
                         .ok();
-                    self.visible = false;
                 }
             }
             EditorInput::RenameWorldRequest(index) => {

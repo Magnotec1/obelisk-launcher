@@ -588,17 +588,27 @@ impl AppModel {
                         }
                     }
                     EditorOutput::AddItems(editor_type, paths) => {
-                        let subfolder = match editor_type {
-                            EditorType::Mods => "mods",
-                            EditorType::ResourcePacks => "resourcepacks",
-                            EditorType::ShaderPacks => "shaderpacks",
-                            EditorType::Worlds => "saves",
-                            _ => "mods",
+                        let (subfolder, label) = match editor_type {
+                            EditorType::Mods => ("mods", "mod(s)"),
+                            EditorType::ResourcePacks => ("resourcepacks", "resource pack(s)"),
+                            EditorType::ShaderPacks => ("shaderpacks", "shader pack(s)"),
+                            EditorType::Worlds => ("saves", "world(s)"),
+                            _ => ("mods", "item(s)"),
                         };
+                        let mut count = 0;
                         for path in paths {
-                            let _ = crate::backend::instance::manager::add_instance_item(
+                            if crate::backend::instance::manager::add_instance_item(
                                 &inst.path, subfolder, &path,
+                            ).is_ok() {
+                                count += 1;
+                            }
+                        }
+                        if count > 0 {
+                            crate::frontend::toast::show_toast(
+                                &self.window,
+                                format!("Added {} {} to '{}'", count, label, inst.name),
                             );
+                            sender.input(AppMsg::RefreshSelectedInstance);
                         }
                     }
                     EditorOutput::OpenFolder(editor_type) => match editor_type {

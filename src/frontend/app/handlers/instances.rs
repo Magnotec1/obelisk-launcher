@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::thread;
 
 impl AppModel {
-    pub(crate) fn handle_select_instance(&mut self, index: usize) {
+    pub(crate) fn handle_select_instance(&mut self, sender: &ComponentSender<AppModel>, index: usize) {
         self.selected_instance = Some(index);
         self.active_sidebar_page = SidebarPage::InstanceDetails;
         self.sidebar
@@ -48,6 +48,9 @@ impl AppModel {
             status,
             has_any_logs: self.get_active_instance_has_logs(),
         });
+
+        // Trigger full scan in background for selected instance so all mod metadata, versions, icons, and worlds load immediately
+        self.handle_refresh_selected_instance(sender);
     }
 
     pub(crate) fn handle_add_instance(&mut self, group: Option<String>) {

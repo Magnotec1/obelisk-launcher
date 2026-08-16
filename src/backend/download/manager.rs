@@ -266,6 +266,26 @@ impl DownloadTask for ModrinthModpackDownloadTask {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct LocalModpackInstallTask {
+    pub name: String,
+    pub archive_path: PathBuf,
+    pub instances_path: PathBuf,
+}
+
+impl DownloadTask for LocalModpackInstallTask {
+    fn run(&self, ctx: &TaskContext) -> Result<(), String> {
+        crate::backend::instance::modpack::install_mrpack_from_file(
+            &self.archive_path,
+            &self.name,
+            &self.instances_path,
+            ctx.progress,
+            ctx.item,
+        )
+        .map(|_| ())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Centralized Thread-Safe Network Queue
 // ---------------------------------------------------------------------------

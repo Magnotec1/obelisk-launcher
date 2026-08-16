@@ -551,16 +551,16 @@ pub fn download_minecraft_data_internal(
                 if let Some(libs) = &fabric_meta.libraries {
                     let lib_count = AtomicUsize::new(0);
                     let total_libs = libs.len();
-                    for lib in libs {
-                        let _ = download_lib_internal(
+                    let _ = libs.par_iter().try_for_each(|lib| {
+                        download_lib_internal(
                             lib,
                             data_path,
                             &client,
                             &lib_count,
                             total_libs,
                             progress_callback,
-                        );
-                    }
+                        )
+                    });
                 }
 
                 let _ = ensure_intermediary(
@@ -603,16 +603,17 @@ pub fn download_minecraft_data_internal(
 
                 if let Some(libs) = &quilt_meta.libraries {
                     let lib_count = AtomicUsize::new(0);
-                    for lib in libs {
-                        let _ = download_lib_internal(
+                    let total_libs = libs.len();
+                    let _ = libs.par_iter().try_for_each(|lib| {
+                        download_lib_internal(
                             lib,
                             data_path,
                             &client,
                             &lib_count,
-                            libs.len(),
+                            total_libs,
                             progress_callback,
-                        );
-                    }
+                        )
+                    });
                 }
 
                 let _ = ensure_intermediary(
@@ -674,16 +675,16 @@ pub fn download_minecraft_data_internal(
                 if !all_libs.is_empty() {
                     let total_libs = all_libs.len();
                     let lib_count = AtomicUsize::new(0);
-                    for lib in &all_libs {
-                        let _ = download_lib_internal(
+                    let _ = all_libs.par_iter().try_for_each(|lib| {
+                        download_lib_internal(
                             lib,
                             data_path,
                             &client,
                             &lib_count,
                             total_libs,
                             progress_callback,
-                        );
-                    }
+                        )
+                    });
                 }
                 item_callback(format!("Forge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
             }
@@ -741,16 +742,16 @@ pub fn download_minecraft_data_internal(
                 if !all_libs.is_empty() {
                     let total_libs = all_libs.len();
                     let lib_count = AtomicUsize::new(0);
-                    for lib in &all_libs {
-                        let _ = download_lib_internal(
+                    let _ = all_libs.par_iter().try_for_each(|lib| {
+                        download_lib_internal(
                             lib,
                             data_path,
                             &client,
                             &lib_count,
                             total_libs,
                             progress_callback,
-                        );
-                    }
+                        )
+                    });
                 }
                 item_callback(format!("NeoForge Loader {}", loader_ver), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
             }

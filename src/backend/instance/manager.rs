@@ -652,18 +652,26 @@ pub fn scan_single_instance(instance_path: &Path, full_scan: bool) -> Option<Ins
         let m_dir = &minecraft_dir;
         let mods_dir = m_dir.join("mods");
         if let Ok(mod_entries) = fs::read_dir(mods_dir) {
-            for mod_entry in mod_entries.flatten() {
-                let m_path = mod_entry.path();
-                if m_path.is_file() {
-                    let fname = m_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or_default();
+            let mod_files: Vec<_> = mod_entries
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .filter_map(|e| {
+                    let p = e.path();
+                    let fname = p.file_name()?.to_str()?;
                     if fname.ends_with(".jar") || fname.ends_with(".jar.disabled") {
-                        mods.push(get_mod_info(&m_path, full_scan));
+                        Some(p)
+                    } else {
+                        None
                     }
-                }
-            }
+                })
+                .collect();
+
+            use rayon::prelude::*;
+            mods = if full_scan {
+                mod_files.into_par_iter().map(|p| get_mod_info(&p, true)).collect()
+            } else {
+                mod_files.into_iter().map(|p| get_mod_info(&p, false)).collect()
+            };
         }
         mods.sort_by(|a, b| a.name.cmp(&b.name));
 

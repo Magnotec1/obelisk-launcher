@@ -994,7 +994,7 @@ impl SimpleComponent for AppModel {
             AppMsg::SelectedInstanceUpdated(updated_inst) => {
                 self.handle_selected_instance_updated(updated_inst)
             }
-            AppMsg::SelectInstance(index) => self.handle_select_instance(index),
+            AppMsg::SelectInstance(index) => self.handle_select_instance(&sender, index),
             AppMsg::AddInstance(target_group) => self.handle_add_instance(target_group),
             AppMsg::HeaderAddInstance => self.handle_header_add_instance(&sender),
             AppMsg::InstanceCreated(version, path, group) => {

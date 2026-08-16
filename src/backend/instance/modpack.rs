@@ -62,7 +62,7 @@ pub trait ModpackSource: Send + Sync {
     fn search(&self, query: &str, limit: u32, offset: u32, game_version: Option<&str>, loader: Option<ModLoader>) -> Result<Vec<ModpackInfo>, String>;
     fn get_details(&self, id_or_slug: &str) -> Result<ModpackDetails, String>;
     fn get_versions(&self, id_or_slug: &str) -> Result<Vec<ModpackVersionInfo>, String>;
-    fn install(&self, name: &str, version: &ModpackVersionInfo, instances_path: &Path, progress_callback: Box<dyn Fn(String, f32) + Send + 'static>) -> Result<PathBuf, String>;
+    fn install(&self, name: &str, version: &ModpackVersionInfo, instances_path: &Path, progress_callback: Box<dyn Fn(String, f32) + Send + Sync + 'static>) -> Result<PathBuf, String>;
 }
 
 pub struct ModrinthSource;
@@ -216,7 +216,7 @@ impl ModpackSource for ModrinthSource {
         }).collect())
     }
 
-    fn install(&self, name: &str, version: &ModpackVersionInfo, instances_path: &Path, progress_callback: Box<dyn Fn(String, f32) + Send + 'static>) -> Result<PathBuf, String> {
+    fn install(&self, name: &str, version: &ModpackVersionInfo, instances_path: &Path, progress_callback: Box<dyn Fn(String, f32) + Send + Sync + 'static>) -> Result<PathBuf, String> {
         install_mrpack(name, &version.download_url, instances_path, &*progress_callback, &|_, _, _| {})
     }
 }
@@ -304,7 +304,11 @@ struct MrpackIndex {
 struct MrpackFile {
     path: String,
     downloads: Vec<String>,
+    #[serde(default)]
+    hashes: Option<HashMap<String, String>>,
     env: Option<MrpackEnv>,
+    #[serde(rename = "fileSize")]
+    file_size: Option<u64>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -316,8 +320,8 @@ pub(crate) fn install_mrpack(
     name: &str,
     download_url: &str,
     instances_path: &Path,
-    progress_callback: &dyn Fn(String, f32),
-    item_callback: &dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType),
+    progress_callback: &(dyn Fn(String, f32) + Send + Sync),
+    item_callback: &(dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType) + Send + Sync),
 ) -> Result<PathBuf, String> {
     item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
     progress_callback("Connecting to download modpack archive...".to_string(), 0.05);
@@ -367,10 +371,49 @@ pub(crate) fn install_mrpack(
     }
 
     item_callback("Modpack Archive".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
+
+    let result = install_mrpack_archive_internal(
+        &temp_file_path,
+        name,
+        instances_path,
+        progress_callback,
+        item_callback,
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    result
+}
+
+/// Directly install an mrpack archive from a local file path (e.g. via drag-and-drop or local file selector).
+pub fn install_mrpack_from_file(
+    archive_path: &Path,
+    name: &str,
+    instances_path: &Path,
+    progress_callback: &(dyn Fn(String, f32) + Send + Sync),
+    item_callback: &(dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType) + Send + Sync),
+) -> Result<PathBuf, String> {
+    install_mrpack_archive_internal(
+        archive_path,
+        name,
+        instances_path,
+        progress_callback,
+        item_callback,
+    )
+}
+
+fn install_mrpack_archive_internal(
+    archive_path: &Path,
+    name: &str,
+    instances_path: &Path,
+    progress_callback: &(dyn Fn(String, f32) + Send + Sync),
+    item_callback: &(dyn Fn(String, crate::backend::download::manager::TaskItemStatus, crate::backend::download::manager::DownloadedItemType) + Send + Sync),
+) -> Result<PathBuf, String> {
+    use rayon::prelude::*;
+
     progress_callback("Parsing modpack archive...".to_string(), 0.15);
 
     // Open ZIP and parse modrinth.index.json
-    let file = fs::File::open(&temp_file_path).map_err(|e| e.to_string())?;
+    let file = fs::File::open(archive_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
     let index: MrpackIndex = {
@@ -379,11 +422,9 @@ pub(crate) fn install_mrpack(
     };
 
     if index.format_version != 1 {
-        let _ = fs::remove_dir_all(&temp_dir);
         return Err(format!("Unsupported modpack format version: {}", index.format_version));
     }
     if index.game != "minecraft" {
-        let _ = fs::remove_dir_all(&temp_dir);
         return Err(format!("Unsupported game: {}", index.game));
     }
 
@@ -465,11 +506,7 @@ pub(crate) fn install_mrpack(
 
     item_callback("Extract Overrides".to_string(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::MinecraftComponent);
 
-    // Clean up temporary archive
-    drop(archive);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    // Download external files
+    // Download external files in parallel
     let client_files: Vec<_> = index.files.into_iter().filter(|f| {
         if let Some(env) = &f.env {
             env.client != "unsupported"
@@ -479,28 +516,44 @@ pub(crate) fn install_mrpack(
     }).collect();
 
     let total_files = client_files.len();
-    let mut download_errors = Vec::new();
+    let completed_count = std::sync::atomic::AtomicUsize::new(0);
+    let download_errors = std::sync::Mutex::new(Vec::new());
 
-    for (idx, file_entry) in client_files.into_iter().enumerate() {
+    client_files.into_par_iter().for_each(|file_entry| {
         let file_url = match file_entry.downloads.first() {
             Some(url) => url,
             None => {
                 let err_msg = format!("No download URL for file {}", file_entry.path);
-                download_errors.push(err_msg);
-                continue;
+                download_errors.lock().unwrap().push(err_msg);
+                return;
             }
         };
-        
-        let progress = 0.3 + (idx as f32 / total_files as f32) * 0.7;
-        let filename = Path::new(&file_entry.path).file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
-        progress_callback(format!("Downloading mod {}/{} ({})", idx + 1, total_files, filename), progress);
 
+        let filename = Path::new(&file_entry.path).file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
         let dest_path = minecraft_dir.join(&file_entry.path);
 
         // Skip already-downloaded files for retry efficiency
-        if dest_path.exists() && dest_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        let mut needs_download = !dest_path.exists();
+        if !needs_download {
+            if let Ok(meta) = dest_path.metadata() {
+                if let Some(expected_size) = file_entry.file_size {
+                    if meta.len() != expected_size {
+                        needs_download = true;
+                    }
+                } else if meta.len() == 0 {
+                    needs_download = true;
+                }
+            } else {
+                needs_download = true;
+            }
+        }
+
+        if !needs_download {
             item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::Mod);
-            continue;
+            let current = completed_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let progress = 0.3 + (current as f32 / total_files as f32) * 0.7;
+            progress_callback(format!("Downloaded mod {}/{} ({})", current, total_files, filename), progress);
+            return;
         }
 
         item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Pending, crate::backend::download::manager::DownloadedItemType::Mod);
@@ -509,8 +562,8 @@ pub(crate) fn install_mrpack(
             if let Err(e) = fs::create_dir_all(parent) {
                 let err_msg = format!("Failed to create parent directory: {}", e);
                 item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
-                download_errors.push(format!("{}: {}", filename, err_msg));
-                continue;
+                download_errors.lock().unwrap().push(format!("{}: {}", filename, err_msg));
+                return;
             }
         }
 
@@ -522,36 +575,102 @@ pub(crate) fn install_mrpack(
                             if let Err(e) = std::io::copy(&mut res, &mut out) {
                                 let err_msg = format!("Failed to write file: {}", e);
                                 item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
-                                download_errors.push(format!("{}: {}", filename, err_msg));
+                                download_errors.lock().unwrap().push(format!("{}: {}", filename, err_msg));
+                                return;
                             } else {
+                                // Validate SHA1 if provided
+                                if let Some(ref hashes) = file_entry.hashes {
+                                    if let Some(expected_sha1) = hashes.get("sha1") {
+                                        if let Ok(bytes) = fs::read(&dest_path) {
+                                            use sha1::Digest;
+                                            let mut hasher = sha1::Sha1::new();
+                                            hasher.update(&bytes);
+                                            let actual_sha1 = hex::encode(hasher.finalize());
+                                            if !actual_sha1.eq_ignore_ascii_case(expected_sha1) {
+                                                let err_msg = format!("SHA1 hash mismatch for {}", filename);
+                                                item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
+                                                download_errors.lock().unwrap().push(err_msg);
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
                                 item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Success, crate::backend::download::manager::DownloadedItemType::Mod);
                             }
                         }
                         Err(e) => {
                             let err_msg = format!("Failed to create file: {}", e);
                             item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
-                            download_errors.push(format!("{}: {}", filename, err_msg));
+                            download_errors.lock().unwrap().push(format!("{}: {}", filename, err_msg));
+                            return;
                         }
                     }
                 } else {
                     let err_msg = format!("HTTP Status {}", res.status());
                     item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
-                    download_errors.push(format!("{}: {}", filename, err_msg));
+                    download_errors.lock().unwrap().push(format!("{}: {}", filename, err_msg));
+                    return;
                 }
             }
             Err(e) => {
                 let err_msg = e.to_string();
                 item_callback(filename.clone(), crate::backend::download::manager::TaskItemStatus::Failed(err_msg.clone()), crate::backend::download::manager::DownloadedItemType::Mod);
-                download_errors.push(format!("{}: {}", filename, err_msg));
+                download_errors.lock().unwrap().push(format!("{}: {}", filename, err_msg));
+                return;
             }
         }
-    }
 
-    if !download_errors.is_empty() {
-        return Err(format!("Failed to download some modpack files: {}", download_errors.join("; ")));
+        let current = completed_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let progress = 0.3 + (current as f32 / total_files as f32) * 0.7;
+        progress_callback(format!("Downloaded mod {}/{} ({})", current, total_files, filename), progress);
+    });
+
+    let errors = download_errors.into_inner().unwrap();
+    if !errors.is_empty() {
+        return Err(format!("Failed to download some modpack files: {}", errors.join("; ")));
     }
 
     progress_callback("Installation complete!".to_string(), 1.0);
 
     Ok(instance_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mrpack_index_deserialization() {
+        let json = r#"{
+            "formatVersion": 1,
+            "game": "minecraft",
+            "versionId": "1.0.0",
+            "name": "Test Pack",
+            "dependencies": {
+                "minecraft": "1.20.4",
+                "fabric-loader": "0.15.7"
+            },
+            "files": [
+                {
+                    "path": "mods/test-mod.jar",
+                    "hashes": {
+                        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+                    },
+                    "downloads": [
+                        "https://example.com/test-mod.jar"
+                    ],
+                    "fileSize": 1024
+                }
+            ]
+        }"#;
+
+        let index: MrpackIndex = serde_json::from_str(json).expect("Failed to parse MrpackIndex");
+        assert_eq!(index.format_version, 1);
+        assert_eq!(index.game, "minecraft");
+        assert_eq!(index.dependencies.get("minecraft").unwrap(), "1.20.4");
+        assert_eq!(index.dependencies.get("fabric-loader").unwrap(), "0.15.7");
+        assert_eq!(index.files.len(), 1);
+        assert_eq!(index.files[0].path, "mods/test-mod.jar");
+        assert_eq!(index.files[0].file_size, Some(1024));
+    }
 }
