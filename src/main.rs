@@ -9,6 +9,13 @@ use crate::frontend::app::AppModel;
 use relm4::prelude::*;
 
 fn main() {
+    let raw_args: Vec<String> = std::env::args().collect();
+    let is_demo = raw_args.iter().any(|arg| arg == "--demo" || arg == "-d");
+    let gtk_args: Vec<String> = raw_args
+        .into_iter()
+        .filter(|arg| arg != "--demo" && arg != "-d")
+        .collect();
+
     // ── Register custom icon GResource bundle ────────────────────────────
     // The binary blob is compiled into the executable at build time so no
     // external file access is needed at runtime.
@@ -18,7 +25,14 @@ fn main() {
     .expect("Failed to load GResource bundle");
     gtk::gio::resources_register(&resources);
 
-    let config = Config::load();
+    let mut config = if is_demo {
+        println!("[Obelisk] Running in DEMO / SCREENSHOT mode with mock data.");
+        crate::backend::core::demo::create_demo_config()
+    } else {
+        Config::load()
+    };
+    config.is_demo = is_demo;
+
     let app = RelmApp::new("com.magnotec.obelisk");
 
     // ── Register icon search path so GTK finds our bundled SVGs ──────────
@@ -467,5 +481,5 @@ fn main() {
     ",
     );
 
-    app.run::<AppModel>(config);
+    app.with_args(gtk_args).run::<AppModel>(config);
 }

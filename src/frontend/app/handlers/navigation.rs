@@ -90,6 +90,17 @@ impl AppModel {
     }
 
     pub(crate) fn handle_refresh_playtime(&self, sender: &ComponentSender<AppModel>) {
+        if self.config.is_demo {
+            let manager = self.playtime_manager.clone();
+            let mut instance_data = Vec::new();
+            for inst in &self.instances {
+                let playtime = manager.get_instance_playtime(&inst.id);
+                instance_data.push((inst.id.clone(), inst.name.clone(), playtime, true));
+            }
+            sender.input(AppMsg::PlaytimeDataReady(manager, instance_data));
+            return;
+        }
+
         let sender_clone = sender.input_sender().clone();
         let instances = self.instances.clone();
 

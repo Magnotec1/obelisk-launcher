@@ -857,8 +857,14 @@ impl SimpleComponent for AppModel {
                     ImportOutput::ImportZip(path) => AppMsg::ImportZip(path),
                 });
 
-        let instances: Vec<Instance> = Vec::new();
-        let groups = if let Some(path) = &config.instances_path {
+        let instances: Vec<Instance> = if config.is_demo {
+            crate::backend::core::demo::create_demo_instances()
+        } else {
+            Vec::new()
+        };
+        let groups = if config.is_demo {
+            crate::backend::core::demo::create_demo_groups()
+        } else if let Some(path) = &config.instances_path {
             let g = InstanceGroups::load(path);
             let path_clone = path.clone();
             let sender_clone = sender.input_sender().clone();
@@ -901,7 +907,7 @@ impl SimpleComponent for AppModel {
 
         let mut model = AppModel {
             config: config.clone(),
-            instances,
+            instances: instances.clone(),
             groups,
             selected_instance: None,
             add_instance_dialog,
@@ -954,7 +960,7 @@ impl SimpleComponent for AppModel {
 
             window: root.clone(),
             split_view: adw::OverlaySplitView::new(),
-            loading_instances: true,
+            loading_instances: !config.is_demo,
             auth_in_progress: false,
 
             instance_statuses: HashMap::new(),
@@ -973,7 +979,11 @@ impl SimpleComponent for AppModel {
                 PreferredViewType::List => LayoutMode::List,
             },
             current_folder: None,
-            playtime_manager: PlaytimeManager::load(),
+            playtime_manager: if config.is_demo {
+                crate::backend::core::demo::create_demo_playtime()
+            } else {
+                PlaytimeManager::load()
+            },
             sharing_loading: false,
             import_loading: false,
             verifying_loading: false,
@@ -1080,7 +1090,7 @@ impl SimpleComponent for AppModel {
                 refresh_all_accounts, verify_account_status, AccountStatus,
             };
             use crate::backend::auth::microsoft::AccountType;
-            let needs_refresh = config.accounts.iter().any(|a| {
+            let needs_refresh = !config.is_demo && config.accounts.iter().any(|a| {
                 a.account_type == AccountType::Microsoft
                     && !a.refresh_token.is_empty()
                     && matches!(
@@ -1096,6 +1106,13 @@ impl SimpleComponent for AppModel {
                     let _ = sender_clone.send(AppMsg::RefreshAccountsAll(config_clone));
                 });
             }
+        }
+
+        if config.is_demo {
+            let sender_clone = sender.clone();
+            let demo_instances = instances.clone();
+            sender_clone.input(AppMsg::InstancesUpdated(demo_instances));
+            sender_clone.input(AppMsg::RefreshPlaytime);
         }
 
         ComponentParts { model, widgets }

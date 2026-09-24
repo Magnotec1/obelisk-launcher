@@ -44,6 +44,8 @@ pub struct Config {
     pub preferred_view_type: PreferredViewType,
     #[serde(default)]
     pub sort_by: SortBy,
+    #[serde(skip)]
+    pub is_demo: bool,
 }
 
 impl Default for Config {
@@ -64,6 +66,7 @@ impl Default for Config {
             total_playtime: 0,
             preferred_view_type: PreferredViewType::default(),
             sort_by: SortBy::default(),
+            is_demo: false,
         }
     }
 }
@@ -112,6 +115,9 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.is_demo {
+            return Ok(());
+        }
         let path = Self::config_path();
         let content = serde_json::to_string_pretty(self)?;
         crate::backend::core::fs_utils::atomic_write(&path, content)?;

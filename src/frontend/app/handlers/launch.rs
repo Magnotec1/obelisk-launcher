@@ -149,6 +149,11 @@ impl AppModel {
         idx: usize,
     ) {
         if let Some(inst) = self.instances.get(idx) {
+            if self.config.is_demo {
+                crate::frontend::toast::show_toast(&self.window, "Demo Mode: Game launching is disabled for mock instances.");
+                return;
+            }
+
             let instance = inst.clone();
             let status = self.get_instance_status(&instance.path);
             if status != InstanceStatus::NotRunning {

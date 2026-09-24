@@ -3,7 +3,7 @@ use crate::backend::instance::manager::{
     delete_instance, rename_instance, scan_instances, scan_single_instance, Instance,
 };
 use crate::backend::runtime::versions::MinecraftVersion;
-use crate::frontend::app::msg::AppMsg;
+use crate::frontend::app::msg::{AppMsg, InstanceStatus};
 use crate::frontend::app::state::AppModel;
 use crate::frontend::dialogs::instance::add::AddInstanceInput;
 use crate::frontend::dialogs::instance::editor::{EditorInput, EditorItem, EditorType};
@@ -437,9 +437,53 @@ impl AppModel {
         }
     }
 
-    pub(crate) fn handle_apply_default_icon(&self, sender: &ComponentSender<AppModel>, idx: usize) {
+    pub(crate) fn handle_apply_default_icon(&mut self, sender: &ComponentSender<AppModel>, idx: usize) {
         if let Some(default_path) = self.config.default_instance_icon.clone() {
-            sender.input(AppMsg::ApplyIconPath(idx, default_path));
+            if default_path.exists() {
+                self.handle_apply_icon_path(sender, idx, default_path);
+                return;
+            }
+        }
+
+        if let Some(inst) = self.instances.get(idx) {
+            let inst_path = inst.path.clone();
+            let mc_dir = inst.minecraft_dir.clone();
+            let target1 = inst_path.join("icon.png");
+            let target2 = mc_dir.join("icon.png");
+
+            let _ = std::fs::remove_file(&target1);
+            let _ = std::fs::remove_file(&target2);
+
+            self.overview_grid
+                .emit(OverviewInput::ClearTextureCache(target1));
+            self.overview_grid
+                .emit(OverviewInput::ClearTextureCache(target2));
+
+            if self.config.is_demo {
+                if let Some(selected_idx) = self.selected_instance {
+                    if selected_idx == idx {
+                        if let Some(current) = self.instances.get(idx) {
+                            self.instance_summary.emit(SummaryInput::Update(
+                                Box::new(Some(current.clone())),
+                                InstanceStatus::NotRunning,
+                            ));
+                        }
+                    }
+                }
+                self.rebuild_overview();
+                return;
+            }
+
+            let _ = crate::backend::instance::manager::update_cfg_key(
+                &inst_path, "iconKey", "default",
+            );
+            let sender_clone = sender.input_sender().clone();
+            crate::backend::core::tasks::spawn_io(move || {
+                if let Some(updated) = scan_single_instance(&inst_path, true) {
+                    let _ = sender_clone.send(AppMsg::SelectedInstanceUpdated(updated));
+                    let _ = sender_clone.send(AppMsg::RefreshInstances);
+                }
+            });
         }
     }
 
@@ -450,6 +494,20 @@ impl AppModel {
             if std::fs::copy(&source_path, &target).is_ok() {
                 self.overview_grid
                     .emit(OverviewInput::ClearTextureCache(target));
+                if self.config.is_demo {
+                    if let Some(selected_idx) = self.selected_instance {
+                        if selected_idx == idx {
+                            if let Some(current) = self.instances.get(idx) {
+                                self.instance_summary.emit(SummaryInput::Update(
+                                    Box::new(Some(current.clone())),
+                                    InstanceStatus::NotRunning,
+                                ));
+                            }
+                        }
+                    }
+                    self.rebuild_overview();
+                    return;
+                }
                 let _ = crate::backend::instance::manager::update_cfg_key(
                     &inst_path, "iconKey", "custom",
                 );

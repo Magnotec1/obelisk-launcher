@@ -1,3 +1,4 @@
+pub mod demo;
 pub mod fs_utils;
 pub mod http;
 pub mod image_cache;
