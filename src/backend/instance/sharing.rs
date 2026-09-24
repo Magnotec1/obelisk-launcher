@@ -333,3 +333,49 @@ pub fn import_instance_from_zip(
     progress(1.0, "Instance imported successfully.".to_string());
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shared_instance_code_roundtrip() {
+        let instance = SharedInstance {
+            name: "Test Modpack".to_string(),
+            minecraft_version: "1.20.1".to_string(),
+            mod_loader: ModLoader::Fabric,
+            loader_version: Some("0.15.11".to_string()),
+            mods: vec![
+                SharedMod {
+                    project_id: "sodium".to_string(),
+                    version_id: "v1.0".to_string(),
+                    name: "Sodium".to_string(),
+                },
+                SharedMod {
+                    project_id: "iris".to_string(),
+                    version_id: "v2.0".to_string(),
+                    name: "Iris".to_string(),
+                },
+            ],
+        };
+
+        let code = instance.to_code().expect("Failed to encode instance");
+        assert!(!code.is_empty());
+
+        let decoded = SharedInstance::from_code(&code).expect("Failed to decode instance");
+        assert_eq!(decoded.name, "Test Modpack");
+        assert_eq!(decoded.minecraft_version, "1.20.1");
+        assert_eq!(decoded.mod_loader, ModLoader::Fabric);
+        assert_eq!(decoded.loader_version, Some("0.15.11".to_string()));
+        assert_eq!(decoded.mods.len(), 2);
+        assert_eq!(decoded.mods[0].name, "Sodium");
+        assert_eq!(decoded.mods[1].name, "Iris");
+    }
+
+    #[test]
+    fn test_shared_instance_from_invalid_code() {
+        assert!(SharedInstance::from_code("").is_err());
+        assert!(SharedInstance::from_code("not-valid-base64!@#$%^").is_err());
+        assert!(SharedInstance::from_code("aGVsbG8gd29ybGQ=").is_err()); // valid base64, but not valid zlib
+    }
+}

@@ -277,4 +277,27 @@ mod tests {
         assert_eq!(get_required_java_version("24w14a"), 21);
         assert_eq!(get_required_java_version("26w02a"), 25);
     }
+
+    #[test]
+    fn test_get_java_major_version_legacy() {
+        assert_eq!(get_java_major_version("1.8.0_421"), Some(8));
+        assert_eq!(get_java_major_version("1.8.0_45"), Some(8));
+        assert_eq!(get_java_major_version("1.7.0_80"), Some(7));
+        assert_eq!(get_java_major_version("1.6.0"), Some(6));
+    }
+
+    #[test]
+    fn test_get_java_major_version_modern() {
+        assert_eq!(get_java_major_version("11.0.22"), Some(11));
+        assert_eq!(get_java_major_version("17.0.12"), Some(17));
+        assert_eq!(get_java_major_version("21.0.3+9-Ubuntu-1"), Some(21));
+        assert_eq!(get_java_major_version("25-ea"), Some(25));
+    }
+
+    #[test]
+    fn test_get_java_major_version_edge_cases() {
+        assert_eq!(get_java_major_version(""), None);
+        assert_eq!(get_java_major_version("invalid"), None);
+        assert_eq!(get_java_major_version("1"), None);
+    }
 }

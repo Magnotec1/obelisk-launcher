@@ -21,6 +21,7 @@ pub enum SortBy {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct Config {
     pub instances_path: Option<PathBuf>,
     #[serde(alias = "fallback_data_path")]
@@ -115,5 +116,53 @@ impl Config {
         let content = serde_json::to_string_pretty(self)?;
         crate::backend::core::fs_utils::atomic_write(&path, content)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_defaults() {
+        let config = Config::default();
+        assert_eq!(config.max_memory, 4096);
+        assert_eq!(config.min_memory, 512);
+        assert_eq!(config.preferred_view_type, PreferredViewType::Grid);
+        assert_eq!(config.sort_by, SortBy::Alphabetical);
+        assert!(config.accounts.is_empty());
+        assert_eq!(config.total_playtime, 0);
+    }
+
+    #[test]
+    fn test_config_deserialize_partial() {
+        let json = r#"{"minecraft_data_path": "/tmp/mc"}"#;
+        let config: Config = serde_json::from_str(json).expect("Failed to deserialize partial config");
+        assert_eq!(config.minecraft_data_path, PathBuf::from("/tmp/mc"));
+        assert_eq!(config.max_memory, 4096);
+        assert_eq!(config.preferred_view_type, PreferredViewType::Grid);
+        assert_eq!(config.sort_by, SortBy::Alphabetical);
+    }
+
+    #[test]
+    fn test_config_legacy_alias() {
+        let json = r#"{"minecraft_data_path": "/tmp/mc", "fallback_data_path": "/tmp/shared"}"#;
+        let config: Config = serde_json::from_str(json).expect("Failed to deserialize legacy alias");
+        assert_eq!(config.shared_data_path, Some(PathBuf::from("/tmp/shared")));
+    }
+
+    #[test]
+    fn test_config_roundtrip() {
+        let mut config = Config::default();
+        config.preferred_view_type = PreferredViewType::List;
+        config.sort_by = SortBy::LastPlayed;
+        config.max_memory = 8192;
+
+        let json = serde_json::to_string(&config).expect("Serialize failed");
+        let parsed: Config = serde_json::from_str(&json).expect("Deserialize failed");
+
+        assert_eq!(parsed.preferred_view_type, PreferredViewType::List);
+        assert_eq!(parsed.sort_by, SortBy::LastPlayed);
+        assert_eq!(parsed.max_memory, 8192);
     }
 }

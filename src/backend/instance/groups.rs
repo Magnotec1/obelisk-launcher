@@ -136,3 +136,53 @@ impl InstanceGroups {
         names
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deserialize_format_version_number() {
+        let json = r#"{"formatVersion": 1, "groups": {}}"#;
+        let parsed: InstanceGroups = serde_json::from_str(json).expect("Parse failed");
+        assert_eq!(parsed.format_version, 1);
+    }
+
+    #[test]
+    fn test_deserialize_format_version_string() {
+        let json = r#"{"formatVersion": "1", "groups": {}}"#;
+        let parsed: InstanceGroups = serde_json::from_str(json).expect("Parse failed");
+        assert_eq!(parsed.format_version, 1);
+    }
+
+    #[test]
+    fn test_group_lifecycle_mutations() {
+        let mut groups = InstanceGroups::default();
+
+        // Create
+        groups.create_group("Vanilla");
+        groups.create_group("Modded");
+        assert_eq!(groups.sorted_group_names(), vec!["Modded", "Vanilla"]);
+
+        // Add instance
+        groups.set_instance_group("1.20.4", "Vanilla");
+        assert_eq!(groups.get_instance_group("1.20.4"), Some("Vanilla"));
+
+        // Move to another group (setting to Modded should remove from Vanilla)
+        groups.set_instance_group("1.20.4", "Modded");
+        assert_eq!(groups.get_instance_group("1.20.4"), Some("Modded"));
+        assert_eq!(groups.groups.get("Vanilla").unwrap().instances.len(), 0);
+
+        // Rename group
+        groups.rename_group("Modded", "Custom Modpacks");
+        assert_eq!(groups.get_instance_group("1.20.4"), Some("Custom Modpacks"));
+
+        // Remove from group
+        groups.remove_instance_from_groups("1.20.4");
+        assert_eq!(groups.get_instance_group("1.20.4"), None);
+
+        // Delete group
+        groups.delete_group("Custom Modpacks");
+        assert_eq!(groups.sorted_group_names(), vec!["Vanilla"]);
+    }
+}

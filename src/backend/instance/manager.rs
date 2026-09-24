@@ -1643,3 +1643,54 @@ pub fn move_world(
     fs::rename(source_path, target_path)
         .map_err(|e| format!("Failed to move world directory: {}", e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mod_loader_properties() {
+        assert_eq!(ModLoader::None.uid(), None);
+        assert_eq!(ModLoader::None.cached_name(), None);
+
+        assert_eq!(ModLoader::Fabric.uid(), Some("net.fabricmc.fabric-loader"));
+        assert_eq!(ModLoader::Fabric.cached_name(), Some("Fabric Loader"));
+
+        assert_eq!(ModLoader::Forge.uid(), Some("net.minecraftforge"));
+        assert_eq!(ModLoader::Forge.cached_name(), Some("Forge"));
+
+        assert_eq!(ModLoader::Quilt.uid(), Some("org.quiltmc.quilt-loader"));
+        assert_eq!(ModLoader::Quilt.cached_name(), Some("Quilt Loader"));
+
+        assert_eq!(ModLoader::NeoForge.uid(), Some("net.neoforged"));
+        assert_eq!(ModLoader::NeoForge.cached_name(), Some("NeoForge"));
+    }
+
+    #[test]
+    fn test_mmc_pack_json_deserialization() {
+        let json = r#"{
+            "formatVersion": 1,
+            "components": [
+                {
+                    "important": true,
+                    "uid": "net.minecraft",
+                    "version": "1.20.4"
+                },
+                {
+                    "cachedName": "Fabric Loader",
+                    "cachedVersion": "0.15.7",
+                    "uid": "net.fabricmc.fabric-loader",
+                    "version": "0.15.7"
+                }
+            ]
+        }"#;
+
+        let pack: MmcPack = serde_json::from_str(json).expect("Failed to deserialize mmc-pack.json");
+        assert_eq!(pack.format_version, 1);
+        assert_eq!(pack.components.len(), 2);
+        assert_eq!(pack.components[0].uid, "net.minecraft");
+        assert_eq!(pack.components[0].version, "1.20.4");
+        assert_eq!(pack.components[0].important, Some(true));
+        assert_eq!(pack.components[1].cached_name.as_deref(), Some("Fabric Loader"));
+    }
+}

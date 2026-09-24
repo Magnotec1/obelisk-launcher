@@ -188,3 +188,37 @@ where
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_key_deterministic() {
+        let key1 = cache_key("https://example.com/icon.png");
+        let key2 = cache_key("https://example.com/icon.png");
+        let key3 = cache_key("https://example.com/other.png");
+
+        assert_eq!(key1, key2);
+        assert_ne!(key1, key3);
+        assert_eq!(key1.len(), 64); // SHA-256 hex string
+    }
+
+    #[test]
+    fn test_calculate_average_color_opaque() {
+        let mut img = image::RgbaImage::new(2, 2);
+        for pixel in img.pixels_mut() {
+            *pixel = image::Rgba([100, 150, 200, 255]);
+        }
+        assert_eq!(calculate_average_color(&img), Some((100, 150, 200)));
+    }
+
+    #[test]
+    fn test_calculate_average_color_transparent() {
+        let mut img = image::RgbaImage::new(2, 2);
+        for pixel in img.pixels_mut() {
+            *pixel = image::Rgba([255, 255, 255, 0]); // fully transparent
+        }
+        assert_eq!(calculate_average_color(&img), None);
+    }
+}
