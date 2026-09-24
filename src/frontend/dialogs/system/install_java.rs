@@ -409,7 +409,7 @@ impl SimpleComponent for InstallJavaDialog {
                 if self.all_packages.is_empty() {
                     self.loading_versions = true;
                     let sender_clone = sender.input_sender().clone();
-                    std::thread::spawn(move || {
+                    crate::backend::core::tasks::spawn_io(move || {
                         let result = fetch_java_packages();
                         let _ = sender_clone.send(InstallJavaInput::VersionsLoaded(result));
                     });
@@ -439,7 +439,7 @@ impl SimpleComponent for InstallJavaDialog {
             InstallJavaInput::Refresh => {
                 self.loading_versions = true;
                 let sender_clone = sender.input_sender().clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let result = fetch_java_packages();
                     let _ = sender_clone.send(InstallJavaInput::VersionsLoaded(result));
                 });
@@ -492,7 +492,7 @@ impl SimpleComponent for InstallJavaDialog {
 
                     let sender_clone = sender.input_sender().clone();
                     let sender_output = sender.output_sender().clone();
-                    std::thread::spawn(move || {
+                    crate::backend::core::tasks::spawn_io(move || {
                         while let Ok(msg) = rx.recv() {
                             let _ = sender_output.send(InstallJavaOutput::Progress(msg.clone()));
                             match msg {

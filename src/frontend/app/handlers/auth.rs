@@ -15,7 +15,6 @@ use crate::frontend::views::settings::SettingsInput;
 use crate::frontend::views::sidebar::{SidebarInput, SidebarPage};
 use adw::prelude::*;
 use relm4::prelude::*;
-use std::thread;
 
 impl AppModel {
     pub(crate) fn handle_account_action(&mut self) {
@@ -29,7 +28,7 @@ impl AppModel {
             self.auth_in_progress = true;
             let sender_clone = sender.input_sender().clone();
 
-            thread::spawn(move || {
+            crate::backend::core::tasks::spawn_io(move || {
                 match auth::start_device_code_flow(&client_id) {
                     Ok(dc) => {
                         let _ = sender_clone.send(AppMsg::LoginDeviceCode(
@@ -37,9 +36,7 @@ impl AppModel {
                             dc.verification_uri.clone(),
                         ));
 
-                        let _ = std::process::Command::new("xdg-open")
-                            .arg(&dc.verification_uri)
-                            .spawn();
+                        crate::frontend::utils::file::open_url(&dc.verification_uri);
 
                         match auth::poll_for_ms_token(
                             &client_id,
@@ -302,7 +299,7 @@ impl AppModel {
             let sender_clone = sender.input_sender().clone();
             self.overview_grid.emit(OverviewInput::SetLoading(true));
             self.overview_grid.emit(OverviewInput::GoBack);
-            thread::spawn(move || {
+            crate::backend::core::tasks::spawn_io(move || {
                 let insts = scan_instances(&path_clone);
                 let _ = sender_clone.send(AppMsg::InstancesUpdated(insts));
             });

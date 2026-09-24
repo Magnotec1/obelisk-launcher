@@ -77,6 +77,15 @@ impl Config {
         }
     }
 
+    pub fn get_cache_dir() -> PathBuf {
+        if let Some(base) = directories::BaseDirs::new() {
+            base.cache_dir().join("obelisk-launcher")
+        } else {
+            let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+            home.join(".cache/obelisk-launcher")
+        }
+    }
+
     fn config_path() -> PathBuf {
         if let Some(base) = directories::BaseDirs::new() {
             base.config_dir().join("obelisk-launcher").join("config.json")

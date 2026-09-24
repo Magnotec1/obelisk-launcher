@@ -15,7 +15,6 @@ use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 
 // ---------------------------------------------------------------------------
 // Generic Browser Models
@@ -1374,7 +1373,7 @@ impl Component for UnifiedBrowser {
                 let s_clone = sender.input_sender().clone();
                 let source = self.source.clone();
 
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let result = source.search(&query, 20, 0, &gv, l, &et);
                     s_clone.send(BrowserInput::SearchDone(result)).ok();
                 });
@@ -1430,7 +1429,7 @@ impl Component for UnifiedBrowser {
                 let next_offset = self.offset + 20;
                 let source = self.source.clone();
 
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let result = source.search(&query, 20, next_offset, &gv, l, &et);
                     s_clone.send(BrowserInput::LoadMoreDone(result)).ok();
                 });
@@ -1570,7 +1569,7 @@ impl Component for UnifiedBrowser {
                 let id_clone = id.clone();
                 let source = self.source.clone();
 
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let result = (|| {
                         let project = source.get_project(&id_clone)?;
                         let versions = source.get_project_versions(&id_clone, &gv, l)?;
@@ -1630,27 +1629,10 @@ impl Component for UnifiedBrowser {
                             } else {
                                 let url_clone = url.clone();
                                 let s_input = sender.input_sender().clone();
-                                thread::spawn(move || {
-                                    use crate::backend::instance::modpack::HTTP_CLIENT;
-                                    if let Ok(res) = HTTP_CLIENT.get(&url_clone).send() {
-                                        if res.status().is_success() {
-                                            if let Ok(bytes) = res.bytes() {
-                                                if let Ok(img) = image::load_from_memory(&bytes) {
-                                                    let width = img.width() as i32;
-                                                    let height = img.height() as i32;
-                                                    let gbytes = glib::Bytes::from(&img.to_rgba8().into_raw());
-                                                    let texture = gdk::MemoryTexture::new(
-                                                        width,
-                                                        height,
-                                                        gdk::MemoryFormat::R8g8b8a8,
-                                                        &gbytes,
-                                                        (width * 4) as usize,
-                                                    );
-                                                    let texture: gdk::Texture = texture.upcast();
-                                                    s_input.send(BrowserInput::ScreenshotLoaded(url_clone, texture)).ok();
-                                                }
-                                            }
-                                        }
+                                crate::backend::core::image_cache::fetch_image_async(url_clone.clone(), move |res| {
+                                    if let Some(img) = res {
+                                        let texture = img.to_texture();
+                                        s_input.send(BrowserInput::ScreenshotLoaded(url_clone, texture)).ok();
                                     }
                                 });
                             }
@@ -1747,7 +1729,7 @@ impl Component for UnifiedBrowser {
                 let id_clone = id.clone();
                 let source = self.source.clone();
 
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let result = source.get_project_versions(&id_clone, &gv, l);
                     s_clone
                         .send(BrowserInput::VersionsFetched(id_clone, result))
@@ -2060,40 +2042,11 @@ impl QueueDialog {
 }
 
 fn fetch_icon(url: String, sender: relm4::Sender<BrowserInput>) {
-    thread::spawn(move || {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("obelisk-launcher-rs (github.com/magnotec/obelisk-launcher)")
-            .build()
-            .unwrap();
-        match client.get(&url).send() {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    eprintln!("[browser-icon] HTTP {} for {}", response.status(), url);
-                    return;
-                }
-                match response.bytes() {
-                    Ok(bytes) => {
-                        let gbytes = gtk::glib::Bytes::from(&bytes);
-                        match gdk::Texture::from_bytes(&gbytes) {
-                            Ok(tex) => {
-                                sender.send(BrowserInput::IconLoaded(url, tex)).ok();
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "[browser-icon] Texture decode error for {}: {}",
-                                    url, e
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[browser-icon] Body read error for {}: {}", url, e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("[browser-icon] Request error for {}: {}", url, e);
-            }
+    let url_clone = url.clone();
+    crate::backend::core::image_cache::fetch_image_async(url, move |res| {
+        if let Some(img) = res {
+            let tex = img.to_texture();
+            let _ = sender.send(BrowserInput::IconLoaded(url_clone, tex));
         }
     });
 }

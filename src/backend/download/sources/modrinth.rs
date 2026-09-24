@@ -6,15 +6,9 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 const MODRINTH_API_BASE: &str = "https://api.modrinth.com/v2";
-const USER_AGENT: &str = "obelisk-launcher-rs (github.com/magnotec/obelisk-launcher)";
 const CACHE_TTL: Duration = Duration::from_secs(300);
 
-static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .expect("Failed to build HTTP client")
-});
+use crate::backend::core::http::HTTP_CLIENT;
 
 struct CacheEntry<T> {
     data: T,

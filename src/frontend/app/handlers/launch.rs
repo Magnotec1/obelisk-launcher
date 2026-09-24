@@ -112,7 +112,7 @@ impl AppModel {
             self.instance_summary
                 .emit(SummaryInput::SetVerifyingLoading(true));
             let sender_clone = sender.input_sender().clone();
-            thread::spawn(move || {
+            crate::backend::core::tasks::spawn_io(move || {
                 if let Some(mc_version) = &instance.minecraft_version {
                     match find_version_by_id(mc_version) {
                         Ok(Some(v)) => {
@@ -193,7 +193,7 @@ impl AppModel {
                 sender.input(AppMsg::SelectInstance(idx));
                 self.launch_after_download = true;
                 let sender_clone = sender.input_sender().clone();
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     if let Some(mc_version) = &instance.minecraft_version {
                         match find_version_by_id(mc_version) {
                             Ok(Some(v)) => {
@@ -482,7 +482,7 @@ impl AppModel {
 
             let sender_clone = sender.input_sender().clone();
             let path_clone = path.clone();
-            thread::spawn(move || {
+            crate::backend::core::tasks::spawn_io(move || {
                 if let Some(inst) = scan_single_instance(&path_clone, true) {
                     let _ = sender_clone.send(AppMsg::SelectedInstanceUpdated(inst));
                 }

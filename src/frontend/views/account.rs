@@ -449,7 +449,7 @@ impl Component for AccountView {
                 let mut config_clone = self.config.clone();
                 let sender_out = sender.output_sender().clone();
                 let sender_in = sender.input_sender().clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let _ = refresh_all_accounts(&mut config_clone);
                     let _ = sender_out.send(AppMsg::RefreshAccountsAll(config_clone));
                     let _ = sender_in.send(AccountInput::ResetRefreshing);
@@ -462,7 +462,7 @@ impl Component for AccountView {
                 let mut config_clone = self.config.clone();
                 let sender_out = sender.output_sender().clone();
                 let sender_in = sender.input_sender().clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let client_id = config_clone
                         .microsoft_client_id
                         .clone()
@@ -542,7 +542,7 @@ impl Component for AccountView {
             gtk::gdk::Texture::from_filename(&cache_path).ok()
         } else {
             let uuid = active_account.uuid.clone();
-            std::thread::spawn(move || {
+            crate::backend::core::tasks::spawn_io(move || {
                 let _ = crate::backend::auth::avatar::fetch_and_cache_avatar(&uuid);
             });
             None

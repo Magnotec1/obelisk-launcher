@@ -32,14 +32,11 @@ use crate::frontend::views::instance::{
 use crate::frontend::views::library::{LayoutMode, OverviewGrid};
 use crate::frontend::views::playtime::PlaytimeView;
 use crate::frontend::views::settings::{SettingsDialog, SettingsOutput};
-use crate::frontend::views::sidebar::{
-    InstanceSidebar, InstanceSidebarOutput, SidebarList, SidebarPage,
-};
+use crate::frontend::views::sidebar::{SidebarList, SidebarPage};
 use adw::prelude::*;
 use gtk::glib;
 use relm4::prelude::*;
 use std::collections::HashMap;
-use std::thread;
 
 #[relm4::component(pub)]
 impl SimpleComponent for AppModel {
@@ -92,26 +89,15 @@ impl SimpleComponent for AppModel {
 
                         // ── Sidebar ──────────────────────────────────────
                         #[wrap(Some)]
-                        set_sidebar = &adw::NavigationPage {
-                            set_title: "Obelisk",
-                            #[wrap(Some)]
-                            set_child = &adw::ToolbarView {
-                                add_top_bar = &adw::HeaderBar {
-                                    #[wrap(Some)]
-                                    set_title_widget = &adw::WindowTitle {
-                                        set_title: "Obelisk",
-                                    },
-                                    set_show_end_title_buttons: false,
+                        set_sidebar = &adw::ToolbarView {
+                            add_top_bar = &adw::HeaderBar {
+                                #[wrap(Some)]
+                                set_title_widget = &adw::WindowTitle {
+                                    set_title: "Obelisk",
+                                },
+                                set_show_end_title_buttons: false,
 
-                                     #[name = "close_sidebar_btn"]
-                                     pack_start = &gtk::Button {
-                                         set_icon_name: "go-previous-symbolic",
-                                         set_tooltip_text: Some("Close sidebar"),
-                                         set_has_frame: false,
-                                         connect_clicked => AppMsg::ToggleSidebar,
-                                     },
-
-                                    pack_start = model.download_status_bar.widget(),
+                                pack_start = model.download_status_bar.widget(),
 
                                     pack_end = &gtk::MenuButton {
                                         set_icon_name: "open-menu-symbolic",
@@ -225,106 +211,88 @@ impl SimpleComponent for AppModel {
                                 },
 
                                 #[wrap(Some)]
-                                set_content = &gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_vexpand: true,
-
-                                    gtk::Stack {
-                                        set_vexpand: true,
-
-                                        add_named[Some("main")] = model.sidebar.widget(),
-                                        add_named[Some("instance")] = model.instance_sidebar.widget(),
-                                        #[watch]
-                                        set_visible_child_name: match model.active_sidebar_page {
-                                            SidebarPage::InstanceDetails => "instance",
-                                            _ => "main",
-                                        },
-                                    },
-                                },
+                                set_content = model.sidebar.widget(),
                             },
-                        },
 
                         // ── Content Area ─────────────────────────────────
                         #[wrap(Some)]
-                        set_content = &adw::NavigationPage {
-                            set_title: "Content",
-                            #[wrap(Some)]
-                            set_child = &adw::ToolbarView {
-                                add_top_bar = &adw::HeaderBar {
+                        set_content = &adw::ToolbarView {
+                            add_top_bar = &adw::HeaderBar {
                                     #[wrap(Some)]
-                                    set_title_widget = &gtk::Box {
-                                        set_orientation: gtk::Orientation::Horizontal,
-                                        set_spacing: 6,
-                                        set_halign: gtk::Align::Center,
+                                    set_title_widget = &gtk::Stack {
+                                        add_named[Some("normal")] = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Horizontal,
+                                            set_spacing: 6,
+                                            set_halign: gtk::Align::Center,
 
-                                        #[name = "header_title"]
-                                        adw::WindowTitle {
-                                            #[watch]
-                                            set_title: match model.active_sidebar_page {
-                                                SidebarPage::Library => if let Some(ref folder) = model.current_folder {
-                                                    folder
-                                                } else {
-                                                    "Library"
-                                                },
-                                                SidebarPage::Discover => if model.discover_details_open {
-                                                    &model.discover_details_title
-                                                } else {
-                                                    "Discover Modpacks"
-                                                },
-                                                SidebarPage::Accounts => "Account Management",
-                                                SidebarPage::Playtime => "Playtime Analytics",
-                                                SidebarPage::Assets => match &model.active_asset_subpage {
-                                                    Some(sub) => sub.as_str(),
-                                                    None => "Asset Manager",
-                                                },
-                                                SidebarPage::InstanceDetails => {
-                                                    if let Some(idx) = model.selected_instance {
-                                                        model.instances.get(idx).map(|i| i.name.as_str()).unwrap_or("Instance")
+                                            #[name = "header_title"]
+                                            adw::WindowTitle {
+                                                #[watch]
+                                                set_title: match model.active_sidebar_page {
+                                                    SidebarPage::Library => if let Some(ref folder) = model.current_folder {
+                                                        folder
                                                     } else {
-                                                        "Instance"
-                                                    }
+                                                        "Library"
+                                                    },
+                                                    SidebarPage::Discover => if model.discover_details_open {
+                                                        &model.discover_details_title
+                                                    } else {
+                                                        "Discover Modpacks"
+                                                    },
+                                                    SidebarPage::Accounts => "Account Management",
+                                                    SidebarPage::Playtime => "Playtime Analytics",
+                                                    SidebarPage::Assets => match &model.active_asset_subpage {
+                                                        Some(sub) => sub.as_str(),
+                                                        None => "Asset Manager",
+                                                    },
+                                                    SidebarPage::InstanceDetails => {
+                                                        if let Some(idx) = model.selected_instance {
+                                                            model.instances.get(idx).map(|i| i.name.as_str()).unwrap_or("Instance")
+                                                        } else {
+                                                            "Instance"
+                                                        }
+                                                    },
                                                 },
-                                            },
-                                            #[watch]
-                                            set_subtitle: match model.active_sidebar_page {
-                                                SidebarPage::Library => if model.current_folder.is_some() {
-                                                    "Group Folder"
-                                                } else {
-                                                    ""
+                                                #[watch]
+                                                set_subtitle: match model.active_sidebar_page {
+                                                    SidebarPage::Library => if model.current_folder.is_some() {
+                                                        "Group Folder"
+                                                    } else {
+                                                        ""
+                                                    },
+                                                    SidebarPage::Discover => if model.discover_details_open {
+                                                        "Modrinth Modpack"
+                                                    } else {
+                                                        "Modrinth & External Catalog"
+                                                    },
+                                                    SidebarPage::Accounts => "Microsoft & Local Profiles",
+                                                    SidebarPage::Playtime => "Gameplay Statistics & History",
+                                                    SidebarPage::Assets => match &model.active_asset_subpage {
+                                                        Some(_) => "Asset Manager",
+                                                        None => "Shared & Local Content Storage",
+                                                    },
+                                                    SidebarPage::InstanceDetails => "",
                                                 },
-                                                SidebarPage::Discover => if model.discover_details_open {
-                                                    "Modrinth Modpack"
-                                                } else {
-                                                    "Modrinth & External Catalog"
-                                                },
-                                                SidebarPage::Accounts => "Microsoft & Local Profiles",
-                                                SidebarPage::Playtime => "Gameplay Statistics & History",
-                                                SidebarPage::Assets => match &model.active_asset_subpage {
-                                                    Some(_) => "Asset Manager",
-                                                    None => "Shared & Local Content Storage",
-                                                },
-                                                SidebarPage::InstanceDetails => "",
                                             },
                                         },
 
-                                        gtk::Button {
-                                            #[watch]
-                                            set_visible: model.active_sidebar_page == SidebarPage::InstanceDetails && model.has_selected_mismatch(),
-                                            set_icon_name: "dialog-warning-symbolic",
-                                            set_has_frame: false,
-                                            set_tooltip_text: Some("Mismatch detected between installed mods and the instance version/loader."),
-                                            add_css_class: "warning",
+                                        #[name = "instance_switcher"]
+                                        add_named[Some("switcher")] = &adw::ViewSwitcher {
+                                            set_policy: adw::ViewSwitcherPolicy::Wide,
+                                        },
+
+                                        #[watch]
+                                        set_visible_child_name: if model.active_sidebar_page == SidebarPage::InstanceDetails && !model.is_narrow && !model.split_view.is_collapsed() {
+                                            "switcher"
+                                        } else {
+                                            "normal"
                                         },
                                     },
 
                                     #[name = "open_sidebar_btn"]
-                                    pack_start = &gtk::Button {
-                                        #[watch]
-                                        set_visible: model.split_view.is_collapsed() && !model.split_view.shows_sidebar(),
+                                    pack_start = &gtk::ToggleButton {
                                         set_icon_name: "sidebar-show-symbolic",
-                                        set_tooltip_text: Some("Open sidebar"),
-                                        set_has_frame: false,
-                                        connect_clicked => AppMsg::ToggleSidebar,
+                                        set_tooltip_text: Some("Toggle sidebar"),
                                     },
 
                                     pack_start = &gtk::Button {
@@ -333,6 +301,15 @@ impl SimpleComponent for AppModel {
                                         set_icon_name: "go-previous-symbolic",
                                         set_tooltip_text: Some("Go back"),
                                         connect_clicked => AppMsg::GoBack,
+                                    },
+
+                                    pack_start = &gtk::Button {
+                                        #[watch]
+                                        set_visible: model.active_sidebar_page == SidebarPage::InstanceDetails && model.has_selected_mismatch(),
+                                        set_icon_name: "dialog-warning-symbolic",
+                                        set_has_frame: false,
+                                        set_tooltip_text: Some("Mismatch detected between installed mods and the instance version/loader."),
+                                        add_css_class: "warning",
                                     },
 
                                     // ── Right-aligned actions (ordered right-to-left from window controls) ──
@@ -388,100 +365,10 @@ impl SimpleComponent for AppModel {
                                         connect_toggled => AppMsg::ToggleDiscoverSearch,
                                     },
 
-                                    // 3. Sort instances popover menu (Library)
-                                    pack_end = &gtk::MenuButton {
+                                    // 3. Layout & Sort SplitButton (Library)
+                                    pack_end = &adw::SplitButton {
                                         #[watch]
-                                        set_visible: model.active_sidebar_page == SidebarPage::Library,
-                                        set_icon_name: "view-sort-ascending-symbolic",
-                                        set_tooltip_text: Some("Sort instances"),
-                                        #[wrap(Some)]
-                                        set_popover: sort_popover = &gtk::Popover {
-                                            set_autohide: true,
-                                            #[wrap(Some)]
-                                            set_child = &gtk::Box {
-                                                set_orientation: gtk::Orientation::Vertical,
-                                                set_css_classes: &["menu-box"],
-                                                set_width_request: 180,
-
-                                                gtk::Button {
-                                                    set_has_frame: false,
-                                                    set_css_classes: &["flat", "menu-btn"],
-                                                    #[wrap(Some)]
-                                                    set_child = &gtk::Box {
-                                                        set_orientation: gtk::Orientation::Horizontal,
-                                                        set_spacing: 8,
-                                                        gtk::Image {
-                                                            set_icon_name: Some("emblem-ok-symbolic"),
-                                                            #[watch]
-                                                            set_visible: model.config.sort_by == crate::config::SortBy::Alphabetical,
-                                                        },
-                                                        gtk::Label {
-                                                            set_label: "Sort by Name",
-                                                            set_hexpand: true,
-                                                            set_halign: gtk::Align::Start,
-                                                        },
-                                                    },
-                                                    connect_clicked[sender, sort_popover] => move |_| {
-                                                        sort_popover.popdown();
-                                                        sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::Alphabetical));
-                                                    },
-                                                },
-
-                                                gtk::Button {
-                                                    set_has_frame: false,
-                                                    set_css_classes: &["flat", "menu-btn"],
-                                                    #[wrap(Some)]
-                                                    set_child = &gtk::Box {
-                                                        set_orientation: gtk::Orientation::Horizontal,
-                                                        set_spacing: 8,
-                                                        gtk::Image {
-                                                            set_icon_name: Some("emblem-ok-symbolic"),
-                                                            #[watch]
-                                                            set_visible: model.config.sort_by == crate::config::SortBy::LastPlayed,
-                                                        },
-                                                        gtk::Label {
-                                                            set_label: "Sort by Last Played",
-                                                            set_hexpand: true,
-                                                            set_halign: gtk::Align::Start,
-                                                        },
-                                                    },
-                                                    connect_clicked[sender, sort_popover] => move |_| {
-                                                        sort_popover.popdown();
-                                                        sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::LastPlayed));
-                                                    },
-                                                },
-
-                                                gtk::Button {
-                                                    set_has_frame: false,
-                                                    set_css_classes: &["flat", "menu-btn"],
-                                                    #[wrap(Some)]
-                                                    set_child = &gtk::Box {
-                                                        set_orientation: gtk::Orientation::Horizontal,
-                                                        set_spacing: 8,
-                                                        gtk::Image {
-                                                            set_icon_name: Some("emblem-ok-symbolic"),
-                                                            #[watch]
-                                                            set_visible: model.config.sort_by == crate::config::SortBy::Playtime,
-                                                        },
-                                                        gtk::Label {
-                                                            set_label: "Sort by Playtime",
-                                                            set_hexpand: true,
-                                                            set_halign: gtk::Align::Start,
-                                                        },
-                                                    },
-                                                    connect_clicked[sender, sort_popover] => move |_| {
-                                                        sort_popover.popdown();
-                                                        sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::Playtime));
-                                                    },
-                                                },
-                                            },
-                                        },
-                                    },
-
-                                    // 4. Layout toggle (Library Grid/List)
-                                    pack_end = &gtk::Button {
-                                        #[watch]
-                                        set_visible: model.active_sidebar_page == SidebarPage::Library,
+                                        set_visible: model.active_sidebar_page == SidebarPage::Library && !model.is_narrow,
                                         #[watch]
                                         set_icon_name: if model.overview_layout == LayoutMode::Grid {
                                             "view-list-symbolic"
@@ -494,16 +381,136 @@ impl SimpleComponent for AppModel {
                                         } else {
                                             "Switch to grid view"
                                         }),
+                                        set_dropdown_tooltip: "Sort instances",
                                         connect_clicked => AppMsg::ToggleOverviewLayout,
+
+                                        #[wrap(Some)]
+                                        set_popover: top_sort_popover = &gtk::Popover {
+                                            set_autohide: true,
+                                            set_position: gtk::PositionType::Bottom,
+                                            #[wrap(Some)]
+                                            set_child = &gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_css_classes: &["menu-box"],
+                                                set_width_request: 180,
+
+                                                gtk::Label {
+                                                    set_label: "Sort",
+                                                    set_halign: gtk::Align::Start,
+                                                    set_css_classes: &["menu-subtitle"],
+                                                    set_margin_start: 34,
+                                                },
+
+                                                #[name = "top_sort_name_rb"]
+                                                gtk::CheckButton {
+                                                    set_label: Some("Name"),
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[watch]
+                                                    set_active: model.config.sort_by == crate::config::SortBy::Alphabetical,
+                                                    connect_toggled[sender] => move |btn| {
+                                                        if btn.is_active() {
+                                                            sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::Alphabetical));
+                                                        }
+                                                    },
+                                                },
+
+                                                #[name = "top_sort_played_rb"]
+                                                gtk::CheckButton {
+                                                    set_label: Some("Last Played"),
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    set_group: Some(&top_sort_name_rb),
+                                                    #[watch]
+                                                    set_active: model.config.sort_by == crate::config::SortBy::LastPlayed,
+                                                    connect_toggled[sender] => move |btn| {
+                                                        if btn.is_active() {
+                                                            sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::LastPlayed));
+                                                        }
+                                                    },
+                                                },
+
+                                                #[name = "top_sort_playtime_rb"]
+                                                gtk::CheckButton {
+                                                    set_label: Some("Playtime"),
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    set_group: Some(&top_sort_name_rb),
+                                                    #[watch]
+                                                    set_active: model.config.sort_by == crate::config::SortBy::Playtime,
+                                                    connect_toggled[sender] => move |btn| {
+                                                        if btn.is_active() {
+                                                            sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::Playtime));
+                                                        }
+                                                    },
+                                                },
+                                            },
+                                        },
                                     },
 
-                                    // 5. Add new instance (Library)
-                                    pack_end = &gtk::Button {
+                                    // 5. Add new instance or group (Library)
+                                    pack_end = &gtk::MenuButton {
                                         #[watch]
-                                        set_visible: model.active_sidebar_page == SidebarPage::Library,
+                                        set_visible: model.active_sidebar_page == SidebarPage::Library && !model.is_narrow,
                                         set_icon_name: "list-add-symbolic",
-                                        set_tooltip_text: Some("Add new instance"),
-                                        connect_clicked => AppMsg::HeaderAddInstance,
+                                        set_tooltip_text: Some("Add instance or group"),
+                                        #[wrap(Some)]
+                                        set_popover: top_add_popover = &gtk::Popover {
+                                            set_autohide: true,
+                                            set_position: gtk::PositionType::Bottom,
+                                            #[wrap(Some)]
+                                            set_child = &gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_css_classes: &["menu-box"],
+                                                set_width_request: 180,
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Image {
+                                                            set_icon_name: Some("list-add-symbolic"),
+                                                        },
+                                                        gtk::Label {
+                                                            set_label: "Add Instance...",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
+                                                    },
+                                                    connect_clicked[sender, top_add_popover] => move |_| {
+                                                        top_add_popover.popdown();
+                                                        sender.input(AppMsg::HeaderAddInstance);
+                                                    },
+                                                },
+
+                                                gtk::Separator {
+                                                    set_margin_top: 4,
+                                                    set_margin_bottom: 4,
+                                                },
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Image {
+                                                            set_icon_name: Some("folder-new-symbolic"),
+                                                        },
+                                                        gtk::Label {
+                                                            set_label: "New Group...",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
+                                                    },
+                                                    connect_clicked[sender, top_add_popover] => move |_| {
+                                                        top_add_popover.popdown();
+                                                        sender.input(AppMsg::CreateGroupRequest);
+                                                    },
+                                                },
+                                            },
+                                        },
                                     },
                                 },
 
@@ -596,13 +603,166 @@ impl SimpleComponent for AppModel {
                                         },
                                     }
                                 },
-                            }
-                        },
+
+                                add_bottom_bar = &gtk::ActionBar {
+                                    #[watch]
+                                    set_revealed: model.active_sidebar_page == SidebarPage::Library && model.is_narrow,
+
+                                    #[name = "bottom_add_btn"]
+                                    pack_end = &gtk::MenuButton {
+                                        set_icon_name: "list-add-symbolic",
+                                        set_tooltip_text: Some("Add instance or group"),
+                                        #[wrap(Some)]
+                                        set_popover: bottom_add_popover = &gtk::Popover {
+                                            set_autohide: true,
+                                            set_position: gtk::PositionType::Top,
+                                            #[wrap(Some)]
+                                            set_child = &gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_css_classes: &["menu-box"],
+                                                set_width_request: 180,
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Image {
+                                                            set_icon_name: Some("list-add-symbolic"),
+                                                        },
+                                                        gtk::Label {
+                                                            set_label: "Add Instance...",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
+                                                    },
+                                                    connect_clicked[sender, bottom_add_popover] => move |_| {
+                                                        bottom_add_popover.popdown();
+                                                        sender.input(AppMsg::HeaderAddInstance);
+                                                    },
+                                                },
+
+                                                gtk::Separator {
+                                                    set_margin_top: 4,
+                                                    set_margin_bottom: 4,
+                                                },
+
+                                                gtk::Button {
+                                                    set_has_frame: false,
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[wrap(Some)]
+                                                    set_child = &gtk::Box {
+                                                        set_orientation: gtk::Orientation::Horizontal,
+                                                        set_spacing: 12,
+                                                        gtk::Image {
+                                                            set_icon_name: Some("folder-new-symbolic"),
+                                                        },
+                                                        gtk::Label {
+                                                            set_label: "New Group...",
+                                                            set_hexpand: true,
+                                                            set_halign: gtk::Align::Start,
+                                                        },
+                                                    },
+                                                    connect_clicked[sender, bottom_add_popover] => move |_| {
+                                                        bottom_add_popover.popdown();
+                                                        sender.input(AppMsg::CreateGroupRequest);
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+
+                                    pack_end = &adw::SplitButton {
+                                        #[watch]
+                                        set_icon_name: if model.overview_layout == LayoutMode::Grid {
+                                            "view-list-symbolic"
+                                        } else {
+                                            "view-grid-symbolic"
+                                        },
+                                        #[watch]
+                                        set_tooltip_text: Some(if model.overview_layout == LayoutMode::Grid {
+                                            "Switch to list view"
+                                        } else {
+                                            "Switch to grid view"
+                                        }),
+                                        set_dropdown_tooltip: "Sort instances",
+                                        connect_clicked => AppMsg::ToggleOverviewLayout,
+
+                                        #[wrap(Some)]
+                                        set_popover: bottom_sort_popover = &gtk::Popover {
+                                            set_autohide: true,
+                                            set_position: gtk::PositionType::Top,
+                                            #[wrap(Some)]
+                                            set_child = &gtk::Box {
+                                                set_orientation: gtk::Orientation::Vertical,
+                                                set_css_classes: &["menu-box"],
+                                                set_width_request: 180,
+
+                                                gtk::Label {
+                                                    set_label: "Sort",
+                                                    set_halign: gtk::Align::Start,
+                                                    set_css_classes: &["menu-subtitle"],
+                                                    set_margin_start: 34,
+                                                },
+
+                                                #[name = "bottom_sort_name_rb"]
+                                                gtk::CheckButton {
+                                                    set_label: Some("Name"),
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    #[watch]
+                                                    set_active: model.config.sort_by == crate::config::SortBy::Alphabetical,
+                                                    connect_toggled[sender] => move |btn| {
+                                                        if btn.is_active() {
+                                                            sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::Alphabetical));
+                                                        }
+                                                    },
+                                                },
+
+                                                #[name = "bottom_sort_played_rb"]
+                                                gtk::CheckButton {
+                                                    set_label: Some("Last Played"),
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    set_group: Some(&bottom_sort_name_rb),
+                                                    #[watch]
+                                                    set_active: model.config.sort_by == crate::config::SortBy::LastPlayed,
+                                                    connect_toggled[sender] => move |btn| {
+                                                        if btn.is_active() {
+                                                            sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::LastPlayed));
+                                                        }
+                                                    },
+                                                },
+
+                                                #[name = "bottom_sort_playtime_rb"]
+                                                gtk::CheckButton {
+                                                    set_label: Some("Playtime"),
+                                                    set_css_classes: &["flat", "menu-btn"],
+                                                    set_group: Some(&bottom_sort_name_rb),
+                                                    #[watch]
+                                                    set_active: model.config.sort_by == crate::config::SortBy::Playtime,
+                                                    connect_toggled[sender] => move |btn| {
+                                                        if btn.is_active() {
+                                                            sender.input(AppMsg::SetOverviewSortBy(crate::config::SortBy::Playtime));
+                                                        }
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+
+                                #[name = "instance_view_switcher_bar"]
+                                add_bottom_bar = &adw::ViewSwitcherBar {
+                                    #[watch]
+                                    set_reveal: model.active_sidebar_page == SidebarPage::InstanceDetails && (model.is_narrow || model.split_view.is_collapsed()),
+                                },
+                            },
+                        }
                     }
                 }
             }
         }
-    }
 
     fn init(
         config: Self::Init,
@@ -702,7 +862,7 @@ impl SimpleComponent for AppModel {
             let g = InstanceGroups::load(path);
             let path_clone = path.clone();
             let sender_clone = sender.input_sender().clone();
-            thread::spawn(move || {
+            crate::backend::core::tasks::spawn_io(move || {
                 let insts = scan_instances(&path_clone);
                 let _ = sender_clone.send(AppMsg::InstancesUpdated(insts));
             });
@@ -728,13 +888,6 @@ impl SimpleComponent for AppModel {
         let sidebar = SidebarList::builder()
             .launch(())
             .forward(sender.input_sender(), AppMsg::SidebarEvent);
-
-        let instance_sidebar =
-            InstanceSidebar::builder()
-                .launch(())
-                .forward(sender.input_sender(), |output| match output {
-                    InstanceSidebarOutput::SwitchTab(tab) => AppMsg::SwitchTab(tab),
-                });
 
         let overview_grid = OverviewGrid::builder()
             .launch((
@@ -764,7 +917,6 @@ impl SimpleComponent for AppModel {
             playtime_view,
             shortcuts_dialog,
             sidebar,
-            instance_sidebar,
             overview_grid,
             asset_view,
             discover_view,
@@ -839,10 +991,28 @@ impl SimpleComponent for AppModel {
 
         widgets
             .split_view
-            .bind_property("collapsed", &widgets.close_sidebar_btn, "visible")
+            .bind_property("collapsed", &widgets.open_sidebar_btn, "visible")
             .sync_create()
             .build();
 
+        widgets
+            .split_view
+            .bind_property("show-sidebar", &widgets.open_sidebar_btn, "active")
+            .bidirectional()
+            .sync_create()
+            .build();
+
+        widgets.instance_switcher.set_stack(Some(&widgets.detail_stack));
+        widgets.instance_view_switcher_bar.set_stack(Some(&widgets.detail_stack));
+
+        {
+            let s = sender.clone();
+            widgets.detail_stack.connect_visible_child_name_notify(move |stack| {
+                if let Some(name) = stack.visible_child_name() {
+                    s.input(AppMsg::SwitchTab(name.to_string()));
+                }
+            });
+        }
         let bp_condition = adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
             680.0,
@@ -921,7 +1091,7 @@ impl SimpleComponent for AppModel {
             if needs_refresh {
                 let mut config_clone = config.clone();
                 let sender_clone = sender.input_sender().clone();
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let _ = refresh_all_accounts(&mut config_clone);
                     let _ = sender_clone.send(AppMsg::RefreshAccountsAll(config_clone));
                 });

@@ -220,7 +220,7 @@ impl SimpleComponent for AccountDetailsDialog {
                     let sender_in = sender.input_sender().clone();
                     let acct_clone = account.clone();
 
-                    std::thread::spawn(move || {
+                    crate::backend::core::tasks::spawn_io(move || {
                         let tex = if !cache_path.exists() {
                             let _ = fetch_and_cache_avatar(&acct_clone.uuid);
                             gdk::Texture::from_filename(&cache_path).ok()
@@ -245,7 +245,7 @@ impl SimpleComponent for AccountDetailsDialog {
                     self.cape_status = "Not available for offline accounts".to_string();
                     let acct_clone = account;
                     let sender_in = sender.input_sender().clone();
-                    std::thread::spawn(move || {
+                    crate::backend::core::tasks::spawn_io(move || {
                         if !cache_path.exists() {
                             let _ = fetch_and_cache_avatar(&acct_clone.uuid);
                         }
@@ -302,7 +302,7 @@ impl SimpleComponent for AccountDetailsDialog {
                         let token = acct.access_token.clone();
                         let sender_in = sender.input_sender().clone();
 
-                        std::thread::spawn(move || {
+                        crate::backend::core::tasks::spawn_io(move || {
                             let res = select_minecraft_cape(&token, target_cape_id.as_deref())
                                 .map_err(|e| e.to_string());
                             let _ = sender_in.send(AccountDetailsInput::CapeUpdated(res));

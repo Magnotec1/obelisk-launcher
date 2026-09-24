@@ -20,7 +20,6 @@ use crate::frontend::dialogs::system::java::JavaSelectorInput;
 use adw::prelude::*;
 use relm4::prelude::*;
 use std::path::PathBuf;
-use std::thread;
 
 impl AppModel {
     pub(crate) fn handle_edit_components(&mut self) {
@@ -427,7 +426,7 @@ impl AppModel {
 
                 crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
 
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let mut success_count = 0;
                     let mut last_error = None;
 
@@ -666,7 +665,7 @@ impl AppModel {
                             }
                         }
 
-                        thread::spawn(move || {
+                        crate::backend::core::tasks::spawn_io(move || {
                             match crate::backend::download::sources::modrinth::check_updates(
                                 hashes,
                                 loaders,
@@ -761,7 +760,7 @@ impl AppModel {
                         let filename_clone = filename.clone();
                         let temp_dir_clone = temp_dir.clone();
 
-                        thread::spawn(move || {
+                        crate::backend::core::tasks::spawn_io(move || {
                             let mut last_error = None;
                             while let Ok(msg) = rx.recv() {
                                 if let crate::backend::download::manager::DownloadMsg::Error(err) = msg {
@@ -844,7 +843,7 @@ impl AppModel {
                         let temp_dir_clone = temp_dir.clone();
                         let filenames_clone = filenames.clone();
 
-                        thread::spawn(move || {
+                        crate::backend::core::tasks::spawn_io(move || {
                             let mut errors = Vec::new();
                             while let Ok(msg) = rx.recv() {
                                 if let crate::backend::download::manager::DownloadMsg::Error(err) = msg {

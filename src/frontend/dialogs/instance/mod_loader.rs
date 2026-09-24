@@ -363,7 +363,7 @@ impl SimpleComponent for ModLoaderDialog {
                 self.fabric_loading = true;
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let res = fetch_loader_versions(&ModLoader::Fabric, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::FabricLoaded(res));
                 });
@@ -371,7 +371,7 @@ impl SimpleComponent for ModLoaderDialog {
                 self.quilt_loading = true;
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let res = fetch_loader_versions(&ModLoader::Quilt, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::QuiltLoaded(res));
                 });
@@ -379,7 +379,7 @@ impl SimpleComponent for ModLoaderDialog {
                 self.forge_loading = true;
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let res = fetch_loader_versions(&ModLoader::Forge, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::ForgeLoaded(res));
                 });
@@ -387,7 +387,7 @@ impl SimpleComponent for ModLoaderDialog {
                 self.neoforge_loading = true;
                 let sender_clone = sender.input_sender().clone();
                 let mc_ver_clone = mc_ver.clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let res = fetch_loader_versions(&ModLoader::NeoForge, &mc_ver_clone);
                     let _ = sender_clone.send(ModLoaderDialogInput::NeoForgeLoaded(res));
                 });

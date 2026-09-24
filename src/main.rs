@@ -59,9 +59,6 @@ fn main() {
             font-size: 12px;
             font-weight: bold;
         }
-        .dim-label {
-            opacity: 0.5;
-        }
         .menu-box {
             padding: 0px;
         }
@@ -74,6 +71,22 @@ fn main() {
         }
         .menu-btn:hover {
             background-color: alpha(currentColor, 0.08);
+        }
+        checkbutton.menu-btn {
+            border-radius: 8px;
+            padding: 5px 10px;
+            margin: 0px 0px;
+            font-weight: normal;
+            transition: none;
+        }
+        checkbutton.menu-btn:hover {
+            background-color: alpha(currentColor, 0.08);
+        }
+        .menu-subtitle {
+            font-weight: bold;
+            opacity: 0.55;
+            margin-top: 6px;
+            margin-bottom: 4px;
         }
         .menu-separator {
             margin: 4px 0;
@@ -391,10 +404,10 @@ fn main() {
         .status-dot {
             border-radius: 999px;
         }
-        .dot-green { background-color: #2ec27e; }
-        .dot-red { background-color: #e01b24; }
-        .dot-grey { background-color: #9a9996; }
-        .dot-blue { background-color: #3584e4; }
+        .dot-green { background-color: @success_color; }
+        .dot-red { background-color: @destructive_color; }
+        .dot-grey { background-color: alpha(currentColor, 0.4); }
+        .dot-blue { background-color: @accent_color; }
 
         .account-status-button {
             padding: 2px 6px;

@@ -276,7 +276,7 @@ impl SimpleComponent for JavaSelectorDialog {
                 self.loading = true;
                 let sender_clone = sender.input_sender().clone();
                 let java_dir = self.launcher_java_dir.clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let versions = find_java_versions(java_dir.as_deref());
                     let _ = sender_clone.send(JavaSelectorInput::Detected(versions));
                 });
@@ -306,10 +306,11 @@ impl SimpleComponent for JavaSelectorDialog {
                 let sender_clone = sender.input_sender().clone();
                 let file_dialog = gtk::FileDialog::builder()
                     .title("Select Java Executable")
+                    .modal(true)
                     .build();
 
                 file_dialog.open(
-                    None::<&gtk::Window>,
+                    relm4::main_application().active_window().as_ref(),
                     None::<&gio::Cancellable>,
                     move |res| {
                         if let Ok(file) = res {

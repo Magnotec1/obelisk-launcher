@@ -196,6 +196,7 @@ impl SimpleComponent for InstanceSharerDialog {
                     let dialog = gtk::FileDialog::builder()
                         .title("Export Instance to Zip")
                         .initial_name("instance.zip")
+                        .modal(true)
                         .build();
 
                     let sender = sender.clone();
@@ -493,6 +494,7 @@ impl SimpleComponent for ImportDialog {
             ImportInput::ImportFromZip => {
                 let dialog = gtk::FileDialog::builder()
                     .title("Import Instance from Zip")
+                    .modal(true)
                     .build();
 
                 let filter = gtk::FileFilter::new();

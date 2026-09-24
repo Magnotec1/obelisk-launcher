@@ -11,21 +11,21 @@ use crate::frontend::views::instance::{
     ConsoleInput, EditorTabInput, SettingsTabInput, SummaryInput,
 };
 use crate::frontend::views::library::OverviewInput;
-use crate::frontend::views::sidebar::{InstanceSidebarInput, SidebarInput, SidebarPage};
+use crate::frontend::views::sidebar::{SidebarInput, SidebarPage};
 use adw::prelude::*;
 use relm4::prelude::*;
 use std::path::PathBuf;
-use std::thread;
 
 impl AppModel {
     pub(crate) fn handle_select_instance(&mut self, sender: &ComponentSender<AppModel>, index: usize) {
         self.selected_instance = Some(index);
         self.active_sidebar_page = SidebarPage::InstanceDetails;
         self.sidebar
-            .emit(SidebarInput::SetSelected(SidebarPage::InstanceDetails));
+            .emit(SidebarInput::SetSelected(SidebarPage::Library));
+        if self.split_view.is_collapsed() {
+            self.split_view.set_show_sidebar(false);
+        }
         self.active_tab = "summary".to_string();
-        self.instance_sidebar
-            .emit(InstanceSidebarInput::SetActiveTab("summary".to_string()));
         let inst_opt = self.instances.get(index).cloned();
         let status = self.get_active_instance_status();
 
@@ -92,7 +92,7 @@ impl AppModel {
         if let Some(path) = &self.config.instances_path {
             let path_clone = path.clone();
             let sender_clone = sender.input_sender().clone();
-            thread::spawn(move || {
+            crate::backend::core::tasks::spawn_io(move || {
                 let insts = scan_instances(&path_clone);
                 let _ = sender_clone.send(AppMsg::InstancesUpdated(insts));
             });
@@ -104,7 +104,7 @@ impl AppModel {
             if let Some(inst) = self.instances.get(index) {
                 let path = inst.path.clone();
                 let sender_clone = sender.input_sender().clone();
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     if let Some(updated) = scan_single_instance(&path, true) {
                         let _ = sender_clone.send(AppMsg::SelectedInstanceUpdated(updated));
                     }
@@ -454,7 +454,7 @@ impl AppModel {
                     &inst_path, "iconKey", "custom",
                 );
                 let sender_clone = sender.input_sender().clone();
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     if let Some(updated) = scan_single_instance(&inst_path, true) {
                         let _ = sender_clone.send(AppMsg::SelectedInstanceUpdated(updated));
                         let _ = sender_clone.send(AppMsg::RefreshInstances);
@@ -466,8 +466,7 @@ impl AppModel {
 
     pub(crate) fn handle_open_instance_folder(&self) {
         if let Some(inst) = self.selected_instance.and_then(|i| self.instances.get(i)) {
-            use std::process::Command;
-            let _ = Command::new("xdg-open").arg(&inst.path).spawn();
+            crate::frontend::utils::file::open_instance_subfolder(&inst.path, "");
         }
     }
 

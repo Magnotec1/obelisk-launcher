@@ -141,9 +141,9 @@ impl SimpleComponent for SettingsDialog {
                                     set_label: "Select",
                                     set_tooltip_text: Some("Select instance folder"),
                                     connect_clicked[sender] => move |_| {
-                                        let dialog = gtk::FileDialog::builder().title("Select Instance Folder").build();
+                                        let dialog = gtk::FileDialog::builder().title("Select Instance Folder").modal(true).build();
                                         let sender = sender.clone();
-                                        dialog.select_folder(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
+                                        dialog.select_folder(relm4::main_application().active_window().as_ref(), None::<&gtk::gio::Cancellable>, move |res| {
                                             if let Ok(f) = res { if let Some(p) = f.path() { sender.input(SettingsInput::SetInstancesPath(p)); } }
                                         });
                                     }
@@ -177,9 +177,9 @@ impl SimpleComponent for SettingsDialog {
                                     set_label: "Select",
                                     set_tooltip_text: Some("Select shared assets folder"),
                                     connect_clicked[sender] => move |_| {
-                                        let dialog = gtk::FileDialog::builder().title("Select Shared Assets Folder").build();
+                                        let dialog = gtk::FileDialog::builder().title("Select Shared Assets Folder").modal(true).build();
                                         let sender = sender.clone();
-                                        dialog.select_folder(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
+                                        dialog.select_folder(relm4::main_application().active_window().as_ref(), None::<&gtk::gio::Cancellable>, move |res| {
                                             if let Ok(f) = res { if let Some(p) = f.path() { sender.input(SettingsInput::SetSharedPath(p)); } }
                                         });
                                     }
@@ -218,6 +218,7 @@ impl SimpleComponent for SettingsDialog {
                                     connect_clicked[sender] => move |_| {
                                         let dialog = gtk::FileDialog::builder()
                                             .title("Select Default Instance Icon")
+                                            .modal(true)
                                             .build();
                                         let filters = gtk::FileFilter::new();
                                         filters.add_mime_type("image/png");
@@ -228,7 +229,7 @@ impl SimpleComponent for SettingsDialog {
                                         dialog.set_filters(Some(&list_store));
 
                                         let sender = sender.clone();
-                                        dialog.open(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
+                                        dialog.open(relm4::main_application().active_window().as_ref(), None::<&gtk::gio::Cancellable>, move |res| {
                                             if let Ok(f) = res {
                                                 if let Some(p) = f.path() {
                                                     sender.input(SettingsInput::SetDefaultIcon(p));
@@ -493,7 +494,7 @@ impl SimpleComponent for SettingsDialog {
             SettingsInput::RefreshJava => {
                 let java_dir = self.config.minecraft_data_path.join("java");
                 let sender_clone = sender.input_sender().clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let versions = find_java_versions(Some(&java_dir));
                     let _ = sender_clone.send(SettingsInput::SetJavaVersions(versions));
                 });

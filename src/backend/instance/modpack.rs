@@ -5,14 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::backend::instance::manager::{ModLoader, create_instance, CreateInstanceOptions, get_minecraft_dir};
 
 const MODRINTH_API_BASE: &str = "https://api.modrinth.com/v2";
-const USER_AGENT: &str = "obelisk-launcher-rs (github.com/magnotec/obelisk-launcher)";
-
-pub(crate) static HTTP_CLIENT: std::sync::LazyLock<reqwest::blocking::Client> = std::sync::LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .expect("Failed to build HTTP client")
-});
+pub(crate) use crate::backend::core::http::HTTP_CLIENT;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModpackInfo {

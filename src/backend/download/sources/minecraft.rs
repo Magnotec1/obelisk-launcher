@@ -42,7 +42,16 @@ fn classify_version(raw: &RawVersion) -> VersionType {
     }
 }
 
+static VERSION_CACHE: std::sync::RwLock<Option<Vec<MinecraftVersion>>> =
+    std::sync::RwLock::new(None);
+
 pub fn fetch_versions() -> Result<Vec<MinecraftVersion>, String> {
+    if let Ok(guard) = VERSION_CACHE.read() {
+        if let Some(versions) = guard.as_ref() {
+            return Ok(versions.clone());
+        }
+    }
+
     let client = client();
     let response = client.get(VERSION_MANIFEST_URL).send()
         .map_err(|e| format!("failed to fetch version manifest: {}", e))?;
@@ -56,7 +65,7 @@ pub fn fetch_versions() -> Result<Vec<MinecraftVersion>, String> {
         .json()
         .map_err(|e| format!("failed to parse version manifest: {}", e))?;
 
-    let versions = manifest
+    let versions: Vec<MinecraftVersion> = manifest
         .versions
         .iter()
         .map(|raw| MinecraftVersion {
@@ -65,6 +74,10 @@ pub fn fetch_versions() -> Result<Vec<MinecraftVersion>, String> {
             raw: raw.clone(),
         })
         .collect();
+
+    if let Ok(mut guard) = VERSION_CACHE.write() {
+        *guard = Some(versions.clone());
+    }
 
     Ok(versions)
 }

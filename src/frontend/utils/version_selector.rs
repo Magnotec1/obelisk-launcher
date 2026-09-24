@@ -289,7 +289,7 @@ impl SimpleComponent for VersionSelector {
                 let sender_clone = sender.input_sender().clone();
                 match uid.as_str() {
                     "net.minecraft" => {
-                        std::thread::spawn(move || {
+                        crate::backend::core::tasks::spawn_io(move || {
                             let result = fetch_versions();
                             let _ = sender_clone.send(VersionSelectorInput::McVersionsLoaded(result));
                         });
@@ -297,7 +297,7 @@ impl SimpleComponent for VersionSelector {
                     _ => {
                         let uid_clone = uid.clone();
                         let mc_version_val = mc_version.clone();
-                        std::thread::spawn(move || {
+                        crate::backend::core::tasks::spawn_io(move || {
                             let result = if let Some(mv) = mc_version_val {
                                 fetch_loader_versions_by_uid(&uid_clone, &mv)
                             } else {

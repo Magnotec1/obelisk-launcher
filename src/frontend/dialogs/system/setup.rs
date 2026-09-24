@@ -375,9 +375,10 @@ impl SimpleComponent for SetupDialog {
                                         let _ = &root;
                                         let dialog = gtk::FileDialog::builder()
                                             .title("Select Minecraft Instance Folder")
+                                            .modal(true)
                                             .build();
                                         let sender_clone = sender.clone();
-                                        dialog.select_folder(None::<&gtk::Window>, None::<&gtk::gio::Cancellable>, move |res| {
+                                        dialog.select_folder(relm4::main_application().active_window().as_ref(), None::<&gtk::gio::Cancellable>, move |res| {
                                             if let Ok(file) = res {
                                                 if let Some(path) = file.path() {
                                                     sender_clone.input(SetupInput::SetInstancesPath(path));
@@ -889,7 +890,7 @@ impl SimpleComponent for SetupDialog {
                 if self.all_packages.is_empty() {
                     self.loading_packages = true;
                     let sender_clone = sender.input_sender().clone();
-                    std::thread::spawn(move || {
+                    crate::backend::core::tasks::spawn_io(move || {
                         let result = fetch_java_packages();
                         let _ = sender_clone.send(SetupInput::PackagesLoaded(result));
                     });
@@ -969,7 +970,7 @@ impl SimpleComponent for SetupDialog {
                 self.loading_java = true;
                 let java_dir = self.config.minecraft_data_path.join("java");
                 let sender_clone = sender.input_sender().clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let versions = find_java_versions(Some(&java_dir));
                     let _ = sender_clone.send(SetupInput::SetJavaVersions(versions));
                 });
@@ -1059,7 +1060,7 @@ impl SimpleComponent for SetupDialog {
                     crate::backend::download::manager::DOWNLOAD_QUEUE.add_job(job, tx);
 
                     let sender_clone = sender.input_sender().clone();
-                    std::thread::spawn(move || {
+                    crate::backend::core::tasks::spawn_io(move || {
                         while let Ok(msg) = rx.recv() {
                             match msg {
                                 crate::backend::download::manager::DownloadMsg::Progress(_, prog) => {

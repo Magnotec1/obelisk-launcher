@@ -23,7 +23,7 @@ use crate::frontend::views::instance::{
 use crate::frontend::views::library::{LayoutMode, OverviewGrid};
 use crate::frontend::views::playtime::PlaytimeView;
 use crate::frontend::views::settings::SettingsDialog;
-use crate::frontend::views::sidebar::{InstanceSidebar, SidebarList, SidebarPage};
+use crate::frontend::views::sidebar::{SidebarList, SidebarPage};
 use adw::prelude::*;
 use relm4::prelude::*;
 use std::collections::HashMap;
@@ -51,7 +51,6 @@ pub struct AppModel {
 
     // Sidebar + overview
     pub(crate) sidebar: Controller<SidebarList>,
-    pub(crate) instance_sidebar: Controller<InstanceSidebar>,
     pub(crate) overview_grid: Controller<OverviewGrid>,
     pub(crate) active_sidebar_page: SidebarPage,
 

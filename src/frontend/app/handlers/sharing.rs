@@ -21,7 +21,7 @@ impl AppModel {
             let sender_clone = sender.input_sender().clone();
             let inst_clone = inst.clone();
             self.sharing_loading = true;
-            std::thread::spawn(move || {
+            crate::backend::core::tasks::spawn_compute(move || {
                 match export_instance(&inst_clone) {
                     Ok(shared) => {
                         if let Ok(code) = shared.to_code() {
@@ -52,7 +52,7 @@ impl AppModel {
             let sender_clone = sender.input_sender().clone();
             let inst_clone = inst.clone();
             self.sharing_loading = true;
-            std::thread::spawn(move || {
+            crate::backend::core::tasks::spawn_compute(move || {
                 let s_clone = sender_clone.clone();
                 match export_instance_to_zip(&inst_clone, &path, move |p, s| {
                     let _ = s_clone.send(AppMsg::UpdateSharingProgress(p, s));
@@ -194,7 +194,7 @@ impl AppModel {
             }
             if let Some(instances_path) = self.config.instances_path.clone() {
                 let sender_clone = sender.input_sender().clone();
-                std::thread::spawn(move || {
+                crate::backend::core::tasks::spawn_compute(move || {
                     let s_clone = sender_clone.clone();
                     match import_shared_instance(shared, &instances_path, move |s| {
                         let _ = s_clone.send(AppMsg::UpdateImportStatus(s));
@@ -226,7 +226,7 @@ impl AppModel {
             self.import_loading = true;
             self.import_dialog
                 .emit(ImportInput::SetStep(ImportStep::Progress));
-            std::thread::spawn(move || {
+            crate::backend::core::tasks::spawn_compute(move || {
                 let s_clone = sender_clone.clone();
                 match import_instance_from_zip(&path, &instances_path, move |p, s| {
                     let _ = s_clone.send(AppMsg::UpdateImportStatus(format!(

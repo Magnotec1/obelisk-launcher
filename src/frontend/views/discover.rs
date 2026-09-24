@@ -9,7 +9,6 @@ use gtk::glib;
 use relm4::factory::FactoryVecDeque;
 use relm4::prelude::*;
 use std::collections::HashMap;
-use std::thread;
 
 // ---------------------------------------------------------------------------
 // 1. Modpack Card Factory Component (for lists/grids)
@@ -1642,7 +1641,7 @@ impl SimpleComponent for DiscoverView {
                 self.loading = true;
                 self.error = None;
                 let sender_clone = sender.input_sender().clone();
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let source = ModrinthSource;
                     let result = source.get_popular(25, 0);
                     sender_clone.send(DiscoverInput::SearchResultsReady(result)).ok();
@@ -1655,7 +1654,7 @@ impl SimpleComponent for DiscoverView {
                 
                 let query_clone = self.search_query.clone();
                 let sender_clone = sender.input_sender().clone();
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let source = ModrinthSource;
                     let result = source.search(&query_clone, 25, 0, None, None);
                     sender_clone.send(DiscoverInput::SearchResultsReady(result)).ok();
@@ -1724,7 +1723,7 @@ impl SimpleComponent for DiscoverView {
 
                 let slug_clone = slug.clone();
                 let sender_clone = sender.input_sender().clone();
-                thread::spawn(move || {
+                crate::backend::core::tasks::spawn_io(move || {
                     let source = ModrinthSource;
                     let details_res = source.get_details(&slug_clone);
                     sender_clone.send(DiscoverInput::DetailsReady(Box::new(details_res))).ok();
@@ -1941,71 +1940,32 @@ impl SimpleComponent for DiscoverView {
     }
 }
 
-// Background network helpers for images (sends decoded data back to main thread)
+// Background network helpers for images (uses cached & coalesced image fetcher)
 fn fetch_icon(url: String, sender: relm4::Sender<DiscoverInput>) {
-    thread::spawn(move || {
-        use crate::backend::instance::modpack::HTTP_CLIENT;
-        if let Ok(res) = HTTP_CLIENT.get(&url).send() {
-            if res.status().is_success() {
-                if let Ok(bytes) = res.bytes() {
-                    let bytes_vec = bytes.to_vec();
-                    if let Ok(img) = image::load_from_memory(&bytes_vec) {
-                        let width = img.width() as i32;
-                        let height = img.height() as i32;
-                        let rgba_img = img.to_rgba8();
-                        
-                        // Calculate average color
-                        let mut r_sum = 0u64;
-                        let mut g_sum = 0u64;
-                        let mut b_sum = 0u64;
-                        let mut count = 0u64;
-                        for pixel in rgba_img.pixels() {
-                            if pixel[3] > 30 {
-                                r_sum += pixel[0] as u64;
-                                g_sum += pixel[1] as u64;
-                                b_sum += pixel[2] as u64;
-                                count += 1;
-                            }
-                        }
-                        let average_color = count.checked_div(1).filter(|_| count > 0).map(|_| (
-                            (r_sum / count) as u8,
-                            (g_sum / count) as u8,
-                            (b_sum / count) as u8,
-                        ));
-
-                        let _ = sender.send(DiscoverInput::IconLoaded {
-                            url,
-                            width,
-                            height,
-                            rgba: rgba_img.into_raw(),
-                            average_color,
-                        });
-                    }
-                }
-            }
+    let url_clone = url.clone();
+    crate::backend::core::image_cache::fetch_image_async(url, move |res| {
+        if let Some(img) = res {
+            let _ = sender.send(DiscoverInput::IconLoaded {
+                url: url_clone,
+                width: img.width,
+                height: img.height,
+                rgba: img.rgba,
+                average_color: img.average_color,
+            });
         }
     });
 }
 
 fn fetch_screenshot(url: String, sender: relm4::Sender<DiscoverInput>) {
-    thread::spawn(move || {
-        use crate::backend::instance::modpack::HTTP_CLIENT;
-        if let Ok(res) = HTTP_CLIENT.get(&url).send() {
-            if res.status().is_success() {
-                if let Ok(bytes) = res.bytes() {
-                    let bytes_vec = bytes.to_vec();
-                    if let Ok(img) = image::load_from_memory(&bytes_vec) {
-                        let width = img.width() as i32;
-                        let height = img.height() as i32;
-                        let _ = sender.send(DiscoverInput::ScreenshotLoaded {
-                            url,
-                            width,
-                            height,
-                            rgba: img.to_rgba8().into_raw(),
-                        });
-                    }
-                }
-            }
+    let url_clone = url.clone();
+    crate::backend::core::image_cache::fetch_image_async(url, move |res| {
+        if let Some(img) = res {
+            let _ = sender.send(DiscoverInput::ScreenshotLoaded {
+                url: url_clone,
+                width: img.width,
+                height: img.height,
+                rgba: img.rgba,
+            });
         }
     });
 }

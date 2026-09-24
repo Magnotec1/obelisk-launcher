@@ -100,9 +100,7 @@ impl AssetManagerView {
     }
 
     fn create_page_box(&self) -> gtk::Box {
-        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 16);
-        content_box.set_margin_top(16);
-        content_box
+        gtk::Box::new(gtk::Orientation::Vertical, 16)
     }
 
     fn remove_widgets_for_paths(
@@ -596,31 +594,32 @@ impl SimpleComponent for AssetManagerView {
                     }
                 },
 
-                add_named[Some("content")] = &gtk::ScrolledWindow {
-                    set_hscrollbar_policy: gtk::PolicyType::Never,
+                add_named[Some("content")] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
                     set_vexpand: true,
 
-                    #[wrap(Some)]
-                    set_child = &adw::Clamp {
-                        set_maximum_size: 1024,
-                        set_tightening_threshold: 400,
+                    #[local_ref]
+                    subpage_stack_ref -> gtk::Stack {
+                        set_vexpand: true,
+                        set_hexpand: true,
+                        set_vhomogeneous: false,
+                        set_hhomogeneous: false,
+                        set_transition_type: gtk::StackTransitionType::SlideLeftRight,
 
-                        #[wrap(Some)]
-                        set_child = &gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_spacing: 16,
-                            set_margin_all: 16,
+                        add_named[Some("categories")] = &gtk::ScrolledWindow {
+                            set_hscrollbar_policy: gtk::PolicyType::Never,
+                            set_vexpand: true,
 
-                            #[local_ref]
-                            subpage_stack_ref -> gtk::Stack {
-                                set_vexpand: true,
-                                set_vhomogeneous: false,
-                                set_hhomogeneous: false,
-                                set_transition_type: gtk::StackTransitionType::SlideLeftRight,
+                            #[wrap(Some)]
+                            set_child = &adw::Clamp {
+                                set_maximum_size: 1024,
+                                set_tightening_threshold: 400,
 
-                                add_named[Some("categories")] = &gtk::Box {
+                                #[wrap(Some)]
+                                set_child = &gtk::Box {
                                     set_orientation: gtk::Orientation::Vertical,
                                     set_spacing: 16,
+                                    set_margin_all: 16,
 
                                     // Summary / info card
                                     gtk::Box {
@@ -755,11 +754,24 @@ impl SimpleComponent for AssetManagerView {
                                             set_selection_mode: gtk::SelectionMode::None,
                                         }
                                     }
-                                },
+                                }
+                            }
+                        },
 
-                                add_named[Some("details")] = &gtk::Box {
+                        add_named[Some("details")] = &gtk::ScrolledWindow {
+                            set_hscrollbar_policy: gtk::PolicyType::Never,
+                            set_vexpand: true,
+
+                            #[wrap(Some)]
+                            set_child = &adw::Clamp {
+                                set_maximum_size: 1024,
+                                set_tightening_threshold: 400,
+
+                                #[wrap(Some)]
+                                set_child = &gtk::Box {
                                     set_orientation: gtk::Orientation::Vertical,
-                                    set_vexpand: true,
+                                    set_spacing: 16,
+                                    set_margin_all: 16,
 
                                     #[local_ref]
                                     view_stack_ref -> adw::ViewStack {

@@ -10,7 +10,6 @@ use crate::frontend::views::settings::SettingsInput;
 use crate::frontend::views::sidebar::{SidebarInput, SidebarOutput, SidebarPage};
 use adw::prelude::*;
 use relm4::prelude::*;
-use std::thread;
 
 impl AppModel {
     pub(crate) fn handle_open_settings(&mut self) {
@@ -60,7 +59,7 @@ impl AppModel {
         self.asset_view.emit(AssetInput::Loading(true));
 
         let sender_clone = sender.input_sender().clone();
-        thread::spawn(move || {
+        crate::backend::core::tasks::spawn_io(move || {
             let result = crate::backend::download::assets::scan_assets(
                 &data_path,
                 shared_path.as_deref(),
@@ -94,7 +93,7 @@ impl AppModel {
         let sender_clone = sender.input_sender().clone();
         let instances = self.instances.clone();
 
-        thread::spawn(move || {
+        crate::backend::core::tasks::spawn_io(move || {
             let manager = crate::backend::playtime::PlaytimeManager::load();
             let mut instance_data = Vec::new();
             let mut seen_ids = std::collections::HashSet::new();
@@ -152,6 +151,9 @@ impl AppModel {
                 self.active_sidebar_page = page;
                 self.sidebar.emit(SidebarInput::SetSelected(page));
                 self.discover_search_visible = false;
+                if self.split_view.is_collapsed() {
+                    self.split_view.set_show_sidebar(false);
+                }
 
                 match page {
                     SidebarPage::Library => self.selected_instance = None,
@@ -216,12 +218,18 @@ impl AppModel {
         if self.active_sidebar_page == SidebarPage::InstanceDetails {
             sender.input(AppMsg::ShowOverview);
         } else if self.active_sidebar_page == SidebarPage::Library {
-            sender.input(AppMsg::OverviewBack);
+            if self.current_folder.is_some() {
+                sender.input(AppMsg::OverviewBack);
+            }
         } else if self.active_sidebar_page == SidebarPage::Assets {
-            self.asset_view.emit(AssetInput::ShowCategoriesPage);
+            if self.active_asset_subpage.is_some() {
+                self.asset_view.emit(AssetInput::ShowCategoriesPage);
+            }
         } else if self.active_sidebar_page == SidebarPage::Discover {
-            self.discover_view
-                .emit(crate::frontend::views::discover::DiscoverInput::CloseDetails);
+            if self.discover_details_open {
+                self.discover_view
+                    .emit(crate::frontend::views::discover::DiscoverInput::CloseDetails);
+            }
         }
     }
 
@@ -264,8 +272,6 @@ impl AppModel {
     }
 
     pub(crate) fn handle_switch_tab(&mut self, tab: String) {
-        self.active_tab = tab.clone();
-        self.instance_sidebar
-            .emit(crate::frontend::views::sidebar::InstanceSidebarInput::SetActiveTab(tab));
+        self.active_tab = tab;
     }
 }
