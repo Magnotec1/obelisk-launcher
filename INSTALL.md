@@ -12,8 +12,6 @@
   </p>
 </div>
 
----
-
 ## Contents
 - [Native Build (Cargo)](#native-build-cargo)
   - [System Dependencies](#system-dependencies)
@@ -26,8 +24,6 @@
   - [Creating an Offline Bundle](#creating-an-offline-bundle)
 - [Runtime Requirements](#runtime-requirements)
 - [Troubleshooting](#troubleshooting)
-
----
 
 ## Native Build (Cargo)
 
@@ -67,8 +63,6 @@ cargo run
 cargo build --release
 ./target/release/obelisk
 ```
-
----
 
 ## Flatpak Build
 
@@ -129,18 +123,13 @@ Install it with:
 flatpak install com.magnotec.obelisk.flatpak
 ```
 
----
-
 ## Runtime Requirements
 
 - **tar** and **unzip**: Needed to unpack downloaded Java runtimes and Minecraft game files.
 - **Java**: Java 8 for legacy Minecraft versions, Java 17 for 1.18 to 1.20.4, Java 21+ for modern releases. The built-in Java installer in Settings can download and manage these.
 
----
-
 ## Troubleshooting
 
-- **Missing Libadwaita**: If compilation complains about `libadwaita-1 not found`, check that your distribution's development package (`libadwaita-1-dev` or `libadwaita-devel`) is installed and up to date.
 - **Flatpak filesystem access**: If you save instances on another drive or non-standard path, grant the Flatpak permission using [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or override via CLI:
   ```bash
   flatpak override --user --filesystem=/path/to/instances com.magnotec.obelisk
