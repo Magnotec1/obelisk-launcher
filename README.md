@@ -35,7 +35,7 @@
 
 ## About
 
-Obelisk is a Minecraft launcher designed specifically for GNOME and Linux desktops. Instead of wrapping an Electron or web app, it is written in Rust using GTK4, Libadwaita, and Relm4 to fit in with the rest of the GNOME app ecosystem.
+Obelisk is a Minecraft launcher designed specifically for the GNOME desktop environment.
 
 It uses the same instance layout (`mmc-pack.json`) as Prism Launcher and MultiMC. If you already have instances from those launchers, you can generally reuse them directly.
 
