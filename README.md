@@ -26,7 +26,7 @@
 <br>
 
 > [!CAUTION]
-> Made while assisted by AI for repetitive tasks.. I know this is a dealbreaker for a lot of people.
+> Made while assisted by AI for repetitive tasks, I know this is often a dealbreaker
 
 > [!WARNING]
 > Still in active development. Bugs and potential data loss can happen, so back up your instances and worlds.
@@ -38,8 +38,6 @@
 Obelisk is a Minecraft launcher designed specifically for the GNOME desktop environment.
 
 It uses the same instance layout (`mmc-pack.json`) as Prism Launcher and MultiMC. If you already have instances from those launchers, you can generally reuse them directly.
-
----
 
 ## Features
 
@@ -53,8 +51,6 @@ It uses the same instance layout (`mmc-pack.json`) as Prism Launcher and MultiMC
 - **Instance Sharing**: Export and import instances via compressed archives or share codes.
 - **Adaptive UI**: Collapses into a bottom drawer layout on smaller viewports and handheld devices.
 
----
-
 ## Known Limitations and TODOs
 
 - **No CurseForge**: Modrinth is currently the only supported mod repository. CurseForge support is not implemented yet.
@@ -62,16 +58,12 @@ It uses the same instance layout (`mmc-pack.json`) as Prism Launcher and MultiMC
 - **Flatpak File Permissions**: If your instances live on a secondary drive, you may need to grant Flatpak extra filesystem permissions via Flatseal.
 - **Incomplete Error Handling**: A few network failure paths (like sudden connection drops midway through huge downloads) still need cleaner recovery screens.
 
----
-
 ## Architecture
 
 - **Language**: [Rust](https://www.rust-lang.org/)
 - **UI**: [GTK4](https://gtk.org/) + [Libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/)
 - **State & Widgets**: [Relm4](https://relm4.org/)
 - **Networking & Async**: [Tokio](https://tokio.rs/) and [Reqwest](https://docs.rs/reqwest)
-
----
 
 ## Installation
 
