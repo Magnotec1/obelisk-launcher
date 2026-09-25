@@ -56,7 +56,6 @@ It uses the same instance layout (`mmc-pack.json`) as Prism Launcher and MultiMC
 - **No CurseForge**: Modrinth is currently the only supported mod repository. CurseForge support is not implemented yet.
 - **Client ID Requirement**: Microsoft login currently requires providing your own Azure Client ID during initial setup.
 - **Flatpak File Permissions**: If your instances live on a secondary drive, you may need to grant Flatpak extra filesystem permissions via Flatseal.
-- **Incomplete Error Handling**: A few network failure paths (like sudden connection drops midway through huge downloads) still need cleaner recovery screens.
 
 ## Architecture
 
