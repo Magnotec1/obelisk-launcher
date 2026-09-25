@@ -25,7 +25,7 @@
 
 ## Library
 
-Main view showing instances in grid layout with custom folders.
+Main view showing instances in grid layout
 
 <div align="center">
   <img src="screenshots/gallery/library.png" alt="Library" width="850">
