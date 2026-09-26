@@ -87,8 +87,6 @@ Main view showing instances in grid layout
 
 ## Compact Layout
 
-The main sidebar collapses into a bottom navigation bar when resized to narrow widths, useful for tiled window layouts or smaller handheld displays like the Steam Deck.
-
 <div align="center">
   <img src="screenshots/gallery/smallwidth.png" alt="Compact Layout" width="850">
 </div>
